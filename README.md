@@ -87,6 +87,7 @@ tsp bind --unset --session <host session ID>    # remove the record when the ses
 | Stale records | nothing removes a record implicitly; `tsp bind --unset --session <id>` is the housekeeping when a session or worktree retires |
 | `TESTING_GATE_LOG` | keep it absolute: `bind` and the Stop hook derive the binding directory from the log path, and a relative path resolves against each process's working directory — bind and Stop would then look in different places and find nothing |
 | Concurrent sessions | the binding scopes plan auditing, not source edits: two sessions sharing one working tree still race on files. When the host exposes no session ID, give each chat its own worktree and rely on `tsp check` / `tsp plan gaps` there |
+| Base drift | a successful `plan admit --execute` records the checkout's upstream ref and commit beside the gate log (never inside the repository). When the bound audit later finds that ref moved, the Stop emits one `tsp: base drift:` line naming both commits — the model and the operator hear it, because the evidence was validated on the recorded commit, not the tip CI checks out. A dry run, a refused row, a detached HEAD, or a stable ref records nothing and adds nothing |
 
 ### The testing flow a model runs
 

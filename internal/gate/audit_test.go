@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alesierraalta/tsp/internal/base"
 	"github.com/alesierraalta/tsp/internal/plan"
 )
 
@@ -663,5 +664,111 @@ func TestAuditLineNamesTheRunProblemInsteadOfOwesNothing(t *testing.T) {
 	}
 	if strings.Contains(line, "\n") {
 		t.Fatalf("the operator line is one line: %q", line)
+	}
+}
+
+// sweptPlan is a plan whose run-a rows are all done, so the drift tests observe one variable:
+// the recorded base commit.
+const sweptPlan = "## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n" +
+	"| Security | `appsec-adversarial-auditor` | untrusted input | done | run-a |\n" +
+	"| Critical e2e journeys | `real-run-validation` | checkout | done | run-a |\n\n" +
+	"## Ranked targets\n\n| Target | Verdict | Status | Run |\n|---|---|---|---|\n| 1. token refresh | probe | done | run-a |\n"
+
+// driftRepo wires the audited repo whose upstream ref resolves to currentSHA and whose
+// admitted base record sits in the test's isolated cache.
+func driftRepo(t *testing.T, admitted string) *fakeRepo {
+	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	repo := auditRepo()
+	repo.transcript = stamped(auditStart, `{"name":"Skill","input":{"skill":"tsp"}}`)
+	repo.plan = sweptPlan
+	if admitted != "" {
+		if err := base.Save(repo.root, base.Record{Ref: "origin/dev", SHA: admitted, At: "2026-10-10T00:00:00Z"}); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+	}
+	setBinding(t, "sess-drift", repo.root, plan.DefaultPath, "run-a")
+	return repo
+}
+
+func (f *fakeRepo) driftDeps(now time.Time, current string) Deps {
+	d := f.deps(now)
+	realGit := d.Git
+	d.Git = func(dir string, args ...string) (string, error) {
+		if len(args) == 2 && args[0] == "rev-parse" && args[1] == "origin/dev" {
+			return current + "\n", nil
+		}
+		return realGit(dir, args...)
+	}
+	return d
+}
+
+// The run's evidence was admitted against a recorded upstream commit; when the ref moved
+// before the gate wrote the report, the operator must hear it once, with both commits.
+func TestDecideWarnsWhenTheBaseMovedBetweenAdmissionAndReport(t *testing.T) {
+	admitted := strings.Repeat("a", 40)
+	current := strings.Repeat("b", 40)
+	repo := driftRepo(t, admitted)
+	res := Decide(Input{SessionID: "sess-drift", TranscriptPath: "t"}, repo.driftDeps(auditNow, current))
+	if !res.Audit {
+		t.Fatalf("the audit itself must still run: %#v", res)
+	}
+	if res.Entry == nil || !res.Entry.BaseDrift {
+		t.Fatalf("the entry must carry base_drift for the metrics query: %#v", res.Entry)
+	}
+	for _, want := range []string{"origin/dev", admitted, current} {
+		if !strings.Contains(res.Drift, want) {
+			t.Fatalf("drift message %q must name %q", res.Drift, want)
+		}
+	}
+}
+
+// A stable base prints nothing new: the acceptance criterion the issue demands.
+func TestDecideStaysSilentWhenTheBaseDidNotMove(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	repo := driftRepo(t, sha)
+	res := Decide(Input{SessionID: "sess-drift", TranscriptPath: "t"}, repo.driftDeps(auditNow, sha))
+	if !res.Audit {
+		t.Fatalf("the audit itself must still run: %#v", res)
+	}
+	if res.Drift != "" {
+		t.Fatalf("a stable base must stay silent, got %q", res.Drift)
+	}
+	if res.Entry == nil || res.Entry.BaseDrift {
+		t.Fatalf("base_drift must stay false on a stable base: %#v", res.Entry)
+	}
+}
+
+// A session that never admitted a plan has no base to compare: silence, no extra questions.
+func TestDecideStaysSilentWithoutARecordedBase(t *testing.T) {
+	repo := driftRepo(t, "")
+	current := strings.Repeat("b", 40)
+	res := Decide(Input{SessionID: "sess-drift", TranscriptPath: "t"}, repo.driftDeps(auditNow, current))
+	if !res.Audit {
+		t.Fatalf("the audit itself must still run: %#v", res)
+	}
+	if res.Drift != "" {
+		t.Fatalf("without a recorded base there is nothing to compare, got %q", res.Drift)
+	}
+}
+
+// A ref git cannot resolve has no current commit to name: a drift warning must name both
+// commits or stay silent.
+func TestDecideStaysSilentWhenTheRefIsGone(t *testing.T) {
+	repo := driftRepo(t, strings.Repeat("a", 40))
+	d := repo.deps(auditNow)
+	realGit := d.Git
+	d.Git = func(dir string, args ...string) (string, error) {
+		if len(args) == 2 && args[0] == "rev-parse" && args[1] == "origin/dev" {
+			return "", fmt.Errorf("fatal: ambiguous argument 'origin/dev'")
+		}
+		return realGit(dir, args...)
+	}
+	res := Decide(Input{SessionID: "sess-drift", TranscriptPath: "t"}, d)
+	if !res.Audit {
+		t.Fatalf("the audit itself must still run: %#v", res)
+	}
+	if res.Drift != "" {
+		t.Fatalf("an unresolvable ref must stay silent, got %q", res.Drift)
 	}
 }

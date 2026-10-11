@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/alesierraalta/tsp/internal/admit"
+	"github.com/alesierraalta/tsp/internal/base"
 	"github.com/alesierraalta/tsp/internal/bench"
 	"github.com/alesierraalta/tsp/internal/buildinfo"
 	"github.com/alesierraalta/tsp/internal/check"
@@ -1342,7 +1343,8 @@ func resolveSandboxImage(root string, sandbox, flagSet bool, value string) (stri
 }
 
 func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record string, sandbox bool, sandboxImage string) int {
-	return admit.Run(admit.Request{
+	root := feedback.RepoRoot(".")
+	code := admit.Run(admit.Request{
 		Path:    path,
 		Execute: execute,
 		Timeout: timeout,
@@ -1350,7 +1352,7 @@ func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record
 		Record:  strings.Split(record, ","),
 		Sandbox: sandbox,
 		Image:   sandboxImage,
-		Dir:     feedback.RepoRoot("."),
+		Dir:     root,
 	}, admit.Deps{
 		Run:           runShell,
 		SandboxRunner: sandboxRunner,
@@ -1358,6 +1360,25 @@ func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record
 		Out:           os.Stdout,
 		Err:           os.Stderr,
 	})
+	// An admitted run is the moment a base is trustworthy: the evidence executed against this
+	// checkout, so the upstream ref and commit it ran on are recorded for the stop gate's drift
+	// check. A dry run executes nothing and a refused row admitted nothing — both record nothing —
+	// and a record that cannot be resolved or written stays absent rather than guessed.
+	if code == 0 && execute {
+		if rec, ok := base.Capture(gitOutput, root); ok {
+			_ = base.Save(root, rec)
+		}
+	}
+	return code
+}
+
+// gitOutput runs git in dir: the CLI side of the same question the stop gate asks through
+// gate.Deps.Git, so the base package answers both with one implementation.
+func gitOutput(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return string(out), err
 }
 
 // refuseIgnoredPlanWrite stops a subcommand that would write the plan at a path git keeps out of version

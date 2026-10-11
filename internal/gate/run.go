@@ -205,7 +205,15 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 	case res.Fire:
 		emit(stdout, res.Reason)
 	case res.Audit:
-		emitWith(stdout, res.Reason, auditLine(res, offerFeedback))
+		reason, line := res.Reason, auditLine(res, offerFeedback)
+		if res.Drift != "" {
+			// The drift is a second, independent fact about this run — the base moved under the
+			// admitted evidence — so it reaches both audiences: the model as added context and the
+			// operator in their own terminal, without waiting for the model to relay it.
+			reason += "\n" + res.Drift
+			line += "\n" + res.Drift
+		}
+		emitWith(stdout, reason, line)
 	case res.Problem != "":
 		// A declaration the gate cannot read is a defect its operator can repair, and the model can too:
 		// both hear it. It is not an audit, so no counts ride along.
