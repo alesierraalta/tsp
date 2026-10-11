@@ -19,6 +19,16 @@ from the state table, act. Never ask which mode; one question only if the target
 
 - **PLAN**: inventory → layer sweep → rank → assign → persist; then EXECUTE unless asked for
   the plan only. **EXECUTE**: next pending target → sandbox → sibling → update the plan.
+- **Pessimistic prior**: every selected target is assumed to hide at least one defect until the
+  tests prove otherwise. Green tests, plausible code, and "this looks right" are claims to
+  attack, not facts to trust: hunt for what is broken before accepting what looks fine. The
+  prior widens the search; it never lowers rule 2's evidence bar — a suspicion without
+  falsifiable evidence stays unreported.
+- **Suite-green close**: before the final message, run the whole suite on the final tree; a
+  test still red is an unfinished target (rule 5) — fix it, record it `pending`, or report it.
+  A red test this sweep surfaces is a lead, not a finding: it becomes a finding only through
+  an executed probe that goes red on the current code and green after the fix (rules 2, 13).
+  A suspicion that never reproduced stays unreported.
 
 This skill decides WHICH targets and routes; siblings do the work.
 
@@ -97,7 +107,10 @@ hand-applied gate is a weaker claim than the binary's:
     behaviour.** A probe in the scratchpad proves the defect once; a test in the repository's own
     suite proves it on every run. The assertion states what the contract promises, so the test is
     RED on today's code and GREEN once the defect is fixed, in that order. Run it both ways and
-    record which run was which. Then discriminate: it must also go red under at least one adjacent
+    record which run was which. A pinning claim is proved, not asserted: the finding row cites
+    the executions — RED on the defective line, GREEN after the fix — and a test this run never
+    ran both ways is a hypothesis, not a pin; the row stays open until it is run both ways.
+    Then discriminate: it must also go red under at least one adjacent
     mutation of the fixed line (boundary shifted, condition negated, branch removed), else it pins
     only the exact revert and a wrong fix passes. Two failures look like compliance and are not: a test that passes
     either way pins nothing, and a test that asserts the defective output is a characterization
