@@ -16,6 +16,7 @@ import (
 
 	"github.com/alesierraalta/tsp/internal/admit"
 	"github.com/alesierraalta/tsp/internal/assets"
+	"github.com/alesierraalta/tsp/internal/base"
 	"github.com/alesierraalta/tsp/internal/bench"
 	"github.com/alesierraalta/tsp/internal/buildinfo"
 	"github.com/alesierraalta/tsp/internal/evidence"
@@ -422,6 +423,102 @@ func TestPlanAdmitDryRunRunsNothing(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
 		t.Fatalf("the dry run executed the command: %s exists", sentinel)
+	}
+}
+
+// upstreamRepo makes dir a git repository whose branch main tracks origin/main at one real
+// commit — the shape every field session has — so the CLI can record what its evidence ran on.
+func upstreamRepo(t *testing.T) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("symbolic-ref", "HEAD", "refs/heads/main")
+	run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "--quiet", "-m", "seed")
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	sha := strings.TrimSpace(string(out))
+	run("update-ref", "refs/remotes/origin/main", sha)
+	run("remote", "add", "origin", "https://example.invalid/x.git")
+	run("config", "branch.main.remote", "origin")
+	run("config", "branch.main.merge", "refs/heads/main")
+	return dir, sha
+}
+
+// An admitted run is the moment a base is trustworthy: the evidence executed against this
+// checkout, so the upstream ref and commit are recorded for the stop gate's drift check.
+func TestPlanAdmitExecuteRecordsTheAdmittedBase(t *testing.T) {
+	bin := buildCLI(t)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	dir, sha := upstreamRepo(t)
+	path := writeLedger(t, dir, "echo ok")
+	out, code := runCLIAt(t, dir, bin, "plan", "admit", "--path", path, "--execute", "--record", "E1")
+	if code != 0 {
+		t.Fatalf("admit exit = %d, want 0\n%s", code, out)
+	}
+	rec, ok := base.Load(dir)
+	if !ok {
+		t.Fatal("an admitted run left no base record")
+	}
+	if rec.Ref != "origin/main" || rec.SHA != sha {
+		t.Fatalf("record = %+v, want origin/main at %s", rec, sha)
+	}
+}
+
+// A dry run executes nothing, so it admitted nothing: no record is written.
+func TestPlanAdmitDryRunRecordsNoBase(t *testing.T) {
+	bin := buildCLI(t)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	dir, _ := upstreamRepo(t)
+	path := writeLedger(t, dir, "echo ok")
+	out, code := runCLIAt(t, dir, bin, "plan", "admit", "--path", path)
+	if code != 0 {
+		t.Fatalf("dry run exit = %d, want 0\n%s", code, out)
+	}
+	if _, ok := base.Load(dir); ok {
+		t.Fatal("a dry run executed nothing and must record no base")
+	}
+}
+
+// A refused row is not admitted evidence, so a failed admit never updates the record.
+func TestPlanAdmitRefusalRecordsNoBase(t *testing.T) {
+	bin := buildCLI(t)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	dir, _ := upstreamRepo(t)
+	path := writeLedger(t, dir, "exit 1")
+	out, code := runCLIAt(t, dir, bin, "plan", "admit", "--path", path, "--execute")
+	if code != 1 {
+		t.Fatalf("failed admit exit = %d, want 1\n%s", code, out)
+	}
+	if _, ok := base.Load(dir); ok {
+		t.Fatal("a refused row admitted nothing and must record no base")
+	}
+}
+
+// A repository without a tracking ref has no base to name: the record stays absent and the
+// gate stays silent.
+func TestPlanAdmitWithoutAnUpstreamRecordsNoBase(t *testing.T) {
+	bin := buildCLI(t)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	path := writeLedger(t, dir, "echo ok")
+	out, code := runCLIAt(t, dir, bin, "plan", "admit", "--path", path, "--execute", "--record", "E1")
+	if code != 0 {
+		t.Fatalf("admit exit = %d, want 0\n%s", code, out)
+	}
+	if _, ok := base.Load(dir); ok {
+		t.Fatal("a session with no tracking ref must record no base")
 	}
 }
 
