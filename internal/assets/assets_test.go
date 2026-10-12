@@ -13,7 +13,7 @@ var expected = []string{
 	"agent-eval", "appsec-adversarial-auditor", "breakcheck", "clean-architecture-audit", "contract-compat-testing", "crash-and-process-testing", "database-persistence-testing",
 	"dependency-legitimacy", "docker-test-containers", "exploit-testing", "go-testing", "iac-safe-auditor", "implementation-theater",
 	"llm-eval-design", "llm-redteam", "messaging-eventdriven-testing", "no-excess-tests", "python-testing-patterns", "rag-audit-evaluator", "real-run-validation", "resilience-fault-injection", "runtime-reliability-testing", "silent-degradation",
-	"test-strategy",
+	"test-strategy", "test-strategy-verifier",
 }
 
 func TestEverySkillIsEmbeddedWithAMatchingName(t *testing.T) {
