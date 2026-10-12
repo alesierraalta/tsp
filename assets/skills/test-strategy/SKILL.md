@@ -31,6 +31,9 @@ from the state table, act. Never ask which mode; one question only if the target
   A suspicion that never reproduced stays unreported.
 
 This skill decides WHICH targets and routes; siblings do the work.
+When it is reached as the post-implementation verification pass, the
+`test-strategy-verifier` gate owns the decision to run it and has already collected the user's
+explicit yes.
 
 ## Tooling
 
