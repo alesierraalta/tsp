@@ -122,6 +122,19 @@ func TestFinalMessageFromLogReadsTheLastAnswer(t *testing.T) {
 	if got := finalMessageFromLog(dir); got != "the parser drops the comma" {
 		t.Fatalf("final message = %q", got)
 	}
+	// The log keeps only the tail of the stream, so a Pi run's last event usually starts mid-line and no
+	// parser can read it: the answer is still the first text of the last assistant message in that tail.
+	truncated := t.TempDir()
+	tail := "attempt 1 exit_code=0 is_error=false timed_out=false err=<nil>\n" +
+		`ed\n"}]},{"role":"toolResult","content":[{"type":"text","text":"feedback is disabled"}]},` +
+		`{"role":"assistant","content":[{"type":"thinking","thinking":"done"},{"type":"text","text":"the comma drops \"1,234\""}],"stopReason":"stop"}],"willRetry":false}` + "\n" +
+		`{"type":"agent_settled","aborted":false}` + "\n"
+	if err := os.WriteFile(filepath.Join(truncated, "agent.log"), []byte(tail), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := finalMessageFromLog(truncated); got != `the comma drops "1,234"` {
+		t.Fatalf("final message from a truncated tail = %q", got)
+	}
 	if got := finalMessageFromLog(t.TempDir()); got != "" {
 		t.Fatalf("a run without a log has no final message, got %q", got)
 	}

@@ -1,9 +1,11 @@
 package bench
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -116,7 +118,29 @@ func finalMessageFromLog(dir string) string {
 			return clipFinalMessage(text)
 		}
 	}
-	return ""
+	return clipFinalMessage(lastAssistantText(string(data)))
+}
+
+// assistantTextRe is the first text block of an assistant message, as a JSON string literal.
+var assistantTextRe = regexp.MustCompile(`"type":"text","text":("(?:[^"\\]|\\.)*")`)
+
+// lastAssistantText reads the answer out of a log whose last event no parser can read: the log keeps only
+// the tail of the stream, and Pi's closing event carries every message on one long line, so the tail
+// usually starts in the middle of it. The answer is the first text block of the last assistant message.
+func lastAssistantText(log string) string {
+	i := strings.LastIndex(log, `"role":"assistant"`)
+	if i < 0 {
+		return ""
+	}
+	m := assistantTextRe.FindStringSubmatch(log[i:])
+	if m == nil {
+		return ""
+	}
+	var text string
+	if json.Unmarshal([]byte(m[1]), &text) != nil {
+		return ""
+	}
+	return text
 }
 
 func clipFinalMessage(text string) string {
