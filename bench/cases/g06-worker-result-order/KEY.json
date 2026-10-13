@@ -10,10 +10,16 @@
       "file": "worker.go",
       "line": 29,
       "class": "map-iteration-flak",
-      "keywords": ["order", "map", "iteration", "input", "distinct"],
+      "keywords": [
+        "order",
+        "map",
+        "iteration",
+        "input",
+        "distinct"
+      ],
       "description": "Appending results while ranging over the lookup map discards input order, so six distinct inputs do not return in their original order.",
       "trigger": {
-        "input": "TPP_WORKER_TRIGGER=1 go test -run TestWorkerOrderTrigger -v",
+        "input": "cp testdata/triggers/worker_trigger_test.go fixture/ && cd fixture && TPP_WORKER_TRIGGER=1 go test -run TestWorkerOrderTrigger -v",
         "expected": "actual: output order matches input: true (output count=6)",
         "actual": "actual: output order matches input: false (output count=6)"
       },
@@ -24,10 +30,15 @@
       "file": "worker.go",
       "line": 4,
       "class": "silent-drop",
-      "keywords": ["empty", "blank", "omission", "payload"],
+      "keywords": [
+        "empty",
+        "blank",
+        "omission",
+        "payload"
+      ],
       "description": "Process skips empty-string values before assembling its output, so an empty input silently receives no result.",
       "trigger": {
-        "input": "TPP_WORKER_EMPTY_TRIGGER=1 go test -run TestEmptyInputTrigger -v",
+        "input": "cp testdata/triggers/worker_trigger_test.go fixture/ && cd fixture && TPP_WORKER_EMPTY_TRIGGER=1 go test -run TestEmptyInputTrigger -v",
         "expected": "actual: output count=2 (input count=2), includes empty: true",
         "actual": "actual: output count=1 (input count=2), includes empty: false"
       },
@@ -40,7 +51,13 @@
       "file": "worker.go",
       "line": 19,
       "class": "documented-deduplication",
-      "keywords": ["duplicate", "dedupe", "repeated", "unique", "deduped"],
+      "keywords": [
+        "duplicate",
+        "dedupe",
+        "repeated",
+        "unique",
+        "deduped"
+      ],
       "description": "Repeated inputs intentionally produce one result because duplicate inputs are deduped before processing.",
       "documented": "README.md:6"
     }

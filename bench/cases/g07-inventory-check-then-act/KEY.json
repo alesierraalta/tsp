@@ -10,10 +10,16 @@
       "file": "inventory.go",
       "line": 29,
       "class": "check-then-act-race",
-      "keywords": ["concurrent", "capacity", "sold", "reservation", "purchase"],
+      "keywords": [
+        "concurrent",
+        "capacity",
+        "sold",
+        "reservation",
+        "purchase"
+      ],
       "description": "The availability result survives after its mutex is released, so concurrent callers count sales from stale checks and sold exceeds capacity.",
       "trigger": {
-        "input": "TPP_INVENTORY_TRIGGER=1 go test ./... -run TestConcurrentOversellTrigger -v",
+        "input": "cp testdata/triggers/inventory_trigger_test.go fixture/ && cd fixture && TPP_INVENTORY_TRIGGER=1 go test ./... -run TestConcurrentOversellTrigger -v",
         "expected": "sold=50 capacity=50 stock=0",
         "actual": "sold=100 capacity=50 stock=0"
       },
@@ -24,10 +30,15 @@
       "file": "inventory.go",
       "line": 53,
       "class": "missing-upper-bound",
-      "keywords": ["refund", "ceiling", "overfill", "replenishment"],
+      "keywords": [
+        "refund",
+        "ceiling",
+        "overfill",
+        "replenishment"
+      ],
       "description": "Refund adds returned units without enforcing the inventory ceiling, allowing stock to exceed its configured capacity.",
       "trigger": {
-        "input": "TPP_INVENTORY_REFUND_TRIGGER=1 go test ./... -run TestRefundCapacityTrigger -v",
+        "input": "cp testdata/triggers/inventory_trigger_test.go fixture/ && cd fixture && TPP_INVENTORY_REFUND_TRIGGER=1 go test ./... -run TestRefundCapacityTrigger -v",
         "expected": "actual: stock=5 capacity=5",
         "actual": "actual: stock=6 capacity=5"
       },
@@ -40,7 +51,13 @@
       "file": "inventory.go",
       "line": 44,
       "class": "documented-stock-clamp",
-      "keywords": ["stock", "clamped", "display", "negative", "zero"],
+      "keywords": [
+        "stock",
+        "clamped",
+        "display",
+        "negative",
+        "zero"
+      ],
       "description": "Stock() deliberately reports zero when the internal remainder is negative, so its public value never goes negative.",
       "documented": "README.md:7"
     }
