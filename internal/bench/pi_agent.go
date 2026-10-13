@@ -48,14 +48,15 @@ func piAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult
 }
 
 // piArgs builds the Pi invocation. A run with its own config reads no AGENTS.md or CLAUDE.md from the
-// workspace's ancestors, and a bare run (ConfigNone) disables every discovered and configured skill.
+// workspace's ancestors and loads no built-in extension, and a bare run (ConfigNone) disables every
+// discovered and configured skill.
 func piArgs(key Key, opts Options) []string {
 	args := []string{"-p", agentPrompt(key), "--mode", "json", "--no-session"}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}
 	if opts.ConfigDir != "" {
-		args = append(args, "--no-context-files")
+		args = append(args, "--no-context-files", "--no-extensions")
 		if opts.ConfigMode == ConfigNone {
 			args = append(args, "--no-skills")
 		}

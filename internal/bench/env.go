@@ -185,10 +185,11 @@ const (
 )
 
 // CodexAuthFile is the login a bare codex run copies; IsolatedHomeDir is the empty HOME an isolated
-// config gives its agent.
+// config gives its agent; agentConfigDir is the per-run copy a run keeps beside its workspace.
 const (
 	CodexAuthFile   = "auth.json"
 	IsolatedHomeDir = "home"
+	agentConfigDir  = "agent-config"
 )
 
 // agentEnv returns the environment for the agent process: CLAUDE_CONFIG_DIR set to cfgDir,
@@ -228,6 +229,11 @@ func isolateHome(env []string, cfgDir string) []string {
 		switch {
 		case strings.HasPrefix(e, "HOME="):
 			operatorHome = strings.TrimPrefix(e, "HOME=")
+			continue
+		// XDG's home-scoped directories are operator configuration too: left alone they point at the
+		// operator's own config, data, state, and cache whatever HOME says.
+		case strings.HasPrefix(e, "XDG_CONFIG_HOME="), strings.HasPrefix(e, "XDG_DATA_HOME="),
+			strings.HasPrefix(e, "XDG_STATE_HOME="), strings.HasPrefix(e, "XDG_CACHE_HOME="):
 			continue
 		case strings.HasPrefix(e, "GOCACHE="):
 			goCache = true

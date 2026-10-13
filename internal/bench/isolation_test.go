@@ -1,13 +1,16 @@
 package bench
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // writeCodexSource builds a stand-in operator CODEX_HOME holding the login and the operator's own
@@ -116,11 +119,20 @@ func TestIsolatedEnvPointsHomeAtTheConfig(t *testing.T) {
 	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	base := []string{"PATH=/bin", "HOME=/operator", "CODEX_HOME=/operator/.codex"}
+	base := []string{"PATH=/bin", "HOME=/operator", "CODEX_HOME=/operator/.codex",
+		"XDG_CONFIG_HOME=/operator/.config", "XDG_DATA_HOME=/operator/.local/share",
+		"XDG_STATE_HOME=/operator/.local/state", "XDG_CACHE_HOME=/operator/.cache"}
 
 	pi := piEnv(base, cfg, "/build")
 	if got := envValues(pi, "HOME"); !reflect.DeepEqual(got, []string{home}) {
 		t.Fatalf("pi HOME = %v, want [%s]", got, home)
+	}
+	// The XDG home-scoped directories are operator config too: left in place they point at the
+	// operator's own config, data, state and cache whatever HOME says.
+	for _, key := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"} {
+		if got := envValues(pi, key); len(got) != 0 {
+			t.Fatalf("pi %s = %v, want the variable dropped", key, got)
+		}
 	}
 	if got := envValues(pi, "GOCACHE"); !reflect.DeepEqual(got, []string{filepath.Join("/operator", ".cache", "go-build")}) {
 		t.Fatalf("pi GOCACHE = %v", got)
@@ -141,6 +153,9 @@ func TestIsolatedEnvPointsHomeAtTheConfig(t *testing.T) {
 	if got := envValues(piEnv(base, custom, ""), "HOME"); !reflect.DeepEqual(got, []string{"/operator"}) {
 		t.Fatalf("a config without its own home keeps HOME, got %v", got)
 	}
+	if got := envValues(piEnv(base, custom, ""), "XDG_CONFIG_HOME"); !reflect.DeepEqual(got, []string{"/operator/.config"}) {
+		t.Fatalf("a config without its own home keeps the operator's XDG vars, got %v", got)
+	}
 }
 
 // Every isolated pi run ignores AGENTS.md/CLAUDE.md discovery; a bare run also disables every skill.
@@ -155,15 +170,15 @@ func TestPiArgsIsolateContextFilesAndSkills(t *testing.T) {
 		return false
 	}
 	bench := piArgs(key, Options{ConfigDir: "/cfg", ConfigMode: ConfigBench})
-	if !has(bench, "--no-context-files") || has(bench, "--no-skills") {
+	if !has(bench, "--no-context-files") || !has(bench, "--no-extensions") || has(bench, "--no-skills") {
 		t.Fatalf("bench args = %v", bench)
 	}
 	bare := piArgs(key, Options{ConfigDir: "/cfg", ConfigMode: ConfigNone})
-	if !has(bare, "--no-context-files") || !has(bare, "--no-skills") {
+	if !has(bare, "--no-context-files") || !has(bare, "--no-extensions") || !has(bare, "--no-skills") {
 		t.Fatalf("bare args = %v", bare)
 	}
 	inherited := piArgs(key, Options{})
-	if has(inherited, "--no-context-files") || has(inherited, "--no-skills") {
+	if has(inherited, "--no-context-files") || has(inherited, "--no-extensions") || has(inherited, "--no-skills") {
 		t.Fatalf("an inherited run keeps the operator's pi as it is: %v", inherited)
 	}
 }
@@ -232,5 +247,60 @@ func TestParseCodexStream(t *testing.T) {
 	errored := ParseCodexStream(strings.NewReader(`{"type":"error","message":"boom"}`))
 	if !errored.IsError || errored.ErrorText != "boom" {
 		t.Fatalf("an error event must be an error with its message: %+v", errored)
+	}
+	// A stream that stops before a turn ends is not a run that finished: without the terminal
+	// event a clean exit and a truncated stream are the same zero-value result, which scored as a
+	// valid run that found nothing.
+	for name, stream := range map[string]string{
+		"empty":          "",
+		"header only":    `{"type":"thread.started","thread_id":"t"}`,
+		"items, no turn": `{"type":"item.completed","item":{"type":"command_execution"}}`,
+	} {
+		got := ParseCodexStream(strings.NewReader(stream))
+		if !got.IsError || got.ErrorText == "" {
+			t.Fatalf("%s: a stream without a terminal event must be an error, got %+v", name, got)
+		}
+	}
+}
+
+// A prepared config is a template: each run works on its own copy, so two runs side by side cannot
+// see or overwrite each other's login, caches, or home, and no run writes through the template.
+func TestEachRunWorksOnItsOwnConfigCopy(t *testing.T) {
+	requireNodeAndGit(t)
+	caseDir := fakeCaseNamed(t, t.TempDir(), "case-a")
+	template := t.TempDir()
+	if err := os.WriteFile(filepath.Join(template, PiAuthFile), []byte(`{"token":"t"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	dirs := map[string]bool{}
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+		mu.Lock()
+		dirs[opts.ConfigDir] = true
+		mu.Unlock()
+		if opts.ConfigDir == template {
+			t.Errorf("the agent was handed the shared template %s", template)
+		}
+		if _, err := os.Stat(filepath.Join(opts.ConfigDir, PiAuthFile)); err != nil {
+			t.Errorf("the run's copy must carry the prepared login: %v", err)
+		}
+		// A write into the run's config is how a login refresh behaves: the template must not see it.
+		if err := os.WriteFile(filepath.Join(opts.ConfigDir, "run-write"), []byte(ws), 0o600); err != nil {
+			t.Errorf("writing the run's own config: %v", err)
+		}
+		return AgentResult{Result: "nothing found", Turns: 2}, nil
+	}
+	agg, code := Run(Options{CasesGlob: caseDir, Runs: 2, Workers: 2, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), BenchDir: t.TempDir(), ConfigDir: template, Agent: agent})
+	if code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	if len(agg.Cases) != 2 {
+		t.Fatalf("%d cases in the aggregate, want 2", len(agg.Cases))
+	}
+	if len(dirs) != 2 {
+		t.Fatalf("two runs used %d config dirs, want one copy each: %v", len(dirs), dirs)
+	}
+	if _, err := os.Stat(filepath.Join(template, "run-write")); err == nil {
+		t.Fatal("a run wrote into the template instead of its own copy")
 	}
 }

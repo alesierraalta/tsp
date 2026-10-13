@@ -610,8 +610,17 @@ Every isolated config also carries its own empty `home/`, and the run's `HOME` p
 discovers `~/.agents/skills/` whatever its settings say, so without that the operator's own skills
 (on many machines a symlink to `~/.claude/skills`, an installed `test-strategy` included) would leak
 into a reading that claims to measure only the embedded ones. Isolated Pi runs also pass
-`--no-context-files`, so no `AGENTS.md` or `CLAUDE.md` above the workspace instructs the agent. The
-Go build cache stays the operator's: it holds compiled packages, never instructions.
+`--no-context-files`, `--no-extensions`, and — for `--agent-config none` — `--no-skills`, so no
+`AGENTS.md` or `CLAUDE.md` above the workspace instructs the agent and no built-in extension
+registers tools behind the measurement. The home-scoped `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+`XDG_STATE_HOME`, and `XDG_CACHE_HOME` variables are dropped for the same reason: user-level config
+is found through `HOME`, so an inherited XDG path would undo the throwaway home. The Go build cache
+stays the operator's: it holds compiled packages, never instructions.
+
+Each run works on its own copy of that prepared config, kept beside its workspace and removed with
+it. A worker pool runs several cases at once, and one shared config would let them see each other's
+login refreshes, caches, and home writes — exactly the state the throwaway config exists to keep out
+of a measurement.
 
 `--agent-config none` is the bare-agent baseline a skill is measured against: the same isolation
 with no skill at all (`--no-skills` for Pi). The Codex runner (`--runner codex`) runs only bare:
@@ -619,7 +628,8 @@ with no skill at all (`--no-skills` for Pi). The Codex runner (`--runner codex`)
 `--ignore-rules`, `--ephemeral`, and no approval prompt; it defaults to `gpt-6-luna`. Codex reports
 tokens but no price, so a codex run records no cost and `--max-cost-usd` never stops it. Its turns
 count the actions the agent completed (commands, file changes, tool calls), the unit closest to the
-other runners' turns. Comparing arms:
+other runners' turns; a stream that ends without a completion event is an error, not an empty
+success. Comparing arms:
 
 ```
 tsp bench run --runner codex --cases 'bench/cases/*'                       # codex, nothing

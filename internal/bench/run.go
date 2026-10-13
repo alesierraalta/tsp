@@ -556,11 +556,23 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		res = merge(res, scored)
 		return finish(res, opts, false)
 	}
+	// Every run works on its own copy of the prepared config: a worker pool runs several cases at
+	// once, and a shared config would let them see each other's login refreshes, caches, and home
+	// writes, which is exactly the state the throwaway config exists to keep out of a measurement.
+	runOpts := opts
+	if opts.ConfigDir != "" {
+		clone := filepath.Join(filepath.Dir(ws), agentConfigDir)
+		if err := copyTree(opts.ConfigDir, clone); err != nil {
+			res.Failed, res.FailReason = true, "agent config could not be copied: "+err.Error()
+			return finish(res, opts, true)
+		}
+		runOpts.ConfigDir = clone
+	}
 	started := time.Now()
 	var ar AgentResult
 	for attempt := 0; ; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
-		ar, err = opts.Agent(ctx, ws, key, opts)
+		ar, err = opts.Agent(ctx, ws, key, runOpts)
 		cancel()
 		res.CostUSD += ar.CostUSD
 		res.Turns += ar.Turns
@@ -622,6 +634,9 @@ func merge(res, scored Result) Result {
 
 func finish(res Result, opts Options, keepWS bool) Result {
 	dir := filepath.Dir(res.Workspace)
+	// The per-run config copy carries the operator's copied login: it exists for the run and goes away
+	// with it, whatever happens to the workspace.
+	_ = os.RemoveAll(filepath.Join(dir, agentConfigDir))
 	// The plan is the run's deliverable: keep it beside result.json so a later scorer can re-read it. A copy
 	// that fails is a note on the case, not a failure — the case was scored, what is lost is rescoring it
 	// later — and the note is computed here, before the result is persisted, because one added afterwards is

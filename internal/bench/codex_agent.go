@@ -83,6 +83,10 @@ type codexEvent struct {
 // turn after a reported error means the run recovered.
 func ParseCodexStream(r io.Reader) AgentResult {
 	var out AgentResult
+	// done records that the stream reached a terminal event. Without one a clean process exit and a
+	// truncated stream are the same zero-value result, which would score as a valid run that found
+	// nothing rather than as a run that never finished.
+	done := false
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
 	for sc.Scan() {
@@ -111,15 +115,24 @@ func ParseCodexStream(r io.Reader) AgentResult {
 			}
 		case "turn.completed":
 			out.IsError, out.ErrorText = false, ""
+			done = true
 		case "turn.failed":
 			out.IsError = true
 			out.ErrorText = strings.TrimSpace(ev.Error.Message)
 			if out.ErrorText == "" {
 				out.ErrorText = "turn failed"
 			}
+			done = true
 		case "error":
 			out.IsError = true
 			out.ErrorText = strings.TrimSpace(ev.Message)
+			done = true
+		}
+	}
+	if !done {
+		out.IsError = true
+		if out.ErrorText == "" {
+			out.ErrorText = "codex stream ended without a completion event"
 		}
 	}
 	return out
