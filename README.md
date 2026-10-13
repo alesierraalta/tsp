@@ -571,7 +571,17 @@ Each case ships `fix/all/` (every defect fixed) and, when it has more than one, 
 (every defect but that one fixed). The test files the agent added or changed are carried onto each
 variant and run per test: a test green on `fix/all` and red on `fix/keep-D` catches D. A test red
 on `fix/all` is broken or written to another API, so it is ignored and counted separately; a test
-green everywhere catches nothing.
+green everywhere catches nothing. A test that hangs on `fix/keep-D` is killed by the suite timeout
+or cancelled with its whole file, so the run never names it: when a failed variant run never lists a
+test that was green on `fix/all`, that test catches D, and the catch notes say so.
+
+**Why it was missed** gives every uncaught defect of a valid run one reason, stored as `misses`
+in `result.json`, counted in `aggregate.json`, and listed with example runs under "Why defects
+were missed" in `summary.md`: *seen, no test written* (the run named it and left no test), *seen,
+tests missed it*, *tests blind to it* (tests written, defect never named), *never looked*, and *not
+checkable*. "Seen" is mechanical: a plan finding credited to the defect, or the agent's final
+message (kept as `final_message`) citing its location or naming one of its keywords. The section
+also counts the runs whose tests are red on the reference fix or pin the defective behaviour.
 
 **Pinned** reads the plan's `Pinning test` cell: it counts defects whose finding names a test that
 holds them. Naming a test and having one that distinguishes the defect are different claims, so
