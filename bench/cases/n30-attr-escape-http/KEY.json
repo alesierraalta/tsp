@@ -15,9 +15,23 @@
       "trigger": {
         "input": "node --input-type=module -e 'import { renderLink } from \"./src/render.js\"; console.log(renderLink(\"x\", \"x\\\" onmouseover=alert(1)\"));'",
         "expected": "<a href=\"x&quot; onmouseover=alert(1)\">x</a>",
-        "actual": "PENDING"
+        "actual": "<a href=\"x\" onmouseover=alert(1)\">x</a>"
       },
       "why_missed": "The suite checks text-node escaping and links without quotes in their attribute values, so it never crosses into the missing attribute-context character."
+    },
+    {
+      "id": "D2",
+      "file": "src/render.js",
+      "line": 20,
+      "class": "css-context-injection",
+      "keywords": ["style", "semicolon", "declaration", "css"],
+      "description": "A style value escapes quotes but not semicolons, allowing input to append CSS declarations.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { renderColor } from \"./src/render.js\"; const quote = String.fromCharCode(34); console.log(renderColor(\"Color\", \"red;background:url(\" + quote + \"x\" + quote + \")\"));'",
+        "expected": "<span style=\"color:red\\3B background:url(&quot;x&quot;)\">Color</span>",
+        "actual": "<span style=\"color:red;background:url(&quot;x&quot;)\">Color</span>"
+      },
+      "why_missed": "The suite never renders a style value containing a semicolon, so it does not check whether one input value can introduce another declaration."
     }
   ],
   "traps": [

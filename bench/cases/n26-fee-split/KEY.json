@@ -1,12 +1,48 @@
-{"id":"n26-fee-split","language":"node","suite":"node --test","surface":"cli",
- "request":"the fee split behavior","defects":[
-  {"id":"D1","file":"src/split.js","line":12,"class":"remainder-distribution","keywords":["remainder","sum","total","integer","shares"],
-   "description":"The splitter floors every share and discards the remainder, so the output parts do not add up to the input total.",
-   "trigger":{"input":"node src/split.js 10 3","expected":"4,3,3\\n","actual":"3,3,3\\n"},
-   "why_missed":"The suite only splits totals divisible by the part count, so floor division produces an exact sum on every tested input."}
- ],
- "traps":[
-  {"id":"t1","file":"src/split.js","line":5,"class":"documented-input-limit","keywords":["usage","limit","maximum","count","parts"],
-   "description":"A request for more than 100 parts is intentionally rejected with a usage error rather than silently capped.",
-   "documented":"README.md:5"}
- ]}
+{
+  "id": "n26-fee-split",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "cli",
+  "request": "the fee split behavior",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/split.js",
+      "line": 13,
+      "class": "remainder-distribution",
+      "keywords": ["remainder", "sum", "total", "integer", "shares"],
+      "description": "The splitter floors every share and discards the remainder, so the output parts do not add up to the input total.",
+      "trigger": {
+        "input": "node src/split.js 10 3",
+        "expected": "4,3,3\\n",
+        "actual": "3,3,3\\n"
+      },
+      "why_missed": "The suite only splits totals divisible by the part count, so floor division produces an exact sum on every tested input."
+    },
+    {
+      "id": "D2",
+      "file": "src/split.js",
+      "line": 29,
+      "class": "wrong-output-stream",
+      "keywords": ["stderr", "stdout", "stream", "error"],
+      "description": "Errors thrown by split() inside run() are written to stdout instead of stderr.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { run } from \"./src/split.js\"; let stdout = \"\"; let stderr = \"\"; const status = run([\"1\", \"101\"], { out: { write: (text) => { stdout += text; } }, err: { write: (text) => { stderr += text; } } }); console.log(JSON.stringify({ status, stdout, stderr }));'",
+        "expected": "{\"status\":2,\"stdout\":\"\",\"stderr\":\"usage: split <total> <parts> (maximum 100)\\n\"}",
+        "actual": "{\"status\":2,\"stdout\":\"usage: split <total> <parts> (maximum 100)\\n\",\"stderr\":\"\"}"
+      },
+      "why_missed": "The suite only exercises successful split calls, so it never checks which stream receives an error raised inside run()."
+    }
+  ],
+  "traps": [
+    {
+      "id": "t1",
+      "file": "src/split.js",
+      "line": 5,
+      "class": "documented-input-limit",
+      "keywords": ["usage", "limit", "maximum", "count", "parts"],
+      "description": "A request for more than 100 parts is intentionally rejected with a usage error rather than silently capped.",
+      "documented": "README.md:5"
+    }
+  ]
+}

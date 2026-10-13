@@ -1,10 +1,17 @@
 package worker
 
+func hasPayload(input string) bool {
+	return input != ""
+}
+
 // Process returns one result for each distinct input.
 func Process(inputs []string) []string {
 	seen := make(map[string]struct{})
 	unique := make([]string, 0, len(inputs))
 	for _, input := range inputs {
+		if !hasPayload(input) {
+			continue
+		}
 		if _, exists := seen[input]; exists {
 			continue
 		}

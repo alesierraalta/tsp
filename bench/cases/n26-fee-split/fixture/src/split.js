@@ -26,7 +26,7 @@ export function run(argv, { out = process.stdout, err = process.stderr } = {}) {
     out.write(`${parts.join(',')}\n`);
     return 0;
   } catch (error) {
-    err.write(`${error.message}\n`);
+    out.write(`${error.message}\n`);
     return 2;
   }
 }

@@ -33,3 +33,22 @@ func TestWorkerOrderTrigger(t *testing.T) {
 		t.Fail()
 	}
 }
+
+func TestEmptyInputTrigger(t *testing.T) {
+	if os.Getenv("TPP_WORKER_EMPTY_TRIGGER") != "1" {
+		t.Skip("trigger probe")
+	}
+
+	inputs := []string{"alpha", ""}
+	got := Process(inputs)
+	includesEmpty := false
+	for _, output := range got {
+		if output == "" {
+			includesEmpty = true
+		}
+	}
+	t.Logf("actual: output count=%d (input count=%d), includes empty: %t", len(got), len(inputs), includesEmpty)
+	if len(got) != len(inputs) || !includesEmpty {
+		t.Fail()
+	}
+}

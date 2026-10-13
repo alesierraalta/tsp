@@ -5,6 +5,7 @@ Inventory sells a fixed stock to concurrent buyers.
 - `Buy()` returns true when it sells one unit and false when none remain.
 - Sold units may never exceed capacity, even with concurrent buyers.
 - `Stock()` is clamped at 0 and never shown negative (documented).
+- Inventory stock never exceeds capacity.
 
 The optional `yieldBeforeAct` callback is test-support injection: the fixture invokes it
 between its availability check and separate decrement, letting the trigger hold buyers at

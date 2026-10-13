@@ -4,3 +4,4 @@
 
 - For distinct inputs, output order equals input order.
 - Duplicate inputs are deduped before processing (documented).
+- Every distinct input, including the empty string, yields exactly one result.

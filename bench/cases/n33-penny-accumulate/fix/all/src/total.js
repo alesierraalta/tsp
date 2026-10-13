@@ -1,8 +1,9 @@
 function parseCents(amount) {
-  const match = /^(-?)(\d+)\.(\d{2})$/.exec(String(amount));
+  const match = /^(-?)(\d{1,3}(?:,\d{3})*|\d+)\.(\d{2})$/.exec(String(amount));
   if (!match) throw new TypeError("amount must be a decimal string with two fractional digits");
 
-  const cents = Number(match[2]) * 100 + Number(match[3]);
+  const whole = Number(match[2].replaceAll(",", ""));
+  const cents = whole * 100 + Number(match[3]);
   return match[1] === "-" ? -cents : cents;
 }
 

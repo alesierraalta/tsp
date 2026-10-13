@@ -7,10 +7,11 @@ type Inventory struct {
 	stock          int
 	sold           int
 	yieldBeforeAct func()
+	capacity       int
 }
 
 func NewInventory(capacity int, yieldBeforeAct func()) *Inventory {
-	return &Inventory{stock: capacity, yieldBeforeAct: yieldBeforeAct}
+	return &Inventory{stock: capacity, yieldBeforeAct: yieldBeforeAct, capacity: capacity}
 }
 
 func (i *Inventory) Buy() bool {
@@ -41,4 +42,16 @@ func (i *Inventory) Stock() int {
 		return 0
 	}
 	return stock
+}
+
+func (i *Inventory) Refund(quantity int) {
+	if quantity <= 0 {
+		return
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.stock += quantity
+	if i.stock > i.capacity {
+		i.stock = i.capacity
+	}
 }

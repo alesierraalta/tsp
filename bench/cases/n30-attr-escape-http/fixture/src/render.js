@@ -11,3 +11,12 @@ export function renderLink(label, href) {
   const safeHref = escapeMarkup(href);
   return `<a href="${safeHref}">${safeLabel}</a>`;
 }
+
+export function renderColor(label, value) {
+  const text = String(value);
+  if (text.length === 0) {
+    return `<span style="color:inherit">${escapeMarkup(label)}</span>`;
+  }
+  const safeValue = text.replaceAll('"', '&quot;');
+  return `<span style="color:${safeValue}">${escapeMarkup(label)}</span>`;
+}
