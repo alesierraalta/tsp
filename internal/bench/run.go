@@ -153,6 +153,8 @@ type Aggregate struct {
 	RecallUnique         float64    `json:"recall_unique"`
 	RecallUniqueCaught   float64    `json:"recall_unique_caught"`
 	Provenance           Provenance `json:"provenance"`
+	// Misses counts uncaught defect-runs by reason (Diagnose), so a reading says where defects were lost.
+	Misses map[string]int `json:"misses,omitempty"`
 }
 
 // CorpusCase is one case of a corpus: its name, the bounded request it is asked for, and the ids of
@@ -451,6 +453,7 @@ func finalizeAggregate(agg *Aggregate) {
 	agg.DefectRuns, agg.Controls, agg.Inconclusive = counts.DefectRuns, counts.Controls, counts.Inconclusive
 	agg.UnstableCases = counts.Unstable
 	agg.AdjudicationComplete = complete
+	agg.Misses = countMisses(agg.Cases)
 	agg.MetricsVersion = MetricsVersion
 	agg.Recall, agg.RecallCaught = 0, 0
 	if agg.Defects > 0 {
@@ -601,9 +604,11 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		res.Notes = append(res.Notes, res.FailReason)
 		return finish(res, opts, true)
 	}
+	res.FinalMessage = clipFinalMessage(ar.Result)
 	res = merge(res, ScoreWorkspace(ws, key))
 	res.Catch = Discriminate(caseDir, ws, key, opts.SuiteTimeout)
 	res.Caught = res.Catch.Count()
+	res.Misses = Diagnose(res, key)
 	// Misses of either measure keep their workspace so they can be classified.
 	return finish(res, opts, res.Recall < 1 || (res.Catch.Checked && res.Caught < res.Total))
 }
@@ -628,6 +633,7 @@ func merge(res, scored Result) Result {
 	scored.CostUSD, scored.Turns, scored.Seconds = res.CostUSD, res.Turns, res.Seconds
 	scored.Suite, scored.Invalid, scored.InvalidReason = res.Suite, res.Invalid, res.InvalidReason
 	scored.Failed, scored.FailReason = res.Failed, res.FailReason
+	scored.FinalMessage = res.FinalMessage
 	scored.Notes = append(res.Notes, scored.Notes...)
 	return scored
 }
@@ -757,6 +763,7 @@ func Summary(agg Aggregate) string {
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %d | %.3f | %d | %.1f | %s | %s |\n",
 			c.Case, reported, pinned, caught, lightTag(c), microTag(c), c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note, precision)
 	}
+	b.WriteString(missSection(agg))
 	return b.String()
 }
 

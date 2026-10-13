@@ -76,6 +76,10 @@ type Result struct {
 	ClaimedPinned   int         `json:"claimed_pinned"`    // defects whose finding names a pinning test
 	Caught          int         `json:"caught"`            // defects some agent test distinguishes (fixture vs fix)
 	Catch           CatchResult `json:"catch"`
+	// FinalMessage is the agent's last answer, kept so a miss can be traced to a defect the run named
+	// without pinning it; Misses gives every uncaught defect its reason (Diagnose).
+	FinalMessage string `json:"final_message,omitempty"`
+	Misses       []Miss `json:"misses,omitempty"`
 }
 
 var (
