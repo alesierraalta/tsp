@@ -1,0 +1,12 @@
+{"id":"n26-fee-split","language":"node","suite":"node --test","surface":"cli",
+ "request":"the fee split behavior","defects":[
+  {"id":"D1","file":"src/split.js","line":12,"class":"remainder-distribution","keywords":["remainder","sum","total","integer","shares"],
+   "description":"The splitter floors every share and discards the remainder, so the output parts do not add up to the input total.",
+   "trigger":{"input":"node src/split.js 10 3","expected":"4,3,3\\n","actual":"3,3,3\\n"},
+   "why_missed":"The suite only splits totals divisible by the part count, so floor division produces an exact sum on every tested input."}
+ ],
+ "traps":[
+  {"id":"t1","file":"src/split.js","line":5,"class":"documented-input-limit","keywords":["usage","limit","maximum","count","parts"],
+   "description":"A request for more than 100 parts is intentionally rejected with a usage error rather than silently capped.",
+   "documented":"README.md:5"}
+ ]}

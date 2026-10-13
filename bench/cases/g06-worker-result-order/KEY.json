@@ -1,0 +1,34 @@
+{
+  "id": "g06-worker-result-order",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "worker",
+  "request": "Test ordered worker results for distinct inputs.",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "worker.go",
+      "line": 23,
+      "class": "map-iteration-flak",
+      "keywords": ["order", "map", "iteration", "input", "distinct"],
+      "description": "Appending results while ranging over the lookup map discards input order, so six distinct inputs do not return in their original order.",
+      "trigger": {
+        "input": "TPP_WORKER_TRIGGER=1 go test -run TestWorkerOrderTrigger -v",
+        "expected": "actual: output order matches input: true (output count=6)",
+        "actual": "actual: output order matches input: false (output count=6)"
+      },
+      "why_missed": "The happy-path tests use one input or repeated copies of one value; neither can expose ordering across distinct inputs."
+    }
+  ],
+  "traps": [
+    {
+      "id": "t1",
+      "file": "worker.go",
+      "line": 12,
+      "class": "documented-deduplication",
+      "keywords": ["duplicate", "dedupe", "repeated", "unique", "deduped"],
+      "description": "Repeated inputs intentionally produce one result because duplicate inputs are deduped before processing.",
+      "documented": "README.md:6"
+    }
+  ]
+}

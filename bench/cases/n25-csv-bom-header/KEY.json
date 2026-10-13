@@ -1,0 +1,12 @@
+{"id":"n25-csv-bom-header","language":"node","suite":"node --test","surface":"etl",
+ "request":"the CSV import behavior","defects":[
+  {"id":"D1","file":"src/csv.js","line":3,"class":"byte-order-mark","keywords":["bom","header","utf-8","column","lookup"],
+   "description":"A leading UTF-8 BOM remains in the first header key, so lookup by the documented column name fails.",
+   "trigger":{"input":"node --input-type=module -e 'import { parseCsv } from \"./src/csv.js\"; const row = parseCsv(\"\\uFEFFname,age\\r\\nAda,37\\r\\n\")[0]; console.log(JSON.stringify(row.name ?? null));'","expected":"\"Ada\"","actual":"null"},
+   "why_missed":"The suite uses ordinary ASCII headers, so it never exercises a header beginning with a UTF-8 BOM."}
+ ],
+ "traps":[
+  {"id":"t1","file":"src/csv.js","line":10,"class":"ragged-row-padding","keywords":["ragged","missing","padding","empty","columns"],
+   "description":"Rows with missing columns intentionally receive empty-string values instead of being rejected.",
+   "documented":"README.md:5"}
+ ]}

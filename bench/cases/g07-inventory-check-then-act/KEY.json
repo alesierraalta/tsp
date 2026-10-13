@@ -1,0 +1,34 @@
+{
+  "id": "g07-inventory-check-then-act",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "worker",
+  "request": "Test that concurrent purchases never sell more than available capacity.",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "inventory.go",
+      "line": 28,
+      "class": "check-then-act-race",
+      "keywords": ["concurrent", "capacity", "sold", "reservation", "purchase"],
+      "description": "The availability result survives after its mutex is released, so concurrent callers count sales from stale checks and sold exceeds capacity.",
+      "trigger": {
+        "input": "TPP_INVENTORY_TRIGGER=1 go test ./... -run TestConcurrentOversellTrigger -v",
+        "expected": "sold=50 capacity=50 stock=0",
+        "actual": "sold=100 capacity=50 stock=0"
+      },
+      "why_missed": "The suite checks only sequential purchases; it does not hold concurrent buyers between availability checks and decrements."
+    }
+  ],
+  "traps": [
+    {
+      "id": "t1",
+      "file": "inventory.go",
+      "line": 43,
+      "class": "documented-stock-clamp",
+      "keywords": ["stock", "clamped", "display", "negative", "zero"],
+      "description": "Stock() deliberately reports zero when the internal remainder is negative, so its public value never goes negative.",
+      "documented": "README.md:7"
+    }
+  ]
+}

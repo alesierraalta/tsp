@@ -1,0 +1,1 @@
+{"name":"n26-fee-split-fixture","private":true,"type":"module","scripts":{"test":"node --test"}}

@@ -1,0 +1,34 @@
+{
+  "id": "n29-memo-object-key",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "the memoized lookup function",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/memo.js",
+      "line": 5,
+      "class": "cache-key-collision",
+      "keywords": ["cache", "key", "object", "collision", "memoize"],
+      "description": "Stringifying object arguments maps distinct objects to the same cache key, so a later call can receive an earlier object's result.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { memoize } from \"./src/memo.js\"; const lookup = memoize((value) => value.a ?? value.b); const first = lookup({ a: 1 }); const second = lookup({ b: 2 }); console.log(JSON.stringify([first, second]));'",
+        "expected": "[1,2]",
+        "actual": "PENDING"
+      },
+      "why_missed": "The suite exercises only primitive keys, while distinct object arguments stringify to the same key."
+    }
+  ],
+  "traps": [
+    {
+      "id": "T1",
+      "file": "src/memo.js",
+      "line": 16,
+      "class": "documented-ttl",
+      "keywords": ["ttl", "stale", "expiry", "refresh"],
+      "description": "An entry may return a stale cached value for up to 60 seconds before the documented expiry refreshes it.",
+      "documented": "README.md:7"
+    }
+  ]
+}
