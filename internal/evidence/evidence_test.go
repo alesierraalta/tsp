@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alesierraalta/tpp/internal/plan"
+	"github.com/alesierraalta/tsp/internal/plan"
 )
 
 // row builds a ledger row with every machine cell filled, so a case varies only the cell it is about.
@@ -1172,6 +1172,86 @@ func TestAdmitReadsTheExpectCell(t *testing.T) {
 			}
 			if tc.reason != ReasonCommandFailed {
 				assertNoRun(t, calls)
+			}
+		})
+	}
+}
+
+// A test that was skipped, or a filter that matched nothing, exits zero and prints a line that reads like a
+// pass. Pinning that output would record a green run that never ran, so the row is refused at its first run.
+// A multi-package run where some packages ran tests and others had none to run stays admissible.
+func TestAdmitRefusesOutputWhereNoTestRan(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		reason string
+	}{
+		{"a skipped test", "=== RUN   TestFingerprint\n    fingerprint_test.go:83: bash not available\n--- SKIP: TestFingerprint (0.00s)\nPASS\nok  \texample.com/assets\t0.01s\n", ReasonTestsNotRun},
+		{"a skipped subtest", "=== RUN   TestA\n=== RUN   TestA/case\n    --- SKIP: TestA/case (0.00s)\n--- PASS: TestA (0.00s)\nPASS\nok  \texample.com/a\t0.01s\n", ReasonTestsNotRun},
+		{"a filter that matched nothing", "ok  \texample.com/assets\t0.01s [no tests to run]\n", ReasonTestsNotRun},
+		{"every package matched nothing", "ok  \texample.com/a\t0.01s [no tests to run]\nok  \texample.com/b\t0.01s [no tests to run]\n", ReasonTestsNotRun},
+		{"some packages ran tests", "ok  \texample.com/a\t0.01s [no tests to run]\nok  \texample.com/b\t0.02s\n", ""},
+		{"packages without test files", "?   \texample.com/cmd\t[no test files]\nok  \texample.com/b\t0.02s\n", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, calls := admit(t, []plan.LedgerRow{row("E1", "go test ./...", "", "observado")}, Options{Execute: true}, tc.output, nil)
+			if tc.reason == "" {
+				if got[0].Reason == ReasonTestsNotRun {
+					t.Fatalf("a run where tests ran was refused: %+v", got[0])
+				}
+				return
+			}
+			if got[0].Verdict != VerdictRefused || got[0].Reason != tc.reason {
+				t.Fatalf("got %s %q (%s), want refused %q", got[0].Verdict, got[0].Reason, got[0].Detail, tc.reason)
+			}
+			if got[0].Digest != "" || len(calls) != 1 {
+				t.Fatalf("a refused first run must pin nothing and spend no probe: digest %q, %d calls", got[0].Digest, len(calls))
+			}
+		})
+	}
+}
+
+// A command that fails, or runs out of time, says why in its own output; the refusal carries the tail of it,
+// bounded, so the operator does not have to rerun the container by hand to read the failing test's name.
+func TestAdmitRefusalShowsTheTailOfAFailingCommandsOutput(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 30; i++ {
+		lines = append(lines, fmt.Sprintf("line %02d", i))
+	}
+	lines = append(lines, "--- FAIL: TestTrim (0.00s)", "FAIL")
+	long := strings.Join(lines, "\n") + "\n"
+	cases := []struct {
+		name   string
+		output string
+		err    error
+		reason string
+		want   []string
+		absent []string
+	}{
+		{"a failing command", long, errors.New("exit status 1"), ReasonCommandFailed,
+			[]string{"--- FAIL: TestTrim (0.00s)"}, []string{"line 01", "line 12"}},
+		{"a timeout", long, context.DeadlineExceeded, ReasonTimeout, []string{"--- FAIL: TestTrim"}, []string{"line 01"}},
+		{"a failing command with no output", "", errors.New("exit status 1"), ReasonCommandFailed, nil, []string{"last lines"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := admit(t, []plan.LedgerRow{row("E1", "go test ./...", "", "observado")}, Options{Execute: true, Timeout: time.Second}, tc.output, tc.err)
+			if got[0].Reason != tc.reason {
+				t.Fatalf("reason = %q (%s), want %q", got[0].Reason, got[0].Detail, tc.reason)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(got[0].Detail, w) {
+					t.Fatalf("refusal does not show %q:\n%s", w, got[0].Detail)
+				}
+			}
+			for _, a := range tc.absent {
+				if strings.Contains(got[0].Detail, a) {
+					t.Fatalf("refusal shows %q, beyond the bounded tail:\n%s", a, got[0].Detail)
+				}
+			}
+			if n := strings.Count(got[0].Detail, "\n"); n > 25 {
+				t.Fatalf("refusal carries %d lines, want the tail bounded", n)
 			}
 		})
 	}

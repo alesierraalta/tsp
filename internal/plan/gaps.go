@@ -99,7 +99,7 @@ func (g Gaps) Report() string {
 	}
 	unscoped := g.UnscopedLayers + g.UnscopedTargets
 	if unscoped > 0 {
-		fmt.Fprintf(&b, "%d row(s) belong to no run and are not counted; tpp plan gaps --all shows every row\n", unscoped)
+		fmt.Fprintf(&b, "%d row(s) belong to no run and are not counted; tsp plan gaps --all shows every row\n", unscoped)
 	}
 	if g.RunMissing {
 		fmt.Fprintf(&b, "no row carries run %q: a run nobody opened reads as work nobody planned, never as nothing owed\n", g.Run)
@@ -321,7 +321,7 @@ func rankedGaps(g *Gaps, ranked tableScan, run string) bool {
 // scoped. Its rows cannot be attributed to anybody, so they stay out of the count and Any() fails closed on
 // them: reading a legacy table as "this run owes nothing" is the one verdict a scoped count must never invent.
 func missingRunColumn(table, run string) string {
-	return fmt.Sprintf("the %s table has no Run column, so its rows were not counted for run %q: run tpp plan upgrade to add it", table, run)
+	return fmt.Sprintf("the %s table has no Run column, so its rows were not counted for run %q: run tsp plan upgrade to add it", table, run)
 }
 
 // scopedRow decides whether one breadth row belongs to run, counting the rows it excludes as it goes. A blank cell

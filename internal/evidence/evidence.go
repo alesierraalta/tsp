@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alesierraalta/tpp/internal/plan"
+	"github.com/alesierraalta/tsp/internal/plan"
 )
 
 // Options is the run's shape: what to execute, where, under what bound, and what to narrow or record.
@@ -88,6 +88,8 @@ const (
 	ReasonCommandFailed     = "command-failed"
 	ReasonTimeout           = "timeout"
 	ReasonEmptyOutput       = "empty-output"
+	// A test that was skipped, or a filter that left nothing to run, exits zero with output that reads like a pass.
+	ReasonTestsNotRun       = "tests-not-run"
 	ReasonDigestMismatch    = "digest-mismatch"
 	ReasonDigestMissing     = "digest-missing"
 	ReasonModeMismatch      = "mode-mismatch"
@@ -233,34 +235,10 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 			row.ID, row.Label, observadoLabel))
 	}
 
-	// Resolve the cell first: the live ledger writes its commands inside backticks, so one whole
-	// wrapping span is the ordinary spelling of a command and is stripped. Resolution is not a check,
-	// so the reasons below still fire in the order the contract owes them.
-	cell := strings.TrimSpace(row.Admit)
-	command, _ := admitSpan(cell)
-	if absentCommand[strings.ToLower(command)] {
-		return refused(result, ReasonNoAdmitCommand, fmt.Sprintf(
-			"evidence %s declares no command in its Admit cell (%q is a placeholder, not a command)", row.ID, command))
-	}
-
-	// One command whose output is the observation: anything that chains, pipelines, backgrounds,
-	// groups, or substitutes a command is refused, because the tool cannot tell what a second process
-	// will do with the stream. Redirection is the tail of the table and runs after the placeholder rule.
-	if marker, reason, ok := commandMarker(command, false); ok {
-		return refused(result, reason, markerDetail(row.ID, command, marker, reason))
-	}
-	if strings.Contains(command, "`") {
-		return refused(result, ReasonHasMarkup, fmt.Sprintf(
-			"evidence %s carries backticks in its Admit cell (%q) that are not one wrapping span: Admit carries one bare command, unlike Executed, which is prose a human reads and may quote with backticks",
-			row.ID, cell))
-	}
-	if placeholder := commandPlaceholder(command); placeholder != "" {
-		return refused(result, ReasonHasPlaceholder, fmt.Sprintf(
-			"evidence %s admits %q, which still holds the unexpanded placeholder %q: the row runs only once its author fills it in",
-			row.ID, command, placeholder))
-	}
-	if marker, reason, ok := commandMarker(command, true); ok {
-		return refused(result, reason, markerDetail(row.ID, command, marker, reason))
+	// The command checks are shared with add-evidence, so writer and admission refuse the same cells.
+	command, reason, detail := admitCommand(row.ID, row.Admit)
+	if reason != "" {
+		return refused(result, reason, detail)
 	}
 
 	// A row whose Normalize expression does not compile is a defect in the row, not in the command, so it
@@ -345,7 +323,7 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 		}
 		return deps.Run(ctx, opts.Dir, command)
 	}
-	runFailure := func(err error, suffix string) RowResult {
+	runFailure := func(err error, suffix, output string) RowResult {
 		// A runner that knows the failure is about its own environment rather than about the command says so
 		// with a Refusal, and its reason code is reported as it stands: a sandbox that refused a write is not
 		// a failing test, and calling it one would send the reader looking in the wrong place.
@@ -355,19 +333,19 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return refused(result, ReasonTimeout, fmt.Sprintf(
-				"evidence %s hit the %s timeout%s: %v", row.ID, opts.Timeout, suffix, err))
+				"evidence %s hit the %s timeout%s: %v%s", row.ID, opts.Timeout, suffix, err, outputTail(output)))
 		}
-		return refused(result, ReasonCommandFailed, fmt.Sprintf("evidence %s failed to run%s: %v", row.ID, suffix, err))
+		return refused(result, ReasonCommandFailed, fmt.Sprintf("evidence %s failed to run%s: %v%s", row.ID, suffix, err, outputTail(output)))
 	}
 
 	// runOutcome reads one run against what the row expects. A row expecting a failure is observing a test
 	// that is red, so only a command that ran to its end and exited non-zero is that observation: a runner
 	// refusal, a deadline, and a command that never ran stay the failures they are, and a zero exit is a
 	// command that no longer fails. The zero exit is a refusal of its own, never a pin taken over a green run.
-	runOutcome := func(err error, suffix string) (RowResult, bool) {
+	runOutcome := func(err error, suffix, output string) (RowResult, bool) {
 		if !expectFail {
 			if err != nil {
-				return runFailure(err, suffix), false
+				return runFailure(err, suffix, output), false
 			}
 			return result, true
 		}
@@ -383,11 +361,11 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 		if !errors.As(err, &refusal) && !errors.Is(err, context.DeadlineExceeded) && errors.As(err, &exit) && exit.ExitCode() > 0 && exit.ExitCode() < 126 {
 			return result, true
 		}
-		return runFailure(err, suffix), false
+		return runFailure(err, suffix, output), false
 	}
 
 	output, err := runOnce()
-	if failed, ok := runOutcome(err, ""); !ok {
+	if failed, ok := runOutcome(err, "", output); !ok {
 		return failed
 	}
 
@@ -396,6 +374,11 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 	if strings.TrimSpace(output) == "" {
 		return refused(result, ReasonEmptyOutput, fmt.Sprintf(
 			"evidence %s produced no output, so there is nothing to observe", row.ID))
+	}
+	if marker := testsNotRun(output); marker != "" {
+		return refused(result, ReasonTestsNotRun, fmt.Sprintf(
+			"evidence %s exited zero but its output shows tests that did not run (%q): a skip or an empty filter reads like a pass, so pinning it would record a green run that never ran; make the tests run where the row is observed (for a sandbox, an image that carries what they need) or narrow the command to tests that run",
+			row.ID, marker))
 	}
 	fresh, err := Digest(output, row.Normalize)
 	if err != nil {
@@ -417,7 +400,7 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 		}
 	} else {
 		again, err = runOnce()
-		if failed, ok := runOutcome(err, " on its second run"); !ok {
+		if failed, ok := runOutcome(err, " on its second run", again); !ok {
 			return failed
 		}
 	}
@@ -451,6 +434,91 @@ func admitRow(row plan.LedgerRow, opts Options, deps Deps, record bool) RowResul
 	}
 	result.Verdict = VerdictAdmitted
 	return result
+}
+
+var (
+	goSkipRe       = regexp.MustCompile(`(?m)^[ \t]*--- SKIP: .*$`)
+	goPackageOkRe  = regexp.MustCompile(`(?m)^ok[ \t]+\S+.*$`)
+	noTestsToRunRe = regexp.MustCompile(`\[no tests to run\]\s*$`)
+)
+
+// testsNotRun names the line that shows a Go test did not run: any skipped test or subtest, or a run whose every
+// package result matched no test. A package with no test files, or one package of several matching nothing
+// beside packages that ran, is an ordinary multi-package run and is not reported.
+func testsNotRun(output string) string {
+	if skip := goSkipRe.FindString(output); skip != "" {
+		return strings.TrimSpace(skip)
+	}
+	packages := goPackageOkRe.FindAllString(output, -1)
+	for _, p := range packages {
+		if !noTestsToRunRe.MatchString(p) {
+			return ""
+		}
+	}
+	if len(packages) > 0 {
+		return strings.TrimSpace(packages[0])
+	}
+	return ""
+}
+
+// admitCommand resolves an Admit cell to the one command it declares, or names why it declares none that may run:
+// no command, a chain or pipeline, stray backticks, an unexpanded placeholder, or a redirection. The order is the
+// contract's, so a cell that breaks several rules is told the first one.
+func admitCommand(id, admit string) (command, reason, detail string) {
+	// Resolve the cell first: the live ledger writes its commands inside backticks, so one whole
+	// wrapping span is the ordinary spelling of a command and is stripped. Resolution is not a check,
+	// so the reasons below still fire in the order the contract owes them.
+	cell := strings.TrimSpace(admit)
+	command, _ = admitSpan(cell)
+	if absentCommand[strings.ToLower(command)] {
+		return command, ReasonNoAdmitCommand, fmt.Sprintf(
+			"evidence %s declares no command in its Admit cell (%q is a placeholder, not a command)", id, command)
+	}
+	// One command whose output is the observation: anything that chains, pipelines, backgrounds,
+	// groups, or substitutes a command is refused, because the tool cannot tell what a second process
+	// will do with the stream. Redirection is the tail of the table and runs after the placeholder rule.
+	if marker, reason, ok := commandMarker(command, false); ok {
+		return command, reason, markerDetail(id, command, marker, reason)
+	}
+	if strings.Contains(command, "`") {
+		return command, ReasonHasMarkup, fmt.Sprintf(
+			"evidence %s carries backticks in its Admit cell (%q) that are not one wrapping span: Admit carries one bare command, unlike Executed, which is prose a human reads and may quote with backticks",
+			id, cell)
+	}
+	if placeholder := commandPlaceholder(command); placeholder != "" {
+		return command, ReasonHasPlaceholder, fmt.Sprintf(
+			"evidence %s admits %q, which still holds the unexpanded placeholder %q: the row runs only once its author fills it in",
+			id, command, placeholder)
+	}
+	if marker, reason, ok := commandMarker(command, true); ok {
+		return command, reason, markerDetail(id, command, marker, reason)
+	}
+	return command, "", ""
+}
+
+// CheckAdmitCommand answers whether an Admit cell declares one command plan admit may run, with the reason code and
+// sentence admit itself would refuse it with. It is the check add-evidence runs before writing the row, so a row the
+// writer accepts is never refused by admit for its command before anything runs.
+func CheckAdmitCommand(id, admit string) (reason, detail string) {
+	_, reason, detail = admitCommand(id, admit)
+	return reason, detail
+}
+
+// failureTailLines bounds how much of a failing command's output a refusal carries: enough for a test runner's
+// failure summary, never enough for a noisy command to flood the report.
+const failureTailLines = 20
+
+// outputTail renders the last lines of a failing command's output for its refusal, because the failing test's
+// name and the error live there and the refusal is otherwise the only place the operator sees the run.
+func outputTail(output string) string {
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if strings.TrimSpace(output) == "" {
+		return ""
+	}
+	if len(lines) > failureTailLines {
+		lines = lines[len(lines)-failureTailLines:]
+	}
+	return fmt.Sprintf("; last lines of its output:\n%s", strings.Join(lines, "\n"))
 }
 
 // refused marks a result refused without clearing what the row already resolved to.

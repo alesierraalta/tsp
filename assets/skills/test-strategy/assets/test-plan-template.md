@@ -94,11 +94,12 @@ One row per `observado` conclusion (`references/evidence.md`). `razonado` items 
 
 `Admit` holds ONE bare shell command, with no backticks and no placeholders, because `Executed` is
 prose a human reads and `Admit` is the command the binary runs. `Digest` holds the `sha256:` digest of the
-canonical output, written by `tpp plan admit --execute --record <id>` rather than by hand.
+canonical output, written by `tsp plan admit --execute --record <id>` rather than by hand.
 
 A pin only means something over output that holds still, so `--execute` runs each admitted command twice:
 the second run is the probe, and a row whose two observations disagree is refused as unstable instead of
-pinned. `Normalize` is the escape hatch for the part of an output that legitimately moves, such as an
+pinned. A zero exit whose output shows a skipped Go test or a filter that matched nothing is refused as
+`tests-not-run`, so a Go test row runs `go test -v`, where a skip is visible. `Normalize` is the escape hatch for the part of an output that legitimately moves, such as an
 elapsed time: it holds a Go regular expression whose every match becomes `X` before hashing. Leave it empty
 the first time and fill it only when the probe names what moves, keeping it as narrow as that part — a
 pattern broad enough to swallow the output turns the pin into decoration. `plan check` requires none of
@@ -141,8 +142,9 @@ test. Prefer it over `! cmd`, which also passes on a compile failure. `Expect` b
 a mutation already defines its own red and green runs.
 
 Every row carries exactly one cell per header column (14 here); an empty cell stays as `| |`. A literal
-`|` inside a cell is written `\|`, or it splits the cell and `plan check` refuses the row. Add the ledger
-row before `tpp plan add-finding` names it: that command writes the Findings row only and refuses
+`|` inside a cell is written `\|`, or it splits the cell and `plan check` refuses the row. `tsp plan add-evidence`
+writes a ledger row from flags, escaping `|` and leaving `Digest` and `Mode` empty. Add the ledger
+row before `tsp plan add-finding` names it: that command writes the Findings row only and refuses
 an Evidence id the ledger does not carry.
 
 | Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Expect | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |

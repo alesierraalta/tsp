@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	root "github.com/alesierraalta/tpp/assets"
-	"github.com/alesierraalta/tpp/internal/assets"
-	"github.com/alesierraalta/tpp/internal/state"
+	root "github.com/alesierraalta/tsp/assets"
+	"github.com/alesierraalta/tsp/internal/assets"
+	"github.com/alesierraalta/tsp/internal/state"
 )
 
 const bin = "/opt/tools/tpp"
@@ -293,6 +293,36 @@ func TestSyncRewritesALegacyGateHookToTheNewBinary(t *testing.T) {
 
 // An install made by rdd-plus records its hook in state as wired, so a planner that only asks "is a hook
 // wired?" never looks at settings again: the upgrade must still move the hook to the new binary.
+func TestSyncRewiresATppGateToTspAndIsIdempotent(t *testing.T) {
+	t.Setenv("TPP_HOME", t.TempDir())
+	cfg := t.TempDir()
+	const tspBin = "/opt/tools/tsp"
+	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), []byte(`{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"/opt/tools/tpp gate","timeout":30}]}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Sync(cfg, tspBin, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	first := readSettings(t, cfg)
+	if got := stopCommands(t, first); len(got) != 1 || got[0] != HookCommand(tspBin) {
+		t.Fatalf("first sync stop hooks = %q, want %q", got, HookCommand(tspBin))
+	}
+	if _, err := Sync(cfg, tspBin, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(readSettings(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("second sync changed settings: got %s, want %s", got, want)
+	}
+}
+
 func TestSyncRewiresAHookThatStateRecordsForTheLegacyBinary(t *testing.T) {
 	t.Setenv("TPP_HOME", t.TempDir())
 	cfg := t.TempDir()
@@ -669,7 +699,7 @@ func TestReportListsChangesAndCountsTheRest(t *testing.T) {
 				t.Errorf("dry-run=%v report lists %s row by row:\n%s", dryRun, hidden, out)
 			}
 		}
-		if !strings.Contains(out, "skip-user: 3 files not managed by tpp (left untouched)") {
+		if !strings.Contains(out, "skip-user: 3 files not managed by tsp (left untouched)") {
 			t.Errorf("dry-run=%v report does not count the user files:\n%s", dryRun, out)
 		}
 	}
@@ -698,12 +728,12 @@ func TestSyncPiHostReceivesOnlyTheExtension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pi extension not installed: %v", err)
 	}
-	want, err := fs.ReadFile(root.Root, "hosts/pi/tpp.ts")
+	want, err := fs.ReadFile(root.Root, "hosts/pi/tsp.ts")
 	if err != nil {
-		t.Fatalf("embedded hosts/pi/tpp.ts: %v", err)
+		t.Fatalf("embedded hosts/pi/tsp.ts: %v", err)
 	}
 	if !bytes.Equal(got, want) {
-		t.Fatalf("installed extension is %d bytes, want the embedded tpp.ts (%d bytes)", len(got), len(want))
+		t.Fatalf("installed extension is %d bytes, want the embedded tsp.ts (%d bytes)", len(got), len(want))
 	}
 
 	var unwanted []string
@@ -798,7 +828,7 @@ func TestSyncPiHostDryRunIdempotenceAndBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := fs.ReadFile(root.Root, "hosts/pi/tpp.ts")
+	want, err := fs.ReadFile(root.Root, "hosts/pi/tsp.ts")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,7 +3,7 @@ package gate
 import (
 	"strings"
 
-	"github.com/alesierraalta/tpp/internal/plan"
+	"github.com/alesierraalta/tsp/internal/plan"
 )
 
 // BuildAuditReason is what the Stop says when the discipline ran. Covering a diff and reporting
@@ -64,7 +64,7 @@ func joinReason(lines []string, offerFeedback []bool) string {
 }
 
 const feedbackOffer = "Want the run graded? Offer the operator feedback on the testing itself with " +
-	"`tpp feedback --template`, in one short pass: what was executed, what was skipped, which " +
+	"`tsp feedback --template`, in one short pass: what was executed, what was skipped, which " +
 	"findings a different order would have surfaced first, and what you would still not know if the " +
 	"suite were green. This is a reminder, not an approval gate. Silence it for this repository with " +
 	"a .no-testing-gate file."

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alesierraalta/tpp/internal/feature"
-	"github.com/alesierraalta/tpp/internal/sanitize"
+	"github.com/alesierraalta/tsp/internal/feature"
+	"github.com/alesierraalta/tsp/internal/sanitize"
 )
 
 // validText is the shape --template prints, filled in: one key per line, the run's identity in
@@ -150,8 +150,8 @@ func TestTemplateFillsTheIdentityAndNamesTheSubmitCommand(t *testing.T) {
 			t.Fatalf("template missing the %q field:\n%s", want, got)
 		}
 	}
-	if !strings.Contains(got, "--file") {
-		t.Fatalf("the template must name the command that submits it:\n%s", got)
+	if !strings.Contains(got, "tsp feedback --file") || strings.Contains(got, "tpp") {
+		t.Fatalf("the template must name the tsp command that submits it:\n%s", got)
 	}
 }
 
@@ -171,7 +171,7 @@ func TestRecordRefusesWhileFeedbackIsDisabled(t *testing.T) {
 		Paid: "paid", Cost: "one hour", Reason: "reason", Verdict: VerdictPaid}
 
 	err := Record(dir, r)
-	const want = "feedback is disabled; enable it with: tpp feature enable feedback"
+	const want = "feedback is disabled; enable it with: tsp feature enable feedback"
 	if err == nil || err.Error() != want {
 		t.Fatalf("Record error = %v, want %q", err, want)
 	}
@@ -647,8 +647,8 @@ func TestSummaryOnAMissingLedgerSaysSo(t *testing.T) {
 }
 
 func TestEmbeddedSkillIdentityNamesTheEmbeddedSkill(t *testing.T) {
-	if got := EmbeddedSkillIdentity(); got != "test-strategy 0.4.2" {
-		t.Fatalf("embedded skill identity = %q, want %q", got, "test-strategy 0.4.2")
+	if got := EmbeddedSkillIdentity(); got != "test-strategy 0.5.6" {
+		t.Fatalf("embedded skill identity = %q, want %q", got, "test-strategy 0.5.6")
 	}
 }
 
@@ -668,5 +668,16 @@ func TestPlanMissingSaysSo(t *testing.T) {
 	_, err := Parse(text)
 	if err == nil || !strings.Contains(err.Error(), "plan") {
 		t.Fatalf("an empty plan is a missing required field naming plan, got %v", err)
+	}
+}
+
+// An empty ledger points at the command that starts it, under the binary's current name.
+func TestSummaryOfAnEmptyLedgerNamesTheTspCommand(t *testing.T) {
+	got, err := Summary(t.TempDir())
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	if !strings.Contains(got, "`tsp feedback --template`") {
+		t.Fatalf("empty summary must name the tsp command:\n%s", got)
 	}
 }

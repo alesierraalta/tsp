@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alesierraalta/tpp/internal/buildinfo"
+	"github.com/alesierraalta/tsp/internal/buildinfo"
 )
 
 var expected = []string{
 	"agent-eval", "appsec-adversarial-auditor", "breakcheck", "clean-architecture-audit", "contract-compat-testing", "crash-and-process-testing", "database-persistence-testing",
 	"dependency-legitimacy", "docker-test-containers", "exploit-testing", "go-testing", "iac-safe-auditor", "implementation-theater",
 	"llm-eval-design", "llm-redteam", "messaging-eventdriven-testing", "no-excess-tests", "python-testing-patterns", "rag-audit-evaluator", "real-run-validation", "resilience-fault-injection", "runtime-reliability-testing", "silent-degradation",
-	"test-strategy",
+	"test-strategy", "test-strategy-verifier",
 }
 
 func TestEverySkillIsEmbeddedWithAMatchingName(t *testing.T) {
@@ -54,30 +54,51 @@ func TestTestStrategyDescriptionPreservesDiscoveryTriggers(t *testing.T) {
 	}
 }
 
-// The skill tells a session which binary it was written for; the two versions must move together,
-// or a session cannot tell whether the tool it has is the tool the skill expects.
+// The legacy bridge requirement remains pinned independently of the TSP build version.
 func TestSkillNamesTheTppVersionItRequires(t *testing.T) {
 	data, err := fs.ReadFile(Skills(), "test-strategy/SKILL.md")
 	if err != nil {
 		t.Fatalf("SKILL.md missing: %v", err)
 	}
-	field := requiredVersion(data)
+	field := regexp.MustCompile(`(?m)^\s*requires_tpp:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?\s*$`).FindSubmatch(data)
 	if field == nil {
-		t.Fatalf("test-strategy frontmatter has no requires_tpp; this build is %s", buildinfo.Version)
+		t.Fatal("test-strategy frontmatter has no requires_tpp")
 	}
-	if got := string(field[1]); got != buildinfo.Version {
-		t.Fatalf("test-strategy requires tpp %s, but this build is %s", got, buildinfo.Version)
+	if got := string(field[1]); got != "0.5.1" {
+		t.Fatalf("test-strategy requires tpp %s, want legacy bridge version 0.5.1", got)
 	}
 	if !strings.Contains(string(data), "make build") ||
-		!strings.Contains(string(data), "go install github.com/alesierraalta/tpp/cmd/tpp@latest") {
-		t.Fatalf("test-strategy requires tpp %s but names no install path", buildinfo.Version)
+		!strings.Contains(string(data), "go install github.com/alesierraalta/tsp/cmd/tsp@latest") ||
+		!strings.Contains(string(data), "go install github.com/alesierraalta/tpp/cmd/tpp@v0.5.1") {
+		t.Fatal("test-strategy requires tpp 0.5.1 but names no install path")
+	}
+}
+
+// The canonical requirement is the TSP release this skill ships with, installed from the new module.
+func TestSkillRequiresTheTspReleaseItShipsWith(t *testing.T) {
+	data, err := fs.ReadFile(Skills(), "test-strategy/SKILL.md")
+	if err != nil {
+		t.Fatalf("SKILL.md missing: %v", err)
+	}
+	field := regexp.MustCompile(`(?m)^\s*requires_tsp:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?\s*$`).FindSubmatch(data)
+	if field == nil {
+		t.Fatal("test-strategy frontmatter has no requires_tsp")
+	}
+	if got := string(field[1]); got != "0.6.6" || got != buildinfo.Version {
+		t.Fatalf("test-strategy requires tsp %s, want the shipped build %s and release 0.6.6", got, buildinfo.Version)
+	}
+	if got := string(requiredVersion(data)[1]); got != "0.6.6" {
+		t.Fatalf("required version = %s, want requires_tsp to win over legacy keys", got)
+	}
+	if !strings.Contains(string(data), "go install github.com/alesierraalta/tsp/cmd/tsp@latest") {
+		t.Fatal("test-strategy requires tsp 0.6.6 but names no install path")
 	}
 }
 
 // requiredVersion reads the binary version a skill's frontmatter requires: requires_tpp, or requires_tpp
 // in a skill written before the rename.
 func requiredVersion(skill []byte) [][]byte {
-	for _, key := range []string{"requires_tpp", "requires_rdd_plus"} {
+	for _, key := range []string{"requires_tsp", "requires_tpp", "requires_rdd_plus"} {
 		if m := regexp.MustCompile(`(?m)^\s*` + key + `:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?\s*$`).FindSubmatch(skill); m != nil {
 			return m
 		}
@@ -120,5 +141,47 @@ func TestTestStrategySkillRequiresTheInvocationModeInTheRoutingLedger(t *testing
 		if !strings.Contains(text, want.phrase) {
 			t.Errorf("test-strategy no longer names %s: %s", want.phrase, want.contract)
 		}
+	}
+}
+
+// The gpt-6-luna baseline (b2aff3f, 90 runs) lost 20 runs to an absent plan: 9 wrote a template at an
+// undeclared alternate path, 11 wrote nothing, and every agent still exited 0. The rule existed but never
+// ordered the plan before the probing, so the session could reach its final message with no plan on disk.
+// This pins the ordering and the consequence of the undeclared path.
+func TestTestStrategySkillPutsThePlanBeforeAnyOtherArtifact(t *testing.T) {
+	data, err := fs.ReadFile(Skills(), "test-strategy/SKILL.md")
+	if err != nil {
+		t.Fatalf("SKILL.md missing: %v", err)
+	}
+	text := string(data)
+	for _, want := range []struct{ phrase, contract string }{
+		{"The plan file is the first artifact", "the ordering that stops a run from probing before it plans"},
+		{"is a run with no plan", "the consequence of writing a plan at a path nothing declares"},
+	} {
+		if !strings.Contains(text, want.phrase) {
+			t.Errorf("test-strategy no longer names %q: %s", want.phrase, want.contract)
+		}
+	}
+}
+
+// The test gap in both gpt-6-luna readings is runs that wrote no test file at all (30 of 90 before plan-first,
+// 37 of 90 after it), not pinning claims the suite fails to back (1 and 2). Reporting a defect and writing no
+// test has to read as unfinished work, so the run cannot close on the plan alone.
+func TestTestStrategySkillRequiresATestFileForEveryReportedFinding(t *testing.T) {
+	data, err := fs.ReadFile(Skills(), "test-strategy/SKILL.md")
+	if err != nil {
+		t.Fatalf("SKILL.md missing: %v", err)
+	}
+	text := string(data)
+	for _, want := range []struct{ phrase, contract string }{
+		{"A run that reports a defect and adds no test file is not finished", "the completion rule the no-test-file runs broke"},
+		{"a test file this run added or changed", "what each reported finding owes in the tree"},
+	} {
+		if !strings.Contains(text, want.phrase) {
+			t.Errorf("test-strategy no longer names %q: %s", want.phrase, want.contract)
+		}
+	}
+	if strings.Contains(text, "the tree is the arbiter") {
+		t.Error("test-strategy still carries the pinning-claim gate written for a gap the measurement did not show")
 	}
 }

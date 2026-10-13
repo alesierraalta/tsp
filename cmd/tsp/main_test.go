@@ -14,23 +14,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alesierraalta/tpp/internal/admit"
-	"github.com/alesierraalta/tpp/internal/assets"
-	"github.com/alesierraalta/tpp/internal/bench"
-	"github.com/alesierraalta/tpp/internal/buildinfo"
-	"github.com/alesierraalta/tpp/internal/evidence"
-	plancheck "github.com/alesierraalta/tpp/internal/plan"
-	"github.com/alesierraalta/tpp/internal/sanitize"
+	"github.com/alesierraalta/tsp/internal/admit"
+	"github.com/alesierraalta/tsp/internal/assets"
+	"github.com/alesierraalta/tsp/internal/base"
+	"github.com/alesierraalta/tsp/internal/bench"
+	"github.com/alesierraalta/tsp/internal/buildinfo"
+	"github.com/alesierraalta/tsp/internal/evidence"
+	plancheck "github.com/alesierraalta/tsp/internal/plan"
+	"github.com/alesierraalta/tsp/internal/sanitize"
 )
 
 // buildCLI compiles the command once per test binary; the contract under test is the process's,
 // not a function's, so it has to run as a process.
-func buildCLI(t *testing.T) string {
+func buildCLI(t *testing.T, names ...string) string {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("builds a binary")
 	}
-	bin := filepath.Join(t.TempDir(), "tpp")
+	name := "tsp"
+	if len(names) > 0 {
+		name = names[0]
+	}
+	bin := filepath.Join(t.TempDir(), name)
 	out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
 	if err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
@@ -65,10 +70,10 @@ func TestCLIContract(t *testing.T) {
 		wantExit int
 		wantOut  string // substring expected on stdout or stderr
 	}{
-		{name: "no command prints usage and exits 2", wantExit: 2, wantOut: "usage: tpp"},
-		{name: "unknown command prints usage and exits 2", args: []string{"bogus"}, wantExit: 2, wantOut: "usage: tpp"},
-		{name: "bench with no subcommand exits 2", args: []string{"bench"}, wantExit: 2, wantOut: "usage: tpp"},
-		{name: "bench with an unknown subcommand exits 2", args: []string{"bench", "bogus"}, wantExit: 2, wantOut: "usage: tpp"},
+		{name: "no command prints usage and exits 2", wantExit: 2, wantOut: "usage: tsp"},
+		{name: "unknown command prints usage and exits 2", args: []string{"bogus"}, wantExit: 2, wantOut: "usage: tsp"},
+		{name: "bench with no subcommand exits 2", args: []string{"bench"}, wantExit: 2, wantOut: "usage: tsp"},
+		{name: "bench with an unknown subcommand exits 2", args: []string{"bench", "bogus"}, wantExit: 2, wantOut: "usage: tsp"},
 		// A runner the bench cannot spawn must be refused before it scaffolds or spawns anything.
 		{name: "bench run with an unknown runner exits 2", args: []string{"bench", "run", "--runner", "gemini"}, wantExit: 2, wantOut: "use pi or claude"},
 		{name: "bench score without arguments exits 2", args: []string{"bench", "score"}, wantExit: 2, wantOut: "needs --case"},
@@ -80,8 +85,8 @@ func TestCLIContract(t *testing.T) {
 		{name: "an unknown flag on a subcommand exits 2", args: []string{"doctor", "--nope"}, wantExit: 2, wantOut: "flag provided but not defined"},
 		{name: "check refuses a path outside the repository", args: []string{"check", "--path", "../outside.md"}, wantExit: 2, wantOut: "--path"},
 		{name: "check refuses an absolute path", args: []string{"check", "--path", "/abs.md"}, wantExit: 2, wantOut: "--path"},
-		{name: "plan with no subcommand exits 2", args: []string{"plan"}, wantExit: 2, wantOut: "usage: tpp"},
-		{name: "plan with an unknown subcommand exits 2", args: []string{"plan", "bogus"}, wantExit: 2, wantOut: "usage: tpp"},
+		{name: "plan with no subcommand exits 2", args: []string{"plan"}, wantExit: 2, wantOut: "usage: tsp"},
+		{name: "plan with an unknown subcommand exits 2", args: []string{"plan", "bogus"}, wantExit: 2, wantOut: "usage: tsp"},
 		{name: "plan check on a missing file exits 1", args: []string{"plan", "check", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan check:"},
 		{name: "plan gaps on a missing file exits 1", args: []string{"plan", "gaps", "--path", "/nonexistent/plan.md"}, wantExit: 1, wantOut: "plan gaps:"},
 		{name: "plan gaps run and all are mutually exclusive", args: []string{"plan", "gaps", "--run", "redis-pool", "--all"}, wantExit: 2, wantOut: "cannot combine"},
@@ -136,6 +141,42 @@ func TestPlanInitMicroWritesTheMicroTemplate(t *testing.T) {
 	}
 	if !strings.Contains(string(got), "Micro: <file path> · touches none") || strings.Contains(string(got), "## Layer matrix") {
 		t.Fatalf("plan init --micro wrote the wrong skeleton:\n%s", got)
+	}
+}
+
+// The header of a fresh plan names where the plan was written: the repository-relative path for a plan inside
+// the repository, the absolute path for one kept outside it, and the default path when no --path is given.
+func TestPlanInitHeaderNamesThePathItWroteTo(t *testing.T) {
+	bin := buildCLI(t)
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	outside := filepath.Join(t.TempDir(), "reviews", "pr-7.md")
+	cases := []struct {
+		name, file, want string
+		args             []string
+	}{
+		{"default path", filepath.Join(repo, "docs/testing/test-plan.md"), "docs/testing/test-plan.md", nil},
+		{"relative path", filepath.Join(repo, "plans/a.md"), "plans/a.md", []string{"--path", "plans/a.md"}},
+		{"absolute path outside the repository", outside, outside, []string{"--path", outside}},
+		{"micro plan", filepath.Join(repo, "plans/m.md"), "plans/m.md", []string{"--micro", "--path", "plans/m.md"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(bin, append([]string{"plan", "init"}, tc.args...)...)
+			cmd.Dir = repo
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("plan init: %v\n%s", err, out)
+			}
+			got, err := os.ReadFile(tc.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := "Plan path: `" + tc.want + "`"; !strings.Contains(string(got), want) {
+				t.Fatalf("header does not read %q:\n%s", want, strings.SplitN(string(got), "\n", 4)[2])
+			}
+		})
 	}
 }
 
@@ -385,6 +426,102 @@ func TestPlanAdmitDryRunRunsNothing(t *testing.T) {
 	}
 }
 
+// upstreamRepo makes dir a git repository whose branch main tracks origin/main at one real
+// commit — the shape every field session has — so the CLI can record what its evidence ran on.
+func upstreamRepo(t *testing.T) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("symbolic-ref", "HEAD", "refs/heads/main")
+	run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "--quiet", "-m", "seed")
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	sha := strings.TrimSpace(string(out))
+	run("update-ref", "refs/remotes/origin/main", sha)
+	run("remote", "add", "origin", "https://example.invalid/x.git")
+	run("config", "branch.main.remote", "origin")
+	run("config", "branch.main.merge", "refs/heads/main")
+	return dir, sha
+}
+
+// An admitted run is the moment a base is trustworthy: the evidence executed against this
+// checkout, so the upstream ref and commit are recorded for the stop gate's drift check.
+func TestPlanAdmitExecuteRecordsTheAdmittedBase(t *testing.T) {
+	bin := buildCLI(t)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	dir, sha := upstreamRepo(t)
+	path := writeLedger(t, dir, "echo ok")
+	out, code := runCLIAt(t, dir, bin, "plan", "admit", "--path", path, "--execute", "--record", "E1")
+	if code != 0 {
+		t.Fatalf("admit exit = %d, want 0\n%s", code, out)
+	}
+	rec, ok := base.Load(dir)
+	if !ok {
+		t.Fatal("an admitted run left no base record")
+	}
+	if rec.Ref != "origin/main" || rec.SHA != sha {
+		t.Fatalf("record = %+v, want origin/main at %s", rec, sha)
+	}
+}
+
+// A dry run executes nothing, so it admitted nothing: no record is written.
+func TestPlanAdmitDryRunRecordsNoBase(t *testing.T) {
+	bin := buildCLI(t)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	dir, _ := upstreamRepo(t)
+	path := writeLedger(t, dir, "echo ok")
+	out, code := runCLIAt(t, dir, bin, "plan", "admit", "--path", path)
+	if code != 0 {
+		t.Fatalf("dry run exit = %d, want 0\n%s", code, out)
+	}
+	if _, ok := base.Load(dir); ok {
+		t.Fatal("a dry run executed nothing and must record no base")
+	}
+}
+
+// A refused row is not admitted evidence, so a failed admit never updates the record.
+func TestPlanAdmitRefusalRecordsNoBase(t *testing.T) {
+	bin := buildCLI(t)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	dir, _ := upstreamRepo(t)
+	path := writeLedger(t, dir, "exit 1")
+	out, code := runCLIAt(t, dir, bin, "plan", "admit", "--path", path, "--execute")
+	if code != 1 {
+		t.Fatalf("failed admit exit = %d, want 1\n%s", code, out)
+	}
+	if _, ok := base.Load(dir); ok {
+		t.Fatal("a refused row admitted nothing and must record no base")
+	}
+}
+
+// A repository without a tracking ref has no base to name: the record stays absent and the
+// gate stays silent.
+func TestPlanAdmitWithoutAnUpstreamRecordsNoBase(t *testing.T) {
+	bin := buildCLI(t)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	path := writeLedger(t, dir, "echo ok")
+	out, code := runCLIAt(t, dir, bin, "plan", "admit", "--path", path, "--execute", "--record", "E1")
+	if code != 0 {
+		t.Fatalf("admit exit = %d, want 0\n%s", code, out)
+	}
+	if _, ok := base.Load(dir); ok {
+		t.Fatal("a session with no tracking ref must record no base")
+	}
+}
+
 // A row with no Admit cell is refused by name, and a refusal is exit 1: one refused row is not a clean
 // run, whatever the other rows did.
 func TestPlanAdmitRefusesARowWithoutACommand(t *testing.T) {
@@ -521,7 +658,7 @@ func TestFeedbackCLIRequiresOptInThenRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, code := runCLIWithHomeEnv(t, home, bin, "feedback", "--config-dir", configDir, "--file", report)
-	wantRefusal := "feedback is disabled; enable it with: tpp feature enable feedback"
+	wantRefusal := "feedback is disabled; enable it with: tsp feature enable feedback"
 	if code == 0 || !strings.Contains(out, wantRefusal) {
 		t.Fatalf("disabled feedback = %d %q", code, out)
 	}
@@ -542,6 +679,22 @@ func TestFeedbackCLIRequiresOptInThenRecords(t *testing.T) {
 	}
 	if rows := len(strings.Split(strings.TrimSpace(string(raw)), "\n")); rows != 1 {
 		t.Fatalf("ledger rows = %d, want 1", rows)
+	}
+	if strings.Contains(out, "warning:") {
+		t.Fatalf("a first report must not warn: %q", out)
+	}
+
+	// The same report again is recorded, and the operator hears that it repeats the last one.
+	out, code = runCLIWithHomeEnv(t, home, bin, "feedback", "--config-dir", configDir, "--file", report)
+	if code != 0 || !strings.Contains(out, "warning: this report repeats the repository, plan and verdict of the last report") {
+		t.Fatalf("repeated feedback = %d %q", code, out)
+	}
+	raw, err = os.ReadFile(filepath.Join(sanitize.TelemetryDir(configDir), "run-feedback.jsonl"))
+	if err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	if rows := len(strings.Split(strings.TrimSpace(string(raw)), "\n")); rows != 2 {
+		t.Fatalf("ledger rows = %d, want 2: a warning never refuses", rows)
 	}
 }
 
@@ -872,7 +1025,7 @@ func TestTopLevelSynopsisListsFeedbackReviewActions(t *testing.T) {
 	home := t.TempDir()
 	out, code := runCLIWithHomeEnv(t, home, bin)
 	if code != 2 {
-		t.Fatalf("tpp without a command exit = %d, want 2\n%s", code, out)
+		t.Fatalf("tsp without a command exit = %d, want 2\n%s", code, out)
 	}
 	var feedbackSynopsis string
 	for _, line := range strings.Split(out, "\n") {
@@ -1228,6 +1381,99 @@ func TestPlanAddFindingHelp(t *testing.T) {
 	}
 }
 
+// A plan git ignores can never reach a pull request: the subcommands that write the plan refuse an ignored,
+// unstaged path by name instead of silently persisting evidence nobody will review, the refusal clears once the
+// path is staged (git add -f, the workaround the field had to find by hand), usage errors keep their exit 2,
+// and the read subcommands are not refused.
+func TestPlanWritesRefuseAPathGitIgnores(t *testing.T) {
+	bin := buildCLI(t)
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	ignore := filepath.Join(repo, ".gitignore")
+	if err := os.WriteFile(ignore, []byte("docs/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (int, string) {
+		cmd := exec.Command(bin, args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		code := 0
+		ee := &exec.ExitError{}
+		if err != nil {
+			if asExit(err, ee) {
+				code = ee.ExitCode()
+			} else {
+				t.Fatalf("run %v: %v", args, err)
+			}
+		}
+		return code, string(out)
+	}
+	refused := func(args ...string) {
+		t.Helper()
+		code, out := run(args...)
+		if code != 1 || !strings.Contains(out, "git ignores docs/testing/test-plan.md") {
+			t.Fatalf("%v on an ignored path = %d\n%s", args, code, out)
+		}
+	}
+
+	// The write is refused before anything lands on disk, and the message names the path.
+	code, out := run("plan", "init", "--path", "docs/testing/test-plan.md")
+	if code != 1 || !strings.Contains(out, "plan init: git ignores docs/testing/test-plan.md") {
+		t.Fatalf("plan init on an ignored path = %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "docs/testing/test-plan.md")); !os.IsNotExist(err) {
+		t.Fatalf("the refused init must not write the plan: %v", err)
+	}
+
+	// A missing required flag is still a usage error, not the refusal: nothing has been read yet.
+	code, out = run("plan", "add-finding", "--path", "docs/testing/test-plan.md", "--id", "F1")
+	if code != 2 {
+		t.Fatalf("a usage error outranks the refusal: %d\n%s", code, out)
+	}
+
+	// The rule arriving after the plan exists is the field's situation: every write is still refused.
+	if err := os.WriteFile(ignore, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := run("plan", "init", "--path", "docs/testing/test-plan.md"); code != 0 {
+		t.Fatalf("plan init = %d\n%s", code, out)
+	}
+	if err := os.WriteFile(ignore, []byte("docs/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	refused(cliFindingArgs("docs/testing/test-plan.md", "F1", "E1")...)
+	refused("plan", "upgrade", "--path", "docs/testing/test-plan.md")
+
+	// A recording admit writes the plan too, so it is refused the same way; --record without
+	// --execute is still the usage error it always was.
+	code, out = run("plan", "admit", "--path", "docs/testing/test-plan.md", "--execute", "--record", "E1")
+	if code != 1 || !strings.Contains(out, "plan admit: git ignores docs/testing/test-plan.md") {
+		t.Fatalf("plan admit --record on an ignored path = %d\n%s", code, out)
+	}
+	if code, out := run("plan", "admit", "--path", "docs/testing/test-plan.md", "--record", "E1"); code != 2 {
+		t.Fatalf("--record without --execute = %d, want 2\n%s", code, out)
+	}
+
+	// Reads are not refused: plan gaps on the same ignored plan still answers for itself.
+	if _, out := run("plan", "gaps", "--path", "docs/testing/test-plan.md"); strings.Contains(out, "git ignores") {
+		t.Fatalf("plan gaps must not be refused:\n%s", out)
+	}
+
+	// Staged with git add -f — the workaround the field had to find by hand — the writes pass.
+	if out, err := exec.Command("git", "-C", repo, "add", "-f", "docs/testing/test-plan.md").CombinedOutput(); err != nil {
+		t.Fatalf("git add -f: %v\n%s", err, out)
+	}
+	if code, out := run("plan", "add-evidence", "--path", "docs/testing/test-plan.md", "--id", "E1",
+		"--claim", "observed", "--executed", "ran it", "--observed", "ok"); code != 0 {
+		t.Fatalf("plan add-evidence after git add -f = %d\n%s", code, out)
+	}
+	if code, out := run(cliFindingArgs("docs/testing/test-plan.md", "F1", "E1")...); code != 0 || !strings.Contains(out, "added F1") {
+		t.Fatalf("plan add-finding after git add -f = %d\n%s", code, out)
+	}
+}
+
 // A docker binary that is not there is not a failing row: nothing starts, so no container ever exists and the
 // refusal has to name the sandbox rather than the command. exec reports a binary it could not find or start as
 // an *exec.Error, while a docker that ran and failed reports an *exec.ExitError, which is the line this test
@@ -1459,7 +1705,7 @@ func TestPlanScopedCLIRealRun(t *testing.T) {
 
 	out, code := runCLIAt(t, dir, bin, "plan", "check", "--path", "plan.md")
 	t.Logf("$ %s plan check --path plan.md\n%s", bin, out)
-	if code != 1 || !strings.Contains(out, "tpp plan upgrade") {
+	if code != 1 || !strings.Contains(out, "tsp plan upgrade") {
 		t.Fatalf("legacy plan check = %d\n%s", code, out)
 	}
 	out, code = runCLIAt(t, dir, bin, "plan", "upgrade", "--path", "plan.md")
@@ -2082,7 +2328,7 @@ func lastLine(out string) string {
 }
 
 // setup is the whole install in one command: it syncs, verifies with the doctor's checks, and ends on one
-// line saying tpp works, so an agent or a person knows the install is done from the exit code and that line.
+// line saying tsp works, so an agent or a person knows the install is done from the exit code and that line.
 func TestSetupInstallsVerifiesAndSaysItIsWorking(t *testing.T) {
 	bin := buildCLI(t)
 	home := t.TempDir()
@@ -2105,7 +2351,7 @@ func TestSetupInstallsVerifiesAndSaysItIsWorking(t *testing.T) {
 		t.Fatalf("setup must show the doctor's checks:\n%s", out)
 	}
 	last := lastLine(out)
-	if !strings.HasPrefix(last, "tpp is installed and working: ") || !strings.Contains(last, "in claude") || !strings.HasSuffix(last, "Stop hook wired to "+bin) {
+	if !strings.HasPrefix(last, "tsp is installed and working: ") || !strings.Contains(last, "in claude") || !strings.HasSuffix(last, "Stop hook wired to "+bin) {
 		t.Fatalf("last line = %q, want the working line naming the host and the wired binary\n%s", last, out)
 	}
 	if strings.Contains(out, "export PATH=") {
@@ -2114,7 +2360,7 @@ func TestSetupInstallsVerifiesAndSaysItIsWorking(t *testing.T) {
 }
 
 // A machine with no host has nothing to install into: setup stops with sync's exit code and never claims
-// tpp is working.
+// tsp is working.
 func TestSetupStopsWhenNoHostIsInstalled(t *testing.T) {
 	bin := buildCLI(t)
 	home := t.TempDir()
@@ -2149,7 +2395,7 @@ func TestSetupPrintsThePathLineWhenTheBinaryIsNotOnPath(t *testing.T) {
 	if want := `export PATH="` + dir + `:$PATH"`; !strings.Contains(out, want) {
 		t.Fatalf("setup must print %q:\n%s", want, out)
 	}
-	if last := lastLine(out); !strings.HasPrefix(last, "tpp is installed and working: ") || !strings.HasSuffix(last, "Stop hook wired to "+bin) {
+	if last := lastLine(out); !strings.HasPrefix(last, "tsp is installed and working: ") || !strings.HasSuffix(last, "Stop hook wired to "+bin) {
 		t.Fatalf("a PATH warning is not a failure, and the hook still names the binary it runs; last line = %q\n%s", last, out)
 	}
 }
@@ -2175,7 +2421,7 @@ func TestSetupOnAMachineWithoutClaudeInstallsTheSkillsAndSaysTheHookIsNotWired(t
 		t.Fatalf("setup must not create a Claude config dir on a machine without Claude Code: %v", err)
 	}
 	last := lastLine(out)
-	if !strings.HasPrefix(last, "tpp is installed and working: ") || !strings.Contains(last, "in codex") ||
+	if !strings.HasPrefix(last, "tsp is installed and working: ") || !strings.Contains(last, "in codex") ||
 		!strings.HasSuffix(last, "Stop hook not wired: Claude Code is not installed here, and the gate runs only there") {
 		t.Fatalf("last line = %q, want the working line naming codex and saying the hook is not wired\n%s", last, out)
 	}
@@ -2267,7 +2513,7 @@ func TestModeFlagSelectsAndReportsTheStandaloneContract(t *testing.T) {
 		if !strings.Contains(out, "mode standalone") {
 			t.Fatalf("setup must report the mode it ran under:\n%s", out)
 		}
-		if !strings.HasPrefix(lastLine(out), "tpp is installed and working: ") {
+		if !strings.HasPrefix(lastLine(out), "tsp is installed and working: ") {
 			t.Fatalf("last line = %q\n%s", lastLine(out), out)
 		}
 	})
@@ -2374,7 +2620,7 @@ func TestSetupHookRequirementFollowsTheSelectedHost(t *testing.T) {
 		}
 	}
 	last := lastLine(out)
-	if !strings.HasPrefix(last, "tpp is installed and working: ") || !strings.Contains(last, "in codex") {
+	if !strings.HasPrefix(last, "tsp is installed and working: ") || !strings.Contains(last, "in codex") {
 		t.Fatalf("last line = %q, want the working line naming codex\n%s", last, out)
 	}
 }
@@ -2480,5 +2726,128 @@ func TestBindCLIStoresAndUnsetsPerSessionBindings(t *testing.T) {
 	}
 	if entries, err = os.ReadDir(dir); err != nil || len(entries) != 1 {
 		t.Fatalf("after the second unset the dir holds %d entries (err %v), want 1", len(entries), err)
+	}
+}
+
+// plan add-evidence writes a ledger row from flags that plan admit then reads as runnable; a value the caller
+// got wrong exits 2 and a plan that cannot take the row exits 1, both leaving the plan unchanged.
+func TestPlanAddEvidenceWritesARowAdmitCanRun(t *testing.T) {
+	bin := buildCLI(t)
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	p := filepath.Join(repo, "plan.md")
+	if out, code := runCLI(t, bin, "plan", "init", "--path", p); code != 0 {
+		t.Fatalf("plan init = %d\n%s", code, out)
+	}
+	args := []string{"plan", "add-evidence", "--path", p, "--id", "E1", "--claim", "echo prints its argument",
+		"--executed", "ran echo", "--admit", "echo pinned", "--observed", "pinned", "--reproduction", "rerun"}
+	out, code := runCLI(t, bin, args...)
+	if code != 0 || !strings.Contains(out, "added E1 to ") {
+		t.Fatalf("add-evidence = %d\n%s", code, out)
+	}
+	if out, code := runCLI(t, bin, "plan", "check", "--path", p); code != 0 {
+		t.Fatalf("plan check after add-evidence = %d\n%s", code, out)
+	}
+	cmd := exec.Command(bin, "plan", "admit", "--path", p)
+	cmd.Dir = repo
+	admitted, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(admitted), "E1  WOULD RUN  echo pinned") {
+		t.Fatalf("plan admit does not read the written row as runnable:\n%s", admitted)
+	}
+
+	before, _ := os.ReadFile(p)
+	if out, code := runCLI(t, bin, append(args[:4:4], "--id", "E2", "--claim", "c", "--executed", "e", "--observed", "o", "--expect", "red")...); code != 2 || !strings.Contains(out, "--expect") {
+		t.Fatalf("a bad --expect = %d, want 2\n%s", code, out)
+	}
+	if out, code := runCLI(t, bin, args...); code != 1 || !strings.Contains(out, "already row") {
+		t.Fatalf("a duplicate id = %d, want 1\n%s", code, out)
+	}
+	for _, bad := range []struct{ admit, reason string }{
+		{"go test ./... | tee out.txt", "admit-multiple-commands"},
+		{"go test <package>", "admit-has-placeholder"},
+		{"go test ./... > out.txt", "admit-has-redirection"},
+	} {
+		out, code := runCLI(t, bin, append(args[:4:4], "--id", "E4", "--claim", "c", "--executed", "e", "--observed", "o", "--admit", bad.admit)...)
+		if code != 2 || !strings.Contains(out, bad.reason) {
+			t.Fatalf("--admit %q = %d, want 2 naming %s\n%s", bad.admit, code, bad.reason, out)
+		}
+	}
+	if out, code := runCLI(t, bin, "plan", "add-evidence", "--path", p, "--id", "E3"); code != 2 || !strings.Contains(out, "--claim is required") {
+		t.Fatalf("a missing --claim = %d, want 2\n%s", code, out)
+	}
+	if after, _ := os.ReadFile(p); string(after) != string(before) {
+		t.Fatal("a refused add-evidence changed the plan")
+	}
+}
+
+// The sandbox runs with --read-only and a tmpfs only at /tmp, so the per-user cache os.UserCacheDir
+// resolves (the plan lock writes one) and HOME itself do not exist behind it: a row that needs either had
+// to set env by hand. Both now live on the writable tmpfs, and the dirs are created before the row's own
+// command so a tool that writes HOME on start finds a directory that is there.
+func TestSandboxArgsGiveTheContainerAWritableUserHome(t *testing.T) {
+	args, err := sandboxArgs(t.TempDir(), "example/golang:1.26", admit.SandboxReadOnly, "go test ./...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"-e HOME=/tmp/home", "-e XDG_CACHE_HOME=/tmp/xdg"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("args = %q, want %q", joined, want)
+		}
+	}
+	script := args[len(args)-1]
+	if !strings.HasPrefix(script, "mkdir -p /tmp/home /tmp/xdg\n") {
+		t.Errorf("script = %q, want the user dirs created first", script)
+	}
+	if !strings.HasSuffix(script, "go test ./...") {
+		t.Errorf("script = %q, want the row's command at the end", script)
+	}
+}
+
+// --sandbox-image wins over the repository declaration, the declaration wins over the default, and a
+// repository that declares nothing leaves the default to the flag itself. Without --sandbox the
+// declaration is not read at all, so a broken .tsp.json cannot refuse an admit that runs on this machine.
+func TestResolveSandboxImageOrder(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".tsp.json"), []byte(`{"sandboxImage":"golang:1.26"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name             string
+		root             string
+		sandbox, flagSet bool
+		flagValue        string
+		want             string
+	}{
+		{"flag wins", root, true, true, "alpine:3", "alpine:3"},
+		{"declaration when the flag is absent", root, true, false, "", "golang:1.26"},
+		{"default untouched when nothing declares", t.TempDir(), true, false, "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := resolveSandboxImage(c.root, c.sandbox, c.flagSet, c.flagValue)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != c.want {
+				t.Fatalf("image = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestResolveSandboxImageDoesNotReadTheDeclarationOffTheSandboxPath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".tsp.json"), []byte(`{not json`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveSandboxImage(root, false, false, sandboxImageDefault)
+	if err != nil {
+		t.Fatalf("a declaration outside --sandbox must not be read: %v", err)
+	}
+	if got != sandboxImageDefault {
+		t.Fatalf("image = %q, want the flag's own default %q", got, sandboxImageDefault)
 	}
 }

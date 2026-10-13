@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/alesierraalta/tpp/internal/assets"
+	"github.com/alesierraalta/tsp/internal/assets"
 )
 
 // Kind classifies what a component installs.
@@ -73,7 +73,7 @@ func Components() []Component {
 	components = append(components, Component{
 		ID:      "tpp",
 		Kind:    KindExtension,
-		Source:  "hosts/pi/tpp.ts",
+		Source:  "hosts/pi/tsp.ts",
 		Hosts:   []string{"pi"},
 		Default: false,
 	})

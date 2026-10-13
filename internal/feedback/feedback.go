@@ -13,10 +13,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
-	"github.com/alesierraalta/tpp/internal/assets"
-	"github.com/alesierraalta/tpp/internal/feature"
-	"github.com/alesierraalta/tpp/internal/sanitize"
+	"github.com/alesierraalta/tsp/internal/assets"
+	"github.com/alesierraalta/tsp/internal/feature"
+	"github.com/alesierraalta/tsp/internal/sanitize"
 )
 
 // Verdicts are the three honest answers to "did the method earn its keep".
@@ -146,26 +147,32 @@ func Template(r Report) string {
 		plan = NotGiven
 	}
 	return strings.Join([]string{
-		"# tpp run feedback — what the method cost and what it paid.",
+		"# tsp run feedback — what the method cost and what it paid.",
 		"# Fill in paid, cost, reason and verdict. verdict is one of: " + strings.Join(Verdicts, ", ") + ".",
-		"# Submit with: tpp feedback --file <this file>",
+		"# Submit with: tsp feedback --file <this file>",
 		"ts: " + r.TS,
 		"repo: " + r.Repo,
 		"plan: " + plan,
 		"skill: " + r.Skill,
 		"build: " + r.Build,
+		"# paid = what the method found or proved that the change would otherwise have shipped without; \"nothing\" when it found nothing",
 		"paid: ",
+		"# cost = the time and steps the method added beyond making the change itself",
 		"cost: ",
+		"# reason = one line on why the verdict below follows from paid and cost",
 		"reason: ",
+		"# verdict = paid (worth its cost), partly (some steps paid, some were ceremony), or ceremony (cost without a finding)",
 		"verdict: ",
+		"# guess = optional: your hunch about the method or the code that this run did not prove",
 		"guess: ",
+		"# freeform = optional: anything else the next run should know",
 		"freeform: ",
 	}, "\n") + "\n"
 }
 
 // markdownHeader opens the rendering. It is written only when the file is missing; a report that
 // already landed is never rewritten.
-const markdownHeader = "# Run feedback\n\nOne section per `tpp feedback` report; never rewritten. Each report grades the method\nitself: what paid off, what was ceremony, and where a rule had to be reverse-engineered.\n\n"
+const markdownHeader = "# Run feedback\n\nOne section per `tsp feedback` report; never rewritten. Each report grades the method\nitself: what paid off, what was ceremony, and where a rule had to be reverse-engineered.\n\n"
 
 // Record appends one report to the ledger and one section to the markdown file. Both files are
 // append-only.
@@ -173,9 +180,9 @@ func Record(configDir string, r Report) error {
 	enabled, err := feature.Enabled("feedback")
 	if err != nil || !enabled {
 		if err != nil {
-			return fmt.Errorf("feedback is disabled; enable it with: tpp feature enable feedback: %w", err)
+			return fmt.Errorf("feedback is disabled; enable it with: tsp feature enable feedback: %w", err)
 		}
-		return fmt.Errorf("feedback is disabled; enable it with: tpp feature enable feedback")
+		return fmt.Errorf("feedback is disabled; enable it with: tsp feature enable feedback")
 	}
 
 	telemetryDir := sanitize.TelemetryDir(configDir)
@@ -330,7 +337,7 @@ func Summary(configDir string) (string, error) {
 		return "", err
 	}
 	if len(reports) == 0 {
-		return "no reports yet: run `tpp feedback --template` after a run to start the ledger\n", nil
+		return "no reports yet: run `tsp feedback --template` after a run to start the ledger\n", nil
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "run feedback: %d report(s)\n", len(reports))
@@ -480,4 +487,24 @@ func isVerdict(v string) bool {
 		}
 	}
 	return false
+}
+
+// Repeats reports whether r repeats the repository, plan and verdict of the ledger's last report within
+// window. It never refuses anything: a near duplicate may be a deliberate second report.
+func Repeats(configDir string, r Report, window time.Duration) (bool, error) {
+	reports, err := Read(configDir)
+	if err != nil || len(reports) == 0 {
+		return false, err
+	}
+	last := reports[len(reports)-1]
+	if last.Repo != r.Repo || last.Plan != r.Plan || last.Verdict != r.Verdict {
+		return false, nil
+	}
+	then, err1 := time.Parse(time.RFC3339, last.TS)
+	now, err2 := time.Parse(time.RFC3339, r.TS)
+	if err1 != nil || err2 != nil {
+		return false, nil
+	}
+	gap := now.Sub(then)
+	return gap >= -window && gap <= window, nil
 }

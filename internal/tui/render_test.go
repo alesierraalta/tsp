@@ -6,7 +6,7 @@ import (
 )
 
 func TestRenderMenu(t *testing.T) {
-	want := "tpp tui\n" +
+	want := "tsp tui\n" +
 		"\n" +
 		"  Status\n" +
 		"  Features\n" +
@@ -29,7 +29,7 @@ func TestRenderStatus(t *testing.T) {
 			{ID: "feedback", Title: "Feedback", Enabled: false},
 		},
 	}
-	want := "tpp tui: status\n" +
+	want := "tsp tui: status\n" +
 		"\n" +
 		"State root: /home/u/.config/tpp\n" +
 		"State exists: yes\n" +
@@ -44,7 +44,7 @@ func TestRenderStatus(t *testing.T) {
 		t.Errorf("renderStatus ok =\n%q\nwant\n%q", got, want)
 	}
 
-	wantErr := "tpp tui: status\n" +
+	wantErr := "tsp tui: status\n" +
 		"\n" +
 		"error: status unavailable\n" +
 		"\n" +
@@ -59,31 +59,31 @@ func TestRenderFeatures(t *testing.T) {
 		{ID: "feedback", Title: "Feedback", Enabled: false},
 		{ID: "logging", Title: "Logging", Enabled: true},
 	}
-	want := "tpp tui: features\n" +
+	want := "tsp tui: features\n" +
 		"\n" +
 		"> feedback  Feedback  disabled\n" +
 		"  logging   Logging   enabled\n" +
 		"\n" +
-		"space toggle | enter preview | esc back | q quit"
+		"up/down | pgup/pgdn | space toggle | enter | esc | q quit"
 	if got := renderFeatures(rows, 0, ""); got != want {
 		t.Errorf("renderFeatures no detail =\n%q\nwant\n%q", got, want)
 	}
 
-	wantDetail := "tpp tui: features\n" +
+	wantDetail := "tsp tui: features\n" +
 		"\n" +
 		"  feedback  Feedback  disabled\n" +
 		"> logging   Logging   enabled\n" +
 		"\n" +
 		"Preview text.\n" +
 		"\n" +
-		"space toggle | enter preview | esc back | q quit"
+		"up/down | pgup/pgdn | space toggle | enter | esc | q quit"
 	if got := renderFeatures(rows, 1, "Preview text.\n"); got != wantDetail {
 		t.Errorf("renderFeatures with detail =\n%q\nwant\n%q", got, wantDetail)
 	}
 }
 
 func TestRenderPlan(t *testing.T) {
-	want := "tpp tui: sync plan (dry-run; writes nothing)\n" +
+	want := "tsp tui: sync plan (dry-run; writes nothing)\n" +
 		"\n" +
 		"line1\n" +
 		"line2\n" +
@@ -93,7 +93,7 @@ func TestRenderPlan(t *testing.T) {
 		t.Errorf("renderPlan ok =\n%q\nwant\n%q", got, want)
 	}
 
-	wantErr := "tpp tui: sync plan (dry-run; writes nothing)\n" +
+	wantErr := "tsp tui: sync plan (dry-run; writes nothing)\n" +
 		"\n" +
 		"error: plan failed\n" +
 		"\n" +

@@ -2,7 +2,9 @@ package gate
 
 import (
 	"bufio"
-	"github.com/alesierraalta/tpp/internal/plan"
+	"fmt"
+	"github.com/alesierraalta/tsp/internal/base"
+	"github.com/alesierraalta/tsp/internal/plan"
 	"io"
 	"os"
 	"path/filepath"
@@ -66,6 +68,9 @@ type Entry struct {
 	Skipped      string   `json:"skipped,omitempty"`
 	OptedOut     bool     `json:"opted_out,omitempty"`
 	Plan         string   `json:"plan,omitempty"`
+	// BaseDrift marks a stop whose admitted base ref moved before this report: the evidence was
+	// validated on another commit than the one the ref points at now.
+	BaseDrift bool `json:"base_drift,omitempty"`
 }
 
 type Result struct {
@@ -96,6 +101,11 @@ type Result struct {
 	// because no count over that scope is honest while the scope itself is unreadable — and the other
 	// runs' rows it would have to borrow to say "owes nothing" are not this run's business.
 	RunProblem string
+	// Drift names the base ref's move since the plan was admitted: the run validated the recorded
+	// commit, not the tip CI checks out. It reaches both audiences — appended to Reason for the
+	// model and to the operator's line — whenever it is set, and an unreadable plan leaves it
+	// unset: drift is checked in the one place the gate already reads state for this run.
+	Drift string
 }
 
 // IsProductionSource decides what the gate protects: source by extension, outside test,
@@ -314,7 +324,17 @@ func audit(d Deps, root, rel, run string, res Result, entry *Entry) Result {
 	case len(gaps.RunProblems) > 0:
 		res.RunProblem = strings.Join(gaps.RunProblems, "; ")
 	case gaps.RunMissing:
-		res.RunProblem = "no row in " + rel + " carries run \"" + run + "\": tpp plan gaps --all shows every row"
+		res.RunProblem = "no row in " + rel + " carries run \"" + run + "\": tsp plan gaps --all shows every row"
+	}
+	// The admitted base is checked here, once: the gate is the moment this run's report is
+	// written, and a base that moved since admission means the evidence was validated on another
+	// commit than the ref's current tip. Fail open in every unknown — no record, an unresolvable
+	// ref — so a session on a detached HEAD or with no admit under this cache stays silent.
+	if rec, ok := base.Load(root); ok {
+		if cur, ok := base.Resolve(d.Git, root, rec.Ref); ok && cur != rec.SHA {
+			res.Drift = fmt.Sprintf("tsp: base drift: %s advanced from %s to %s since the plan was admitted: the evidence was validated on %s, not on the current tip", rec.Ref, rec.SHA, cur, rec.SHA)
+			entry.BaseDrift = true
+		}
 	}
 	switch {
 	case gaps.Any():

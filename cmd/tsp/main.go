@@ -1,4 +1,4 @@
-// tpp is a deterministic companion for the testing discipline: it installs the skills,
+// tsp is a deterministic companion for the testing discipline: it installs the skills,
 // wires the Stop hook that keeps them invoked, and reports what the environment can do.
 package main
 
@@ -17,23 +17,24 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alesierraalta/tpp/internal/admit"
-	"github.com/alesierraalta/tpp/internal/bench"
-	"github.com/alesierraalta/tpp/internal/buildinfo"
-	"github.com/alesierraalta/tpp/internal/check"
-	"github.com/alesierraalta/tpp/internal/evidence"
-	"github.com/alesierraalta/tpp/internal/feature"
-	"github.com/alesierraalta/tpp/internal/feedback"
-	"github.com/alesierraalta/tpp/internal/gate"
-	"github.com/alesierraalta/tpp/internal/hookcmd"
-	"github.com/alesierraalta/tpp/internal/mode"
-	"github.com/alesierraalta/tpp/internal/plan"
-	"github.com/alesierraalta/tpp/internal/repair"
-	"github.com/alesierraalta/tpp/internal/sanitize"
-	"github.com/alesierraalta/tpp/internal/state"
-	"github.com/alesierraalta/tpp/internal/sync"
-	"github.com/alesierraalta/tpp/internal/tui"
-	"github.com/alesierraalta/tpp/internal/update"
+	"github.com/alesierraalta/tsp/internal/admit"
+	"github.com/alesierraalta/tsp/internal/base"
+	"github.com/alesierraalta/tsp/internal/bench"
+	"github.com/alesierraalta/tsp/internal/buildinfo"
+	"github.com/alesierraalta/tsp/internal/check"
+	"github.com/alesierraalta/tsp/internal/evidence"
+	"github.com/alesierraalta/tsp/internal/feature"
+	"github.com/alesierraalta/tsp/internal/feedback"
+	"github.com/alesierraalta/tsp/internal/gate"
+	"github.com/alesierraalta/tsp/internal/hookcmd"
+	"github.com/alesierraalta/tsp/internal/mode"
+	"github.com/alesierraalta/tsp/internal/plan"
+	"github.com/alesierraalta/tsp/internal/repair"
+	"github.com/alesierraalta/tsp/internal/sanitize"
+	"github.com/alesierraalta/tsp/internal/state"
+	"github.com/alesierraalta/tsp/internal/sync"
+	"github.com/alesierraalta/tsp/internal/tui"
+	"github.com/alesierraalta/tsp/internal/update"
 )
 
 // exitArtifact is what the CLI returns when its machine-readable output could not be written: the run
@@ -42,7 +43,7 @@ import (
 // and exit 0 would say it arrived.
 const exitArtifact = bench.ExitArtifact
 
-const usage = `usage: tpp <command> [flags]
+const usage = `usage: tsp <command> [flags]
 
 commands:
   gate     Stop hook: read the hook payload on stdin, decide, log, emit feedback
@@ -50,7 +51,7 @@ commands:
            (bind --session <id> --path <plan> --run <slug> [--cwd <dir>] [--config-dir <dir>],
             bind --unset --session <id> [--cwd <dir>] [--config-dir <dir>])
   setup    install and verify in one step: sync, run the doctor's checks, say whether the binary's
-           directory is on PATH, and end on one line saying tpp is working (exit 0) or what is left
+           directory is on PATH, and end on one line saying tsp is working (exit 0) or what is left
   sync     install the embedded skills into discovered hosts and wire Claude's Stop hook
   uninstall remove the installed skills and unwire the Stop hook (--dry-run writes nothing,
            --orphans also removes recorded paths the manifest no longer ships, --force
@@ -64,7 +65,8 @@ commands:
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history |
            compare | rescore | adjudicate)
   plan     write the skeleton, check the contract, name what breadth is still owed, record a
-           Findings row from flags, and admit every Evidence row (init | check | gaps | upgrade | add-finding | admit)
+           Findings or Evidence ledger row from flags, and admit every Evidence row
+           (init | check | gaps | upgrade | add-finding | add-evidence | admit)
   check    say what this repository still owes, from git and the plan alone: no hook payload,
            no transcript, no host. Exit 1 when there is something to do.
   status   report the local installation state and optional features
@@ -121,6 +123,13 @@ plan add-finding --id <id> --location <path:line> --severity <class> --data-safe
            (writes one Findings row; refuses a row plan check would reject, and never writes an
             evidence row. A bad value exits 2; a plan that refuses the row exits 1)
            (swept = status done, fixed or closed; n/a, na, none and skipped leave the denominator)
+plan add-evidence --id <id> --claim <text> --executed <text> --observed <text> [--admit <command>] [--inputs <text>]
+           [--normalize <regexp>] [--mutate '<old> => <new> @ <path>:<line>'] [--expect pass|fail]
+           [--control <text>] [--reproduction <text>] [--label observado] [--path <path>]
+           (writes one Evidence ledger row; refuses a row plan check rejects and an --admit, --normalize,
+            --mutate or --expect that plan admit would refuse before running; never writes Digest or Mode, which
+            plan admit --record pins. A row without --admit is recorded but admit reports it as no-admit-command.
+            A bad value exits 2; a plan that refuses the row exits 1)
 plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--timeout 120s] [--only <ids>] [--record <ids>]
            (dry run by default: --execute runs each admitted row's one command through sh -c;
             --record writes the freshly observed digest back into the named rows and requires
@@ -378,7 +387,7 @@ func runUpdate(args []string) int {
 	}
 	// A binary in a directory this user cannot write (a system bin dir) cannot be replaced in place; say so
 	// before go reports a bare permission error.
-	if probe, err := os.CreateTemp(gobin, ".tpp-update-*"); err != nil {
+	if probe, err := os.CreateTemp(gobin, ".tsp-update-*"); err != nil {
 		fmt.Fprintf(os.Stderr, "update: %s is not writable, so the running binary cannot be replaced there: %v\n", gobin, err)
 		return 1
 	} else {
@@ -411,10 +420,14 @@ func runUpdate(args []string) int {
 		}
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "update: installed tsp %s, but tpp still points at the old build: %v\n", result.Latest, err)
+		fmt.Fprintf(os.Stderr, "update: installed tsp %s, but %s still points at the old build: %v\n", result.Latest, filepath.Base(exe), err)
 		return 1
 	}
-	fmt.Printf("installed tsp %s (tpp is now tsp) into %s; restart your shell, confirm with `tsp version`, then run `tsp sync` to move your hooks to tsp\n", result.Latest, gobin)
+	if filepath.Base(exe) == target {
+		fmt.Printf("installed tsp %s into %s; restart your shell, confirm with `tsp version`, then run `tsp sync` to move your hooks to tsp\n", result.Latest, gobin)
+	} else {
+		fmt.Printf("installed tsp %s (tpp is now tsp) into %s; restart your shell, confirm with `tsp version`, then run `tsp sync` to move your hooks to tsp\n", result.Latest, gobin)
+	}
 	return 0
 }
 
@@ -542,7 +555,7 @@ func parseFeatureArgs(args []string) (string, bool, bool) {
 }
 
 func featureUsage(reason string) int {
-	fmt.Fprintf(os.Stderr, "feature: %s\nusage: tpp feature list|enable|disable <id> [--preview]\n", reason)
+	fmt.Fprintf(os.Stderr, "feature: %s\nusage: tsp feature list|enable|disable <id> [--preview]\n", reason)
 	return 2
 }
 
@@ -880,7 +893,7 @@ func runDoctor(args []string) int {
 }
 
 // selfDir is the directory of the running binary, so a spawned agent runs this build when the
-// skill tells it to call `tpp plan init`.
+// skill tells it to call `tsp plan init`.
 func selfDir() string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -919,6 +932,10 @@ func flagSet(fs *flag.FlagSet, name string) bool {
 	})
 	return set
 }
+
+// feedbackRepeatWindow is how close in time a report may follow an identical-looking last report before
+// the operator is told it may be a duplicate submission.
+const feedbackRepeatWindow = 30 * time.Minute
 
 // runFeedback is the destination the gate's Stop offer never had: --template hands the operator a
 // fillable report, --file records it, and review actions read or acknowledge a pending snapshot.
@@ -985,9 +1002,14 @@ func runFeedback(args []string) int {
 		if strings.TrimSpace(r.Plan) == "" {
 			r.Plan = feedback.NotGiven
 		}
+		// Read before recording: once the report lands, it is the last report it would be compared with.
+		repeats, _ := feedback.Repeats(*configDir, r, feedbackRepeatWindow)
 		if err := feedback.Record(*configDir, r); err != nil {
 			fmt.Fprintln(os.Stderr, "feedback:", err)
 			return 1
+		}
+		if repeats {
+			fmt.Fprintf(os.Stderr, "feedback: warning: this report repeats the repository, plan and verdict of the last report, recorded within %s; it was recorded anyway\n", feedbackRepeatWindow)
 		}
 		recordedRepo := r.Repo
 		if r.Repo != "" {
@@ -1072,12 +1094,23 @@ func runPlan(args []string) int {
 	verdictBy := fs.String("verdict-by", "", "who settled it and when (add-finding)")
 	reason := fs.String("reason", "", "why the verdict stands (add-finding)")
 	fingerprint := fs.String("fingerprint", "", "cited-files fingerprint at verdict, default - (add-finding)")
+	claim := fs.String("claim", "", "what the observation establishes (add-evidence)")
+	executed := fs.String("executed", "", "what was executed, as prose a human reads (add-evidence)")
+	admitCommand := fs.String("admit", "", "the one bare command plan admit runs for this row (add-evidence)")
+	inputs := fs.String("inputs", "", "inputs and parameters (add-evidence)")
+	observedText := fs.String("observed", "", "what was observed (add-evidence)")
+	normalize := fs.String("normalize", "", "Go regexp for the part of the output that moves, such as a time (add-evidence)")
+	mutate := fs.String("mutate", "", "falsifiability claim: '<old> => <new> @ <path>:<line>' (add-evidence)")
+	expect := fs.String("expect", "", "pass (default) or fail for a test observed red (add-evidence)")
+	control := fs.String("control", "", "mutation or negative control and its result, as prose (add-evidence)")
+	reproduction := fs.String("reproduction", "", "how to reproduce the observation (add-evidence)")
+	label := fs.String("label", "observado", "the row's label; the ledger holds only observado rows (add-evidence)")
 	execute := fs.Bool("execute", false, "run each admitted command; the default is a dry run (admit only)")
 	timeout := fs.Duration("timeout", 120*time.Second, "bound one command; 0 leaves it unbounded (admit only)")
 	only := fs.String("only", "", "comma-separated evidence ids to admit; empty means every row (admit only)")
 	record := fs.String("record", "", "comma-separated evidence ids whose freshly observed digest is written into the plan (admit only; requires --execute)")
 	sandbox := fs.Bool("sandbox", false, "observe each command inside a container instead of on this machine (admit only; requires --execute and docker)")
-	sandboxImage := fs.String("sandbox-image", sandboxImageDefault, "image the sandbox runs in (admit only; see --sandbox); the default is pulled on first use")
+	sandboxImage := fs.String("sandbox-image", sandboxImageDefault, "image the sandbox runs in (admit only; see --sandbox); sandboxImage in the repository declaration overrides this default, which is pulled on first use")
 	commit := fs.String("commit", "", "commit the export covers; the default is the short HEAD of the repository (export only)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
@@ -1114,7 +1147,20 @@ func runPlan(args []string) int {
 	}
 	switch args[0] {
 	case "admit":
-		return runPlanAdmit(effectivePath, *execute, *timeout, *only, *record, *sandbox, *sandboxImage)
+		// The image is the flag when it was asked for, else the repository's sandboxImage declaration,
+		// else nothing: resolveSandboxImage only reads the declaration on this path, so an admit that
+		// runs on this machine cannot be refused by a declaration it does not use.
+		image, err := resolveSandboxImage(root, *sandbox, flagSet(fs, "sandbox-image"), *sandboxImage)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plan:", err)
+			return 1
+		}
+		// Only --record rewrites the plan, and only an executed run records: that pair is the write this
+		// refusal guards. A --record without --execute stays runPlanAdmit's usage error (exit 2).
+		if *execute && *record != "" && refuseIgnoredPlanWrite(root, "admit", effectivePath) {
+			return 1
+		}
+		return runPlanAdmit(effectivePath, *execute, *timeout, *only, *record, *sandbox, image)
 	case "gaps":
 		selectedRun := declaredRun
 		if *all {
@@ -1133,6 +1179,9 @@ func runPlan(args []string) int {
 		}
 		return 0
 	case "upgrade":
+		if refuseIgnoredPlanWrite(root, "upgrade", effectivePath) {
+			return 1
+		}
 		selectedRun := ""
 		if flagSet(fs, "run") {
 			selectedRun = *run
@@ -1145,11 +1194,18 @@ func runPlan(args []string) int {
 		fmt.Printf("upgraded %s: %d table(s) changed\n", effectivePath, changed)
 		return 0
 	case "init":
+		if refuseIgnoredPlanWrite(root, "init", effectivePath) {
+			return 1
+		}
 		initPlan := plan.Init
 		if *micro {
 			initPlan = plan.InitMicro
 		}
-		if err := initPlan(effectivePath, *force); err != nil {
+		shown := effectivePath
+		if rel, err := filepath.Rel(root, effectivePath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			shown = filepath.ToSlash(rel)
+		}
+		if err := initPlan(effectivePath, shown, *force); err != nil {
 			fmt.Fprintln(os.Stderr, "plan init:", err)
 			return 1
 		}
@@ -1200,6 +1256,9 @@ func runPlan(args []string) int {
 				return 2
 			}
 		}
+		if refuseIgnoredPlanWrite(root, "add-finding", effectivePath) {
+			return 1
+		}
 		line, err := plan.AddFinding(effectivePath, plan.Finding{
 			ID: *id, Location: *location, Severity: *severity, DataSafe: *dataSafe,
 			Evidence: *evidence, Test: *test, Status: *status, VerdictBy: *verdictBy,
@@ -1209,6 +1268,41 @@ func runPlan(args []string) int {
 			fmt.Fprintln(os.Stderr, "plan add-finding:", err)
 			// The package owns the vocabulary, so it owns the split: a value it refuses is a malformed
 			// invocation (2), anything else is the plan refusing the row (1).
+			if errors.Is(err, plan.ErrUsage) {
+				return 2
+			}
+			return 1
+		}
+		fmt.Printf("added %s to %s at line %d\n", *id, effectivePath, line)
+		return 0
+	case "add-evidence":
+		for _, req := range []struct{ flag, value string }{
+			{"id", *id}, {"claim", *claim}, {"executed", *executed}, {"observed", *observedText},
+		} {
+			if strings.TrimSpace(req.value) == "" {
+				fmt.Fprintf(os.Stderr, "plan add-evidence: --%s is required\n", req.flag)
+				return 2
+			}
+		}
+		// The Admit cell is held to the checks plan admit runs before spawning anything, so a row this writes is
+		// never one admit refuses for its command. A row without --admit is still an observation, recorded for a
+		// human to read; admit reports it as no-admit-command.
+		if strings.TrimSpace(*admitCommand) != "" {
+			if reason, detail := admitCommandProblem(*id, *admitCommand); reason != "" {
+				fmt.Fprintf(os.Stderr, "plan add-evidence: --admit: %s [%s]\n", detail, reason)
+				return 2
+			}
+		}
+		if refuseIgnoredPlanWrite(root, "add-evidence", effectivePath) {
+			return 1
+		}
+		line, err := plan.AddEvidence(effectivePath, plan.Evidence{
+			ID: *id, Claim: *claim, Executed: *executed, Admit: *admitCommand, Inputs: *inputs,
+			Observed: *observedText, Normalize: *normalize, Mutate: *mutate, Expect: *expect,
+			Control: *control, Reproduction: *reproduction, Label: *label,
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plan add-evidence:", err)
 			if errors.Is(err, plan.ErrUsage) {
 				return 2
 			}
@@ -1230,8 +1324,27 @@ func runPlan(args []string) int {
 // usage error. --record without --execute is a usage error because recording pins an observation this
 // run made: a dry run makes none, and a pinned value nobody observed is the failure this flag exists
 // to prevent.
+// resolveSandboxImage answers the image --sandbox runs in: the flag when it was set, else the
+// repository's sandboxImage declaration, else the flag's own default. The declaration is read only
+// when the sandbox was asked for and the flag was not, so a broken declaration never refuses an admit
+// that runs on this machine or one where the operator already chose the image.
+func resolveSandboxImage(root string, sandbox, flagSet bool, value string) (string, error) {
+	if flagSet || !sandbox {
+		return value, nil
+	}
+	declared, err := plan.DeclaredSandboxImage(root, nil)
+	if err != nil {
+		return "", err
+	}
+	if declared == "" {
+		return value, nil
+	}
+	return declared, nil
+}
+
 func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record string, sandbox bool, sandboxImage string) int {
-	return admit.Run(admit.Request{
+	root := feedback.RepoRoot(".")
+	code := admit.Run(admit.Request{
 		Path:    path,
 		Execute: execute,
 		Timeout: timeout,
@@ -1239,7 +1352,7 @@ func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record
 		Record:  strings.Split(record, ","),
 		Sandbox: sandbox,
 		Image:   sandboxImage,
-		Dir:     feedback.RepoRoot("."),
+		Dir:     root,
 	}, admit.Deps{
 		Run:           runShell,
 		SandboxRunner: sandboxRunner,
@@ -1247,6 +1360,46 @@ func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record
 		Out:           os.Stdout,
 		Err:           os.Stderr,
 	})
+	// An admitted run is the moment a base is trustworthy: the evidence executed against this
+	// checkout, so the upstream ref and commit it ran on are recorded for the stop gate's drift
+	// check. A dry run executes nothing and a refused row admitted nothing — both record nothing —
+	// and a record that cannot be resolved or written stays absent rather than guessed.
+	if code == 0 && execute {
+		if rec, ok := base.Capture(gitOutput, root); ok {
+			_ = base.Save(root, rec)
+		}
+	}
+	return code
+}
+
+// gitOutput runs git in dir: the CLI side of the same question the stop gate asks through
+// gate.Deps.Git, so the base package answers both with one implementation.
+func gitOutput(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return string(out), err
+}
+
+// refuseIgnoredPlanWrite stops a subcommand that would write the plan at a path git keeps out of version
+// control, and reports whether it did. A plan git ignores can never reach a pull request, so a write there
+// records evidence no reviewer will ever see; naming the path and refusing turns that silence into a
+// refusal the operator can act on — unignore the path, or git add -f the plan the way the field had to
+// discover alone. check-ignore answers yes only when a rule matches the path and nothing has staged it,
+// so a force-added plan writes like any other; a tracked path, a path outside a repository, or a missing
+// git answers no and leaves the write alone, the same fail-open rule check's ignoredPlanWarning uses. The
+// check runs from the working directory, the base the plan path is resolved against; the message names the
+// path the way plan init's header does — repository-relative inside the repository, absolute outside it.
+func refuseIgnoredPlanWrite(root, sub, path string) bool {
+	if err := exec.Command("git", "check-ignore", "-q", "--", path).Run(); err != nil {
+		return false
+	}
+	shown := path
+	if rel, err := filepath.Rel(root, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		shown = filepath.ToSlash(rel)
+	}
+	fmt.Fprintf(os.Stderr, "plan %s: git ignores %s: the run's evidence cannot be versioned; unignore the path or git add -f %s\n", sub, shown, shown)
+	return true
 }
 
 // waitDelayAfterKill is how long the output pipes may stay open once the shell is gone: the gap between the
@@ -1840,7 +1993,8 @@ func runBenchHistory(args []string) int {
 
 // sandboxImageDefault is the smallest official Go image that satisfies this module's `go 1.26` directive. It
 // is a default and not a decision: the image a row needs is the image its command needs, so --sandbox-image
-// exists, and the default only spares the common case a flag.
+// and the repository's sandboxImage declaration exist, and the default only spares the common case a flag.
+// The default itself stays on the alpine image: changing it would move every existing sandbox pin at once.
 const sandboxImageDefault = "golang:1.26-alpine"
 
 // sandboxRunner returns a runner that observes one command inside a container. mount is how the container sees
@@ -1858,30 +2012,23 @@ const sandboxImageDefault = "golang:1.26-alpine"
 //     change.
 //   - `--quiet`: an image pulled on first use prints its progress into the same buffer as the command, so the
 //     first run's output would differ from the second and every row would read as unstable.
+//   - a writable user home: `--read-only` covers /root, so HOME and XDG_CACHE_HOME both point at the
+//     tmpfs at /tmp and the two directories are created before the row's command runs. Without this a
+//     row that writes a per-user cache (the plan lock) or a HOME config refuses in the sandbox and
+//     only in it, and the operator had to set env by hand to admit it.
 //
 // `--read-only` and `--network none` do not change whether a command passes; they are exactly the isolation this
 // mode claims, so they are asserted here rather than relied on to make anything work.
 func sandboxRunner(image, mount string) admit.Runner {
 	return func(ctx context.Context, dir, command string) (string, error) {
-		if !filepath.IsAbs(dir) {
-			return "", evidence.Refusal{
-				Reason: evidence.ReasonMisconfigured,
-				Detail: fmt.Sprintf("the sandbox mounts the working directory by absolute path, and %q is not one", dir),
-			}
+		args, err := sandboxArgs(dir, image, mount, command)
+		if err != nil {
+			return "", err
 		}
-		cmd := exec.CommandContext(ctx, "docker",
-			"run", "--rm", "--quiet",
-			"--network", "none",
-			"--read-only",
-			"--tmpfs", "/tmp:exec",
-			"-v", dir+":/w:"+mount,
-			"-w", "/w",
-			"-e", "GOCACHE=/tmp/gocache",
-			image, "sh", "-c", command,
-		)
+		cmd := exec.CommandContext(ctx, "docker", args...)
 		var buf bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &buf, &buf
-		err := cmd.Run()
+		err = cmd.Run()
 		output := buf.String()
 		if err == nil {
 			return output, nil
@@ -1893,6 +2040,38 @@ func sandboxRunner(image, mount string) admit.Runner {
 		}
 		return output, sandboxRefusal(image, output, err)
 	}
+}
+
+// sandboxArgs is docker's full argument vector for one observation, split out from the run above so the
+// confinement and the environment are testable without a container: what the row's command sees inside
+// the sandbox is a property of this vector alone. A dir that is not absolute is refused here, before
+// docker starts, because the mount path is the tree the container is given.
+func sandboxArgs(dir, image, mount, command string) ([]string, error) {
+	if !filepath.IsAbs(dir) {
+		return nil, evidence.Refusal{
+			Reason: evidence.ReasonMisconfigured,
+			Detail: fmt.Sprintf("the sandbox mounts the working directory by absolute path, and %q is not one", dir),
+		}
+	}
+	return []string{
+		"run", "--rm", "--quiet",
+		"--network", "none",
+		"--read-only",
+		"--tmpfs", "/tmp:exec",
+		"-v", dir + ":/w:" + mount,
+		"-w", "/w",
+		"-e", "GOCACHE=/tmp/gocache",
+		"-e", "HOME=/tmp/home",
+		"-e", "XDG_CACHE_HOME=/tmp/xdg",
+		image, "sh", "-c", sandboxScript(command),
+	}, nil
+}
+
+// sandboxScript is the row's command with the writable user directories created first: the container's
+// root is read-only, so nothing under /tmp exists until something makes it. mkdir is silent, and it
+// cannot change the command's own exit status, which is what the admission reads.
+func sandboxScript(command string) string {
+	return "mkdir -p /tmp/home /tmp/xdg\n" + command
 }
 
 // sandboxRefusal names why a sandboxed command produced no observation. Three of these are about the sandbox
@@ -1943,4 +2122,9 @@ func sandboxRefusal(image, output string, err error) error {
 		}
 	}
 	return err
+}
+
+// admitCommandProblem is evidence.CheckAdmitCommand under a name runPlan's --evidence flag does not shadow.
+func admitCommandProblem(id, admit string) (reason, detail string) {
+	return evidence.CheckAdmitCommand(id, admit)
 }

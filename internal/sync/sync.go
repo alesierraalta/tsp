@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alesierraalta/tpp/internal/assets"
-	"github.com/alesierraalta/tpp/internal/buildinfo"
-	"github.com/alesierraalta/tpp/internal/hookcmd"
-	"github.com/alesierraalta/tpp/internal/manifest"
-	"github.com/alesierraalta/tpp/internal/skilltree"
-	"github.com/alesierraalta/tpp/internal/state"
+	"github.com/alesierraalta/tsp/internal/assets"
+	"github.com/alesierraalta/tsp/internal/buildinfo"
+	"github.com/alesierraalta/tsp/internal/hookcmd"
+	"github.com/alesierraalta/tsp/internal/manifest"
+	"github.com/alesierraalta/tsp/internal/skilltree"
+	"github.com/alesierraalta/tsp/internal/state"
 )
 
 // Options controls a sync run.
@@ -137,7 +137,7 @@ func (r Report) String() string {
 				fmt.Fprintf(&b, "%sorphan: %s (not removed)\n", prefix, path)
 			}
 			if len(host.Foreign) > 0 {
-				fmt.Fprintf(&b, "%sskip-user: %d files not managed by tpp (left untouched)\n", prefix, len(host.Foreign))
+				fmt.Fprintf(&b, "%sskip-user: %d files not managed by tsp (left untouched)\n", prefix, len(host.Foreign))
 			}
 			for _, h := range host.RemovedHooks {
 				fmt.Fprintf(&b, "%sremoved previous gate hook: %s\n", prefix, h)
@@ -272,6 +272,7 @@ func syncHost(host Host, binPath string, opts Options, installationState *state.
 			return names, nil
 		},
 		ReadFile: os.ReadFile,
+		Resolve:  filepath.EvalSymlinks,
 	}
 	if installationState.Hosts != nil {
 		if current, ok := installationState.Hosts[host.Name]; ok && current.ConfigDir != host.ConfigDir {

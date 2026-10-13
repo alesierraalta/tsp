@@ -4,7 +4,8 @@ description: "Trigger: haz test stragety, haz test strategy, test-strategy, haz 
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.4.2"
+  version: "0.5.6"
+  requires_tsp: "0.6.6"
   requires_tpp: "0.5.1"
   scope: [common]
   auto_invoke: "Any request to test something: infer scope and mode from repo state, build or resume the persisted plan, execute it through specialized testing skills"
@@ -18,13 +19,26 @@ from the state table, act. Never ask which mode; one question only if the target
 
 - **PLAN**: inventory → layer sweep → rank → assign → persist; then EXECUTE unless asked for
   the plan only. **EXECUTE**: next pending target → sandbox → sibling → update the plan.
+- **Pessimistic prior**: every selected target is assumed to hide at least one defect until the
+  tests prove otherwise. Green tests, plausible code, and "this looks right" are claims to
+  attack, not facts to trust: hunt for what is broken before accepting what looks fine. The
+  prior widens the search; it never lowers rule 2's evidence bar — a suspicion without
+  falsifiable evidence stays unreported.
+- **Suite-green close**: before the final message, run the whole suite on the final tree; a
+  test still red is an unfinished target (rule 5) — fix it, record it `pending`, or report it.
+  A red test this sweep surfaces is a lead, not a finding: it becomes a finding only through
+  an executed probe that goes red on the current code and green after the fix (rules 2, 13).
+  A suspicion that never reproduced stays unreported.
 
 This skill decides WHICH targets and routes; siblings do the work.
+When it is reached as the post-implementation verification pass, the
+`test-strategy-verifier` gate owns the decision to run it and has already collected the user's
+explicit yes.
 
 ## Tooling
 
-Written for `tpp 0.5.1` (`tpp version` prints the build). Build it with `make build` (writes
-`bin/tpp`) and put it on `PATH`, or use `go install github.com/alesierraalta/tpp/cmd/tpp@latest` once published. Without the binary, fall back and say so in the report, since a
+Written for `tsp 0.6.6` (`tsp version` prints the build); `requires_tpp: 0.5.1` is only the historical bridge requirement. Build it with `make build` (writes
+`bin/tsp`) and put it on `PATH`, or use `go install github.com/alesierraalta/tsp/cmd/tsp@latest`. An existing TPP install moves over with `tpp update` from the bridge `go install github.com/alesierraalta/tpp/cmd/tpp@v0.5.1`. Without the binary, fall back and say so in the report, since a
 hand-applied gate is a weaker claim than the binary's:
 
 - `plan init` -> copy [assets/test-plan-template.md](assets/test-plan-template.md) (rule 12).
@@ -62,8 +76,8 @@ hand-applied gate is a weaker claim than the binary's:
 7. **Routing is an instruction.** INVOKE the sibling (Skill tool, or read
    `~/.claude/skills/<name>/SKILL.md` and apply it inline where no Skill tool exists); what is
    forbidden is approximating it from memory.
-8. **No claim without execution.** Every finding and every "works" carries an evidence record
-   per [references/evidence.md](references/evidence.md); `razonado` items are hypotheses.
+8. **No claim without execution.** Every finding and every "works" carries an evidence record per
+   [references/evidence.md](references/evidence.md); `razonado` items are hypotheses.
 9. **Regression gate.** A diff is validated only when the existing suite is green, its blast-radius
    rows ran to target rung, and `real-run-validation` drove the affected journey.
 10. **RDD receipt.** Derived from an evidence ledger row, only when a provider-issued lineage id
@@ -73,17 +87,20 @@ hand-applied gate is a weaker claim than the binary's:
     state whether data is safe. Never re-propose a `rejected` or `wontfix` finding unless its
     cited-files fingerprint changed; cite the row when skipping.
 12. **Persist before you report, in the shipped shape.** The plan is a set of tables, not a
-    document you compose: create it with `tpp plan init` (or copy
+    document you compose: create it with `tsp plan init` (or copy
     [assets/test-plan-template.md](assets/test-plan-template.md) when the binary is absent) and
-    fill its rows. Prose replaces no row, and every finding cell opens with `path:line`. When the
-    plan is not `docs/testing/test-plan.md`, declare it so the Stop hook and `tpp check` read
-    it: write `.tpp.json` at the worktree root.
+    fill its rows. The plan file is the first artifact: create it before any probe, scratch file
+    or test — a session that starts by probing has already decided to finish without one.
+    Prose replaces no row, and every finding cell opens with `path:line`. When the
+    plan is not `docs/testing/test-plan.md`, declare it so the Stop hook and `tsp check` read
+    it: write `.tsp.json` at the worktree root.
     ```json
     {"planPath": "docs/testing/<name>.md"}
     ```
-    A plan nobody declares is a plan nothing clears. The declaration is repository-local, so a
+    A plan nobody declares is a plan nothing clears — a file at some other path with no
+    `.tsp.json` naming it is a run with no plan. The declaration is repository-local, so a
     scoped plan cannot silently become the default plan for another checkout. The final message is
-    written only after the declared plan is on disk and `tpp plan check` passes: it reports
+    written only after the declared plan is on disk and `tsp plan check` passes: it reports
     findings that are not rows, cite no location, cite an evidence id that does not exist, or
     settle without a pinning test. A finding that exists only in chat does not exist, and one
     nothing can parse is the same thing. Asking the user whether to fix something never replaces
@@ -93,29 +110,34 @@ hand-applied gate is a weaker claim than the binary's:
     behaviour.** A probe in the scratchpad proves the defect once; a test in the repository's own
     suite proves it on every run. The assertion states what the contract promises, so the test is
     RED on today's code and GREEN once the defect is fixed, in that order. Run it both ways and
-    record which run was which. Then discriminate: it must also go red under at least one adjacent
+    record which run was which. A pinning claim is proved, not asserted: the finding row cites
+    the executions — RED on the defective line, GREEN after the fix — and a test this run never
+    ran both ways is a hypothesis, not a pin; the row stays open until it is run both ways.
+    Then discriminate: it must also go red under at least one adjacent
     mutation of the fixed line (boundary shifted, condition negated, branch removed), else it pins
     only the exact revert and a wrong fix passes. Two failures look like compliance and are not: a test that passes
     either way pins nothing, and a test that asserts the defective output is a characterization
     test (rule 4) that turns red the day someone fixes the bug, so it defends the defect instead
     of demanding its repair. Promote through `no-excess-tests`, name it in the finding row, and
     label any characterization test as such in its own name. A finding whose probe was never
-    promoted stays `open`, reason `not pinned`.
+    promoted stays `open`, reason `not pinned`. A run that reports a defect and adds no test file is not finished:
+    before the final message, every reported finding names a test file this run added or changed,
+    so the plan never stands in for the test.
 
 14. **Record a retrospective at the end of every run**, including blocked or partial ones. Run
-    `tpp feedback --template` into a `mktemp` file outside the repository, fill only the existing
+    `tsp feedback --template` into a `mktemp` file outside the repository, fill only the existing
     fields (`ts`, `repo`, `plan`, `skill`, `build`, `paid`, `cost`, `reason`, `verdict` of `paid`,
     `partly` or `ceremony`, optional `guess`, `freeform`; the parser rejects unknown keys), then
-    `tpp feedback --file`. Set `skill` to what ran (`<name>` or `<name> <version>`; a breakcheck run
+    `tsp feedback --file`. Set `skill` to what ran (`<name>` or `<name> <version>`; a breakcheck run
     records `breakcheck <its version>`). Keep it out of chat: after a successful write reply with a
     brief acknowledgment, and if storage fails say so instead of claiming it was recorded.
-    To review saved feedback, run `tpp feedback --pending` (add `--config-dir <dir>` to select the
+    To review saved feedback, run `tsp feedback --pending` (add `--config-dir <dir>` to select the
     feedback store; `TPP_HOME` remains the separate TPP local-state root). The first call establishes
     a baseline now at its exact snapshot and excludes all reports already present; its review cursor
     is a private sidecar beside the local telemetry ledger. Later calls return the pending reports
     and one exact snapshot token. Review the full batch before acknowledging that token with
-    `tpp feedback --mark-reviewed <token>`; reports appended after that snapshot remain pending.
-    `tpp feedback --summary` is all-history and cursor-neutral.
+    `tsp feedback --mark-reviewed <token>`; reports appended after that snapshot remain pending.
+    `tsp feedback --summary` is all-history and cursor-neutral.
 15. **Ask only when it changes the test.** Ask the user only when the target is ambiguous or the next
     action is irreversible; research everything else. Report each finding consequence first, and mark
     it inferred when it was not observed.
@@ -126,8 +148,8 @@ hand-applied gate is a weaker claim than the binary's:
 
 | State found | Action |
 |---|---|
-| No declared plan (`.tpp.json` absent or has no `planPath`) | PLAN the blast radius when the change is bounded (a scoped run), the whole app when it is not, then EXECUTE the first rows, same run |
-| No declared plan, and the change is one small function eligible for Micro (below) | PLAN micro with `tpp plan init --micro`, then EXECUTE its one pinning test and one mutation |
+| No declared plan (`.tsp.json` absent or has no `planPath`) | PLAN the blast radius when the change is bounded (a scoped run), the whole app when it is not, then EXECUTE the first rows, same run |
+| No declared plan, and the change is one small function eligible for Micro (below) | PLAN micro with `tsp plan init --micro`, then EXECUTE its one pinning test and one mutation |
 | Plan exists but predates the template (missing sections or `Baseline:`) | Migrate it: add the missing sections empty, record the baseline (`assets/fingerprint.sh`), treat the tree as changed, then EXECUTE |
 | Plan exists, fingerprint unchanged | EXECUTE from the first `pending` row |
 | Plan exists, files differ from the plan baseline | Refresh rows in that diff's blast radius, rank first, EXECUTE |
@@ -153,13 +175,13 @@ package, a changed interface) or a scope a plan already covers, which is resumed
 
 **One small function plans micro.** When the change is a single function of about ten lines or fewer,
 its contract does not change, and it touches none of the refused classes above, the plan may be a micro
-plan: `tpp plan init --micro` writes a header declaring `Micro: <file path> · touches none`, the
+plan: `tsp plan init --micro` writes a header declaring `Micro: <file path> · touches none`, the
 Findings table and the Evidence ledger, nothing else. It keeps the vacuous-assertion check on the tests
 that already cover the function, one pinning test observed red then green, and one mutation that test
 kills. `plan check` refuses a `Micro:` plan whose file no `path:line` citation corroborates, whose classes
 are not `none`, that also declares `Light:`, that carries a Layer matrix, or whose ledger lacks an
 `observado` row or a row with a `Mutate` cell; only a plan that passes owes no breadth to `plan gaps`,
-`tpp check` and the Stop gate. A refused declaration reads as a sweep never planned.
+`tsp check` and the Stop gate. A refused declaration reads as a sweep never planned.
 
 Scope: a diff means its blast radius first, closed by the regression gate (rule 9); a clean
 tree on main means the whole app. A scope may keep its own plan beside another scope's — for
@@ -167,10 +189,10 @@ example `docs/testing/test-plan-reports.md` beside an existing `test-plan.md` �
 `plan check` on its own path.
 
 **Reviewing someone else's PR.** Keep the plan outside the author's branch, for example
-`~/.config/tpp/reviews/<repo>/pr-<n>.md`, and pass it to every `plan` subcommand with `--path`; run
+`~/.config/tsp/reviews/<repo>/pr-<n>.md`, and pass it to every `plan` subcommand with `--path`; run
 `plan admit` from inside the checkout, where its commands and `Mutate` replays resolve. Pinning tests ship as
 a suggested patch, each named by its suite path :: test name, never as a commit to the author's branch.
-`tpp plan export --path <plan>` prints the Findings as a sanitised Markdown comment naming the commit
+`tsp plan export --path <plan>` prints the Findings as a sanitised Markdown comment naming the commit
 it covers; post it (`gh pr comment <n> -F -`) only with the operator's approval.
 
 **Verdict per target**: probe · pin · none (`n/a`), profiles in
@@ -181,10 +203,13 @@ it covers; post it (`gh pr comment <n> -F -`) only with the operator's approval.
 
 **Always first**: resolve and read the declared plan (`docs/testing/test-plan.md` when the declaration has no `planPath`),
 `git status`, the diff against main, and the test runner. Pick mode and scope from the state table; state the inference in one line.
+Read a branch's change with the three-dot range (`git diff origin/main...HEAD`, `git log origin/main..HEAD`
+for its commits): the two-dot diff `origin/main..HEAD` also carries every commit main gained since the
+branch forked, so a scoped plan would rank changes the branch never made.
 
 **PLAN**
 
-1. Inventory surfaces and entry points with CodeGraph when `tpp doctor` reports it
+1. Inventory surfaces and entry points with CodeGraph when `tsp doctor` reports it
    available, otherwise with `git ls-files` plus grep: routes, CLIs, jobs, migrations,
    ports/adapters, critical journeys.
 2. Layer sweep: invoke each layer owner in PLAN mode and take the target rows it returns
@@ -201,9 +226,9 @@ it covers; post it (`gh pr comment <n> -F -`) only with the operator's approval.
    records, never a silent omission. The `Skill` cell only labels what is still owed.
 6. Record the baseline (`assets/fingerprint.sh`: repo fingerprint; per-finding cited-files fingerprint) and persist to
    the declared plan path (or `docs/testing/test-plan.md` when no path is declared). Create the file with
-   `tpp plan init --path <plan>`, which writes
+   `tsp plan init --path <plan>`, which writes
    [assets/test-plan-template.md](assets/test-plan-template.md) with every table in place; rows
-   start `pending`, `none` rows start `n/a`. Close the run with `tpp plan check` (rule 12).
+   start `pending`, `none` rows start `n/a`. Close the run with `tsp plan check` (rule 12).
 
 **EXECUTE**
 
@@ -218,7 +243,14 @@ it covers; post it (`gh pr comment <n> -F -`) only with the operator's approval.
    of the contract: rewrite it before promoting. Those two runs are one evidence row, and the
    test's identity goes in the finding (rule 13).
 5. Update the plan: row status, rung, evidence ledger, findings, testability blocks with the
-   minimal change that opens them. Write the file, run `tpp plan check` until it passes,
+   minimal change that opens them. The ledger's machine columns, in
+   [references/evidence.md](references/evidence.md) rules 8–11: `Admit` one bare command `plan admit`
+   runs (no backticks, pipes or placeholders); `Digest` written by `tsp plan admit --execute --record <id>`,
+   never by hand; `Normalize` a Go regexp for the part that moves (an elapsed time), else empty; `Mode`
+   `host` or `sandbox`, written by `--record`; `Mutate` `<old> => <new> @ <path>:<line>`, replayed only
+   under `--sandbox`; `Expect` empty, `pass`, or `fail` for a test observed red. Every row keeps one cell
+   per header column, empty cells as `| |`; `tsp plan add-evidence` writes such a row from flags (and
+   `tsp plan add-finding` the Findings row), so neither is hand-edited. Write the file, run `tsp plan check` until it passes,
    then report the delta (rule 12).
 
 ## Output Contract

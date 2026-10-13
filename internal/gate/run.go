@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/alesierraalta/tpp/internal/feature"
-	"github.com/alesierraalta/tpp/internal/sanitize"
+	"github.com/alesierraalta/tsp/internal/feature"
+	"github.com/alesierraalta/tsp/internal/sanitize"
 )
 
 const gitTimeout = 10 * time.Second
@@ -205,7 +205,15 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 	case res.Fire:
 		emit(stdout, res.Reason)
 	case res.Audit:
-		emitWith(stdout, res.Reason, auditLine(res, offerFeedback))
+		reason, line := res.Reason, auditLine(res, offerFeedback)
+		if res.Drift != "" {
+			// The drift is a second, independent fact about this run — the base moved under the
+			// admitted evidence — so it reaches both audiences: the model as added context and the
+			// operator in their own terminal, without waiting for the model to relay it.
+			reason += "\n" + res.Drift
+			line += "\n" + res.Drift
+		}
+		emitWith(stdout, reason, line)
 	case res.Problem != "":
 		// A declaration the gate cannot read is a defect its operator can repair, and the model can too:
 		// both hear it. It is not an audit, so no counts ride along.
@@ -230,20 +238,20 @@ func auditLine(res Result, offerFeedback ...bool) string {
 	case res.RunProblem != "":
 		// The bound run's scope could not be read: the operator hears the scoped problem itself,
 		// actionable in one line — never "owes nothing", which the unreadable scope cannot prove.
-		return "tpp: " + res.RunProblem + suffix
+		return "tsp: " + res.RunProblem + suffix
 	case res.Owed > 0 && res.Pending > 0:
-		return fmt.Sprintf("tpp: %d layer(s) assigned and never invoked, %d ranked target(s) still pending.%s", res.Owed, res.Pending, suffix)
+		return fmt.Sprintf("tsp: %d layer(s) assigned and never invoked, %d ranked target(s) still pending.%s", res.Owed, res.Pending, suffix)
 	case res.Owed > 0:
-		return fmt.Sprintf("tpp: %d layer(s) assigned and never invoked.%s", res.Owed, suffix)
+		return fmt.Sprintf("tsp: %d layer(s) assigned and never invoked.%s", res.Owed, suffix)
 	case res.Pending > 0:
-		return fmt.Sprintf("tpp: %d ranked target(s) still pending.%s", res.Pending, suffix)
+		return fmt.Sprintf("tsp: %d ranked target(s) still pending.%s", res.Pending, suffix)
 	case res.Unreadable > 0:
-		return fmt.Sprintf("tpp: %d breadth table(s) could not be read to the end, so the rows under it were never counted.%s", res.Unreadable, suffix)
+		return fmt.Sprintf("tsp: %d breadth table(s) could not be read to the end, so the rows under it were never counted.%s", res.Unreadable, suffix)
 	case res.Unplanned:
-		return "tpp: the plan has no layer matrix, so the breadth sweep was never planned." + suffix
+		return "tsp: the plan has no layer matrix, so the breadth sweep was never planned." + suffix
 	case res.Micro:
-		return "tpp: the micro plan owes nothing; it owes no layer sweep." + suffix
+		return "tsp: the micro plan owes nothing; it owes no layer sweep." + suffix
 	default:
-		return "tpp: the testing plan owes nothing." + suffix
+		return "tsp: the testing plan owes nothing." + suffix
 	}
 }
