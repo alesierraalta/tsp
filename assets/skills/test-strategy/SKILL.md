@@ -19,11 +19,12 @@ from the state table, act. Never ask which mode; one question only if the target
 
 - **PLAN**: inventory → layer sweep → rank → assign → persist; then EXECUTE unless asked for
   the plan only. **EXECUTE**: next pending target → sandbox → sibling → update the plan.
-- **Pessimistic prior**: every selected target is assumed to hide at least one defect until the
-  tests prove otherwise. Green tests, plausible code, and "this looks right" are claims to
-  attack, not facts to trust: hunt for what is broken before accepting what looks fine. The
-  prior widens the search; it never lowers rule 2's evidence bar — a suspicion without
-  falsifiable evidence stays unreported.
+- **Pessimistic prior**: every selected target is assumed to hide defects until the tests prove
+  otherwise, and a finding does not clear it: list every promise its contract makes (each
+  sentence of the README, spec or doc comment) and give each one its own probe before the target
+  is closed. Green tests, plausible code, and "this looks right" are claims to attack, not facts
+  to trust. The prior widens the search; it never lowers rule 2's evidence bar — a suspicion
+  without falsifiable evidence stays unreported.
 - **Suite-green close**: before the final message, run the whole suite on the final tree. A
   pinning test red only because its finding is still unfixed is the deliverable, not a failure:
   it stays in the suite and its row stays `open` — never withhold or delete a test to turn the
@@ -119,7 +120,9 @@ hand-applied gate is a weaker claim than the binary's:
     this run does not fix the code, the test still lands in the suite, RED, with the row `open`.
     It goes red under the suite's own command: the environment it needs (timezone, locale,
     variables) is set inside the test, and a defect that can hang is bounded by a timeout in the
-    test. It asserts the property the contract promises, not the output of one particular fix.
+    test; a test skipped unless a variable or flag is set pins nothing. It asserts the property
+    the contract promises, not the output of one particular fix, and only that finding's property:
+    a test that also asserts a second claim can go red for the wrong reason and pins neither.
     Then discriminate: it must also go red under at least one adjacent
     mutation of the fixed line (boundary shifted, condition negated, branch removed), else it pins
     only the exact revert and a wrong fix passes. Two failures look like compliance and are not: a test that passes
