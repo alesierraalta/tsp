@@ -24,8 +24,11 @@ from the state table, act. Never ask which mode; one question only if the target
   attack, not facts to trust: hunt for what is broken before accepting what looks fine. The
   prior widens the search; it never lowers rule 2's evidence bar — a suspicion without
   falsifiable evidence stays unreported.
-- **Suite-green close**: before the final message, run the whole suite on the final tree; a
-  test still red is an unfinished target (rule 5) — fix it, record it `pending`, or report it.
+- **Suite-green close**: before the final message, run the whole suite on the final tree. A
+  pinning test red only because its finding is still unfixed is the deliverable, not a failure:
+  it stays in the suite and its row stays `open` — never withhold or delete a test to turn the
+  suite green. Any other red test is an unfinished target (rule 5) — fix it, record it
+  `pending`, or report it.
   A red test this sweep surfaces is a lead, not a finding: it becomes a finding only through
   an executed probe that goes red on the current code and green after the fix (rules 2, 13).
   A suspicion that never reproduced stays unreported.
@@ -112,7 +115,11 @@ hand-applied gate is a weaker claim than the binary's:
     RED on today's code and GREEN once the defect is fixed, in that order. Run it both ways and
     record which run was which. A pinning claim is proved, not asserted: the finding row cites
     the executions — RED on the defective line, GREEN after the fix — and a test this run never
-    ran both ways is a hypothesis, not a pin; the row stays open until it is run both ways.
+    ran both ways is a hypothesis, not a pin; the row stays open until it is run both ways. When
+    this run does not fix the code, the test still lands in the suite, RED, with the row `open`.
+    It goes red under the suite's own command: the environment it needs (timezone, locale,
+    variables) is set inside the test, and a defect that can hang is bounded by a timeout in the
+    test. It asserts the property the contract promises, not the output of one particular fix.
     Then discriminate: it must also go red under at least one adjacent
     mutation of the fixed line (boundary shifted, condition negated, branch removed), else it pins
     only the exact revert and a wrong fix passes. Two failures look like compliance and are not: a test that passes
@@ -128,7 +135,8 @@ hand-applied gate is a weaker claim than the binary's:
     `tsp feedback --template` into a `mktemp` file outside the repository, fill only the existing
     fields (`ts`, `repo`, `plan`, `skill`, `build`, `paid`, `cost`, `reason`, `verdict` of `paid`,
     `partly` or `ceremony`, optional `guess`, `freeform`; the parser rejects unknown keys), then
-    `tsp feedback --file`. Set `skill` to what ran (`<name>` or `<name> <version>`; a breakcheck run
+    `tsp feedback --file`. When `tsp feedback` answers that feedback is disabled, skip this rule:
+    do not enable it or retry. Set `skill` to what ran (`<name>` or `<name> <version>`; a breakcheck run
     records `breakcheck <its version>`). Keep it out of chat: after a successful write reply with a
     brief acknowledgment, and if storage fails say so instead of claiming it was recorded.
     To review saved feedback, run `tsp feedback --pending` (add `--config-dir <dir>` to select the
