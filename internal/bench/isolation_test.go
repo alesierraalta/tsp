@@ -281,6 +281,11 @@ func TestEachRunWorksOnItsOwnConfigCopy(t *testing.T) {
 		if opts.ConfigDir == template {
 			t.Errorf("the agent was handed the shared template %s", template)
 		}
+		// The agent runs inside its workspace: a relative config path would resolve from there and
+		// point at nothing, failing every run with "path does not exist" or "no API key".
+		if !filepath.IsAbs(opts.ConfigDir) {
+			t.Errorf("the run's config path %q is relative to the bench's cwd, not the agent's", opts.ConfigDir)
+		}
 		if _, err := os.Stat(filepath.Join(opts.ConfigDir, PiAuthFile)); err != nil {
 			t.Errorf("the run's copy must carry the prepared login: %v", err)
 		}
@@ -290,7 +295,9 @@ func TestEachRunWorksOnItsOwnConfigCopy(t *testing.T) {
 		}
 		return AgentResult{Result: "nothing found", Turns: 2}, nil
 	}
-	agg, code := Run(Options{CasesGlob: caseDir, Runs: 2, Workers: 2, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: t.TempDir(), BenchDir: t.TempDir(), ConfigDir: template, Agent: agent})
+	// --out is usually given relative to the repository, as in `--out bench/results/<run>`.
+	t.Chdir(t.TempDir())
+	agg, code := Run(Options{CasesGlob: caseDir, Runs: 2, Workers: 2, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: filepath.Join("bench", "results", "run"), BenchDir: t.TempDir(), ConfigDir: template, Agent: agent})
 	if code != 0 {
 		t.Fatalf("exit code %d", code)
 	}

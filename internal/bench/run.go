@@ -564,8 +564,13 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	// writes, which is exactly the state the throwaway config exists to keep out of a measurement.
 	runOpts := opts
 	if opts.ConfigDir != "" {
-		clone := filepath.Join(filepath.Dir(ws), agentConfigDir)
-		if err := copyTree(opts.ConfigDir, clone); err != nil {
+		// The agent runs inside its workspace, so a path relative to the bench's own cwd (the usual
+		// `--out bench/results/<run>`) would point at nothing from there.
+		clone, err := filepath.Abs(filepath.Join(filepath.Dir(ws), agentConfigDir))
+		if err == nil {
+			err = copyTree(opts.ConfigDir, clone)
+		}
+		if err != nil {
 			res.Failed, res.FailReason = true, "agent config could not be copied: "+err.Error()
 			return finish(res, opts, true)
 		}
