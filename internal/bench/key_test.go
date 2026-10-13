@@ -50,6 +50,44 @@ func TestLoadKey(t *testing.T) {
 	}
 }
 
+// Traps are documented behaviors planted next to a case's real defects: a flow that reports one
+// instead of probing against the fixture README drags precision below 1.00. They live in their own
+// top-level array — never inside defects — so every defect consumer (totals, keep-directory
+// requirements, mechanical matching, caught attribution, clean-control counting) excludes them by
+// construction, and adjudication can never confirm a trap id as a defect.
+func TestLoadKeyTraps(t *testing.T) {
+	valid := `{"id":"c1","language":"node","suite":"node --test","surface":"lib","defects":[{"id":"d1","file":"src/a.js","line":3,"class":"boundary","keywords":["limit"],"description":"x","trigger":{"input":"i","expected":"e","actual":"a"},"why_missed":"w"}],"traps":[{"id":"t1","file":"src/a.js","line":9,"class":"documented-behavior","keywords":["jitter"],"description":"documented jitter","documented":"README.md:12"}]}`
+	cases := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{"a trap parses with its documented line", valid, ""},
+		{"trap without id", strings.Replace(valid, `"id":"t1",`, ``, 1), "no id"},
+		{"trap without keywords", strings.Replace(valid, `["jitter"]`, `[]`, 1), "no keywords"},
+		{"trap without a positive line", strings.Replace(valid, `"line":9`, `"line":0`, 1), "positive line"},
+		{"trap without its documented line", strings.Replace(valid, `,"documented":"README.md:12"`, ``, 1), "documented"},
+		{"trap id repeating a defect id", strings.Replace(valid, `"id":"t1"`, `"id":"d1"`, 1), "repeated"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k, err := LoadKey(writeKey(t, tc.body))
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if len(k.Traps) != 1 || k.Traps[0].ID != "t1" || k.Traps[0].Documented != "README.md:12" {
+					t.Fatalf("parsed traps wrong: %+v", k.Traps)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadKeyMissingFile(t *testing.T) {
 	if _, err := LoadKey(t.TempDir()); err == nil || !strings.Contains(err.Error(), "read key") {
 		t.Fatalf("error = %v", err)

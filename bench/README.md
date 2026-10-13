@@ -58,12 +58,23 @@ Known limits of the overlays, verified by running every trigger against every va
  "defects":[{"id":"D1","file":"src/x.js","line":42,"class":"<class>","keywords":["k1","k2","k3"],
    "description":"one sentence, what is wrong",
    "trigger":{"input":"<exact call or command>","expected":"<per contract>","actual":"<observed>"},
-   "why_missed":"one sentence: why a happy-path suite and branch coverage never reach it"}]}
+   "why_missed":"one sentence: why a happy-path suite and branch coverage never reach it"}],
+ "traps":[{"id":"t1","file":"src/x.js","line":57,"class":"<class>","keywords":["k1","k2"],
+   "description":"one sentence, the tempting behavior",
+   "documented":"README.md:<line of the sentence that states it is intentional>"}]}
 ```
 
 `line` is the line of the defective statement in `file` (relative to `fixture/`). `keywords` are
 three to five lowercase words a correct finding would contain. `trigger.actual` is pasted from a
 real execution against the fixture; a defect whose trigger was never run does not belong in a key.
+
+`traps` is optional: documented behaviors planted next to the real defects. A report of a trap is
+an adjudicated false positive, never a catch: traps are not defects, so they are excluded from
+defect totals, the `fix/` overlay requirement, mechanical matching, and caught attribution by
+construction, and adjudication refuses to confirm a trap id as a defect. Trap keywords must be
+ disjoint from the case's defect keywords, and a trap's line must sit more than five lines from
+every defect line, so a trap report can never be mechanically mis-attributed to a real defect.
+Each entry's `documented` names the fixture README line that states the behavior is intentional.
 
 ## Cost and wall clock
 

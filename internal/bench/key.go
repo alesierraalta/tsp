@@ -30,6 +30,20 @@ type Defect struct {
 	WhyMissed   string   `json:"why_missed"`
 }
 
+// Trap is one documented behavior planted next to a case's real defects. A flow that reports a
+// trap instead of probing against the fixture README earns a false positive: Documented names the
+// README line that states the behavior is intentional. Traps are never defects, so nothing that
+// counts, matches, or requires fixes for defects may look at them.
+type Trap struct {
+	ID          string   `json:"id"`
+	File        string   `json:"file"`
+	Line        int      `json:"line"`
+	Class       string   `json:"class"`
+	Keywords    []string `json:"keywords"`
+	Description string   `json:"description"`
+	Documented  string   `json:"documented"`
+}
+
 // Key is the sealed answer key of a case: KEY.json next to the fixture directory.
 type Key struct {
 	ID       string `json:"id"`
@@ -43,6 +57,9 @@ type Key struct {
 	// back as "no request".
 	Request *string  `json:"request,omitempty"`
 	Defects []Defect `json:"defects"`
+	// Traps holds documented false-positive bait; optional, and read only by adjudication — never
+	// by defect scoring, which must stay trap-blind by construction.
+	Traps []Trap `json:"traps,omitempty"`
 }
 
 // RequestText is the case's bounded request, or "" when it declares none.
@@ -128,6 +145,27 @@ func (k Key) Validate() error {
 		}
 		if len(d.Keywords) == 0 {
 			problems = append(problems, fmt.Sprintf("defect %q has no keywords", d.ID))
+		}
+	}
+	for i, tp := range k.Traps {
+		switch {
+		case strings.TrimSpace(tp.ID) == "":
+			problems = append(problems, fmt.Sprintf("trap %d has no id", i))
+		case seen[tp.ID]:
+			problems = append(problems, fmt.Sprintf("trap id %q repeated", tp.ID))
+		}
+		seen[tp.ID] = true
+		if strings.TrimSpace(tp.File) == "" {
+			problems = append(problems, fmt.Sprintf("trap %q has no file", tp.ID))
+		}
+		if tp.Line <= 0 {
+			problems = append(problems, fmt.Sprintf("trap %q has no positive line", tp.ID))
+		}
+		if len(tp.Keywords) == 0 {
+			problems = append(problems, fmt.Sprintf("trap %q has no keywords", tp.ID))
+		}
+		if strings.TrimSpace(tp.Documented) == "" {
+			problems = append(problems, fmt.Sprintf("trap %q has no documented line", tp.ID))
 		}
 	}
 	if len(problems) > 0 {

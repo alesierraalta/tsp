@@ -85,7 +85,7 @@ func TestStaleAdjudicationFingerprintIsRefused(t *testing.T) {
 }
 
 func TestAdjudicationRejectsDuplicateUnknownAndMismatchedDecisions(t *testing.T) {
-	key := Key{ID: "case-95", Defects: []Defect{{ID: "D1", File: "src/render.js", Line: 12, Keywords: []string{"escape"}}}}
+	key := Key{ID: "case-95", Defects: []Defect{{ID: "D1", File: "src/render.js", Line: 12, Keywords: []string{"escape"}}}, Traps: []Trap{{ID: "t1", File: "src/render.js", Line: 20, Keywords: []string{"jitter"}, Documented: "README.md:9"}}}
 	p := plan("| F1 | src/other.js:3 unrelated finding | M | yes | | open | me | - | - |\n", "")
 	fp := findingFingerprint(t, p, 1)
 
@@ -111,6 +111,11 @@ func TestAdjudicationRejectsDuplicateUnknownAndMismatchedDecisions(t *testing.T)
 			name: "unknown defect id",
 			adj:  Adjudication{Case: key.ID, Run: 1, Decisions: []Decision{decision(1, fp, VerdictDefect, "D9", "reason")}},
 			want: "D9",
+		},
+		{
+			name: "trap id is never confirmable as a defect",
+			adj:  Adjudication{Case: key.ID, Run: 1, Decisions: []Decision{decision(1, fp, VerdictDefect, "t1", "reason")}},
+			want: "trap",
 		},
 		{
 			name: "wrong case",
