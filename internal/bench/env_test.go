@@ -209,7 +209,7 @@ func TestPiBenchConfigHoldsTheSkillsAndNothingElse(t *testing.T) {
 		names = append(names, e.Name())
 	}
 	sort.Strings(names)
-	wantNames := PiAuthFile + ", " + PiModelsStoreFile + ", settings.json, skills"
+	wantNames := PiAuthFile + ", " + IsolatedHomeDir + ", " + PiModelsStoreFile + ", settings.json, skills"
 	if got := strings.Join(names, ", "); got != wantNames {
 		t.Fatalf("throwaway config holds %q, want %q", got, wantNames)
 	}

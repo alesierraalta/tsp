@@ -38,18 +38,22 @@ func agentPrompt(key Key) string {
 const (
 	RunnerClaude = "claude"
 	RunnerPi     = "pi"
+	RunnerCodex  = "codex"
 )
 
 // KnownRunner reports whether name selects a runner the bench can spawn; empty means the default.
 func KnownRunner(name string) bool {
-	return name == "" || name == RunnerClaude || name == RunnerPi
+	return name == "" || name == RunnerClaude || name == RunnerPi || name == RunnerCodex
 }
 
 // DefaultModel is the model a runner uses when the operator does not name one: the free Pi model the
 // readings run on, and the cheapest Claude model for the last-resort alternative.
 func DefaultModel(runner string) string {
-	if runner == RunnerClaude {
+	switch runner {
+	case RunnerClaude:
 		return "haiku"
+	case RunnerCodex:
+		return "gpt-6-luna"
 	}
 	return "opencode/muse-spark-1.3-contributor-free"
 }
@@ -57,8 +61,11 @@ func DefaultModel(runner string) string {
 // runnerAgent is the constructor a runner name selects. A test that sets Options.Agent bypasses
 // this entirely, so the bench suite never spawns either CLI.
 func runnerAgent(runner string) Agent {
-	if runner == RunnerPi {
+	switch runner {
+	case RunnerPi:
 		return piAgent
+	case RunnerCodex:
+		return codexAgent
 	}
 	return claudeAgent
 }
@@ -67,13 +74,13 @@ func runnerAgent(runner string) Agent {
 type Options struct {
 	CasesGlob    string
 	Model        string
-	Runner       string // which CLI spawns the agent: RunnerClaude (default) or RunnerPi
+	Runner       string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, or RunnerCodex
 	Runs         int
 	MaxTurns     int
 	Timeout      time.Duration
 	SuiteTimeout time.Duration
 	ConfigDir    string  // agent config directory (Claude config dir, or Pi agent dir); empty inherits the operator's
-	ConfigMode   string  // agent config mode: ConfigBench, ConfigInherited, or ConfigCustom
+	ConfigMode   string  // agent config mode: ConfigBench, ConfigNone, ConfigInherited, or ConfigCustom
 	BinDir       string  // put first on the agent's PATH, so `tpp plan init` is the build under test
 	Workers      int     // cases run side by side; below 1 means one at a time
 	MaxCostUSD   float64 // 0 means no ceiling

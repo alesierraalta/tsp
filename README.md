@@ -606,6 +606,30 @@ holds the line: the copy is a regular file, not a link, and the source still hol
 afterwards. When the operator has no `auth.json`, the run is not stopped: it says so and lets the CLI
 report the authentication error itself, as a failed case.
 
+Every isolated config also carries its own empty `home/`, and the run's `HOME` points at it. Pi
+discovers `~/.agents/skills/` whatever its settings say, so without that the operator's own skills
+(on many machines a symlink to `~/.claude/skills`, an installed `test-strategy` included) would leak
+into a reading that claims to measure only the embedded ones. Isolated Pi runs also pass
+`--no-context-files`, so no `AGENTS.md` or `CLAUDE.md` above the workspace instructs the agent. The
+Go build cache stays the operator's: it holds compiled packages, never instructions.
+
+`--agent-config none` is the bare-agent baseline a skill is measured against: the same isolation
+with no skill at all (`--no-skills` for Pi). The Codex runner (`--runner codex`) runs only bare:
+`codex exec --json` with a throwaway `CODEX_HOME` holding only `auth.json`, `--ignore-user-config`,
+`--ignore-rules`, `--ephemeral`, and no approval prompt; it defaults to `gpt-6-luna`. Codex reports
+tokens but no price, so a codex run records no cost and `--max-cost-usd` never stops it. Its turns
+count the actions the agent completed (commands, file changes, tool calls), the unit closest to the
+other runners' turns. Comparing arms:
+
+```
+tsp bench run --runner codex --cases 'bench/cases/*'                       # codex, nothing
+tsp bench run --runner pi --agent-config none --cases 'bench/cases/*'      # pi, nothing
+tsp bench run --runner pi --agent-config bench --cases 'bench/cases/*'     # pi with the tsp skills
+```
+
+The bare arms write no tsp plan, so their reported column is empty by construction: caught is the
+measure that compares across arms.
+
 ## License
 
 Apache-2.0. See `LICENSE` and `NOTICE` for the attribution of the skills derived from the

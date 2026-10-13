@@ -40,6 +40,7 @@ type Provenance struct {
 // Agent-config modes identify whether a run used the isolated benchmark configuration or an operator-owned one.
 const (
 	ConfigBench     = "bench"
+	ConfigNone      = "none" // isolated like bench, with no skill at all: the bare-agent baseline
 	ConfigInherited = "inherited"
 	ConfigCustom    = "custom"
 )

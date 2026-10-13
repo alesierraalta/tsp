@@ -1,0 +1,236 @@
+package bench
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// writeCodexSource builds a stand-in operator CODEX_HOME holding the login and the operator's own
+// instructions and skills, which a bare run must never carry.
+func writeCodexSource(t *testing.T) string {
+	t.Helper()
+	src := filepath.Join(t.TempDir(), "codex")
+	if err := os.MkdirAll(filepath.Join(src, "skills", "operator-skill"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		CodexAuthFile:                    `{"tokens":{"access_token":"operator-token"}}`,
+		"AGENTS.md":                      "operator instructions",
+		"config.toml":                    `model = "operator-model"`,
+		"skills/operator-skill/SKILL.md": "---\nname: operator-skill\n---\n",
+	} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return src
+}
+
+func dirNames(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+// A bare run carries the login and nothing that could instruct the agent: no skill, no AGENTS.md, no
+// user config. Its own empty HOME hides ~/.agents/skills, ~/.codex and ~/.claude from the agent.
+func TestNoneConfigHoldsCredentialsAndNoSkills(t *testing.T) {
+	pi := filepath.Join(t.TempDir(), "pi")
+	if err := WriteNoneConfig(pi, RunnerPi, writePiSource(t)); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := dirNames(t, pi), PiAuthFile+", "+IsolatedHomeDir+", "+PiModelsStoreFile+", settings.json"; got != want {
+		t.Fatalf("pi bare config holds %q, want %q", got, want)
+	}
+	data, err := os.ReadFile(filepath.Join(pi, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if skills, ok := settings["skills"].([]any); !ok || len(skills) != 0 {
+		t.Fatalf("a bare pi config must configure no skills: %v", settings["skills"])
+	}
+	if packages, ok := settings["packages"].([]any); !ok || len(packages) != 0 {
+		t.Fatalf("a bare pi config must load no packages: %v", settings["packages"])
+	}
+	if got := dirNames(t, filepath.Join(pi, IsolatedHomeDir)); got != "" {
+		t.Fatalf("the isolated home must start empty, holds %q", got)
+	}
+
+	codex := filepath.Join(t.TempDir(), "codex")
+	if err := WriteNoneConfig(codex, RunnerCodex, writeCodexSource(t)); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := dirNames(t, codex), CodexAuthFile+", "+IsolatedHomeDir; got != want {
+		t.Fatalf("codex bare config holds %q, want %q", got, want)
+	}
+	if err := WriteNoneConfig(filepath.Join(t.TempDir(), "x"), RunnerClaude, t.TempDir()); err == nil {
+		t.Fatal("the claude runner has no bare mode; asking for one must be refused")
+	}
+}
+
+// The tsp arm gets the same isolation: Pi discovers ~/.agents/skills whatever its settings say, so the
+// embedded skills are only the skills a run sees when HOME is the config's own.
+func TestPiBenchConfigCarriesItsOwnHome(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "pi")
+	if err := WriteBenchPiConfig(cfg, writePiSource(t)); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(filepath.Join(cfg, IsolatedHomeDir)); err != nil || !st.IsDir() {
+		t.Fatalf("the pi bench config must carry an isolated home: %v", err)
+	}
+}
+
+func envValues(env []string, key string) []string {
+	var got []string
+	for _, e := range env {
+		if strings.HasPrefix(e, key+"=") {
+			got = append(got, strings.TrimPrefix(e, key+"="))
+		}
+	}
+	return got
+}
+
+// The agent's HOME is the config's own home when the config carries one; a custom config dir without
+// one keeps the operator's HOME. The build cache stays the operator's: it holds compiled packages,
+// never instructions, and a cold cache would only cost every Go run its standard library build.
+func TestIsolatedEnvPointsHomeAtTheConfig(t *testing.T) {
+	cfg := t.TempDir()
+	home := filepath.Join(cfg, IsolatedHomeDir)
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"PATH=/bin", "HOME=/operator", "CODEX_HOME=/operator/.codex"}
+
+	pi := piEnv(base, cfg, "/build")
+	if got := envValues(pi, "HOME"); !reflect.DeepEqual(got, []string{home}) {
+		t.Fatalf("pi HOME = %v, want [%s]", got, home)
+	}
+	if got := envValues(pi, "GOCACHE"); !reflect.DeepEqual(got, []string{filepath.Join("/operator", ".cache", "go-build")}) {
+		t.Fatalf("pi GOCACHE = %v", got)
+	}
+
+	codex := codexEnv(base, cfg, "/build")
+	if got := envValues(codex, "CODEX_HOME"); !reflect.DeepEqual(got, []string{cfg}) {
+		t.Fatalf("CODEX_HOME = %v, want [%s]", got, cfg)
+	}
+	if got := envValues(codex, "HOME"); !reflect.DeepEqual(got, []string{home}) {
+		t.Fatalf("codex HOME = %v, want [%s]", got, home)
+	}
+	if got := envValues(codex, "PATH"); len(got) != 1 || !strings.HasPrefix(got[0], "/build") {
+		t.Fatalf("codex PATH = %v, want the build under test first", got)
+	}
+
+	custom := t.TempDir()
+	if got := envValues(piEnv(base, custom, ""), "HOME"); !reflect.DeepEqual(got, []string{"/operator"}) {
+		t.Fatalf("a config without its own home keeps HOME, got %v", got)
+	}
+}
+
+// Every isolated pi run ignores AGENTS.md/CLAUDE.md discovery; a bare run also disables every skill.
+func TestPiArgsIsolateContextFilesAndSkills(t *testing.T) {
+	key := Key{ID: "c1"}
+	has := func(args []string, flag string) bool {
+		for _, a := range args {
+			if a == flag {
+				return true
+			}
+		}
+		return false
+	}
+	bench := piArgs(key, Options{ConfigDir: "/cfg", ConfigMode: ConfigBench})
+	if !has(bench, "--no-context-files") || has(bench, "--no-skills") {
+		t.Fatalf("bench args = %v", bench)
+	}
+	bare := piArgs(key, Options{ConfigDir: "/cfg", ConfigMode: ConfigNone})
+	if !has(bare, "--no-context-files") || !has(bare, "--no-skills") {
+		t.Fatalf("bare args = %v", bare)
+	}
+	inherited := piArgs(key, Options{})
+	if has(inherited, "--no-context-files") || has(inherited, "--no-skills") {
+		t.Fatalf("an inherited run keeps the operator's pi as it is: %v", inherited)
+	}
+}
+
+func TestCodexIsAKnownRunnerWithItsOwnAgent(t *testing.T) {
+	if !KnownRunner(RunnerCodex) {
+		t.Fatal("codex must be a runner the bench can spawn")
+	}
+	if got := reflect.ValueOf(runnerAgent(RunnerCodex)).Pointer(); got != reflect.ValueOf(codexAgent).Pointer() {
+		t.Fatal("RunnerCodex must select codexAgent")
+	}
+	if DefaultModel(RunnerCodex) != "gpt-6-luna" {
+		t.Fatalf("codex default model = %q", DefaultModel(RunnerCodex))
+	}
+}
+
+// A bare codex run reads no user config, rules, or session history, and works only in the workspace.
+func TestCodexArgsRunBareInTheWorkspace(t *testing.T) {
+	key := Key{ID: "c1"}
+	args := codexArgs(key, Options{Model: "gpt-6-luna"}, "/ws")
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"exec", "--json", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config",
+		"--ignore-rules", "--dangerously-bypass-approvals-and-sandbox", "-C /ws", "-m gpt-6-luna"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("codex args %q lack %q", joined, want)
+		}
+	}
+	if args[len(args)-1] != agentPrompt(key) {
+		t.Fatalf("the prompt must be the last argument: %q", args[len(args)-1])
+	}
+
+	// The bench hands workspaces over as paths relative to its own directory, and codex runs inside the
+	// workspace: a relative -C would resolve a second time from there and name nothing.
+	rel := codexArgs(key, Options{}, filepath.Join("bench", "results", "run", "ws"))
+	for i, a := range rel {
+		if a == "-C" {
+			if dir := rel[i+1]; !filepath.IsAbs(dir) || !strings.HasSuffix(dir, filepath.Join("bench", "results", "run", "ws")) {
+				t.Fatalf("-C must name the workspace absolutely, got %q", dir)
+			}
+		}
+	}
+}
+
+func TestParseCodexStream(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"thread.started","thread_id":"thread-1"}`,
+		`{"type":"turn.started"}`,
+		`{"type":"item.completed","item":{"id":"i1","type":"reasoning","text":"think"}}`,
+		`{"type":"item.completed","item":{"id":"i2","type":"command_execution","command":"node --test"}}`,
+		`{"type":"item.completed","item":{"id":"i3","type":"agent_message","text":"first"}}`,
+		`{"type":"item.completed","item":{"id":"i4","type":"file_change"}}`,
+		`not json`,
+		`{"type":"item.completed","item":{"id":"i5","type":"agent_message","text":"final answer"}}`,
+		`{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}`,
+	}, "\n")
+	got := ParseCodexStream(strings.NewReader(stream))
+	if got.SessionID != "thread-1" || got.Result != "final answer" || got.Turns != 2 || got.IsError {
+		t.Fatalf("parsed = %+v, want session thread-1, last agent message, two tool items, no error", got)
+	}
+
+	failed := ParseCodexStream(strings.NewReader(`{"type":"thread.started","thread_id":"t"}` + "\n" +
+		`{"type":"turn.failed","error":{"message":"rate limited"}}`))
+	if !failed.IsError || failed.ErrorText != "rate limited" {
+		t.Fatalf("a failed turn must be an error with its message: %+v", failed)
+	}
+	errored := ParseCodexStream(strings.NewReader(`{"type":"error","message":"boom"}`))
+	if !errored.IsError || errored.ErrorText != "boom" {
+		t.Fatalf("an error event must be an error with its message: %+v", errored)
+	}
+}

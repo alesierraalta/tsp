@@ -1483,6 +1483,9 @@ func configModeFor(runner, agentConfig string) string {
 	switch {
 	case agentConfig == "bench":
 		return bench.ConfigBench
+	case agentConfig == "none", runner == bench.RunnerCodex:
+		// Codex runs only bare: the embedded skills target the hosts tsp installs into, not codex.
+		return bench.ConfigNone
 	case agentConfig != "":
 		return bench.ConfigCustom
 	case runner == bench.RunnerPi:
@@ -1497,7 +1500,7 @@ func configModeFor(runner, agentConfig string) string {
 func runBenchRun(args []string) int {
 	fs := flag.NewFlagSet("bench run", flag.ContinueOnError)
 	cases := fs.String("cases", "bench/cases/*", "glob of case directories (each with fixture/ and KEY.json)")
-	runner := fs.String("runner", bench.RunnerPi, "agent runner: pi (default) or claude (last resort)")
+	runner := fs.String("runner", bench.RunnerPi, "agent runner: pi (default), codex (bare baseline only), or claude (last resort)")
 	model := fs.String("model", "", "model for the agent runs; empty uses the runner's default ("+
 		bench.DefaultModel(bench.RunnerPi)+" for pi, "+bench.DefaultModel(bench.RunnerClaude)+" for claude)")
 	runs := fs.Int("runs", 1, "runs per case")
@@ -1512,12 +1515,20 @@ func runBenchRun(args []string) int {
 	retries := fs.Int("retries", 1, "retries per case on infrastructure failures (exit status, error result)")
 	retryDelay := fs.Duration("retry-delay", 60*time.Second, "pause before a retry")
 	workers := fs.Int("concurrency", 1, "cases to run side by side; the wall clock shortens, the cost does not")
-	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the embedded skills (the default for --runner pi)")
+	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the embedded skills (the default for --runner pi); \"none\" builds one with no skill at all, the bare-agent baseline (pi and codex; the only mode for codex)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if !bench.KnownRunner(*runner) {
-		fmt.Fprintf(os.Stderr, "bench run: unknown runner %q: use %s or %s\n", *runner, bench.RunnerPi, bench.RunnerClaude)
+		fmt.Fprintf(os.Stderr, "bench run: unknown runner %q: use %s, %s or %s\n", *runner, bench.RunnerPi, bench.RunnerCodex, bench.RunnerClaude)
+		return 2
+	}
+	if *runner == bench.RunnerCodex && *agentConfig != "" && *agentConfig != "none" {
+		fmt.Fprintf(os.Stderr, "bench run: --runner codex runs only bare; use --agent-config none or omit it\n")
+		return 2
+	}
+	if *runner == bench.RunnerClaude && *agentConfig == "none" {
+		fmt.Fprintf(os.Stderr, "bench run: --agent-config none needs --runner pi or codex\n")
 		return 2
 	}
 	if *model == "" {
@@ -1528,6 +1539,21 @@ func runBenchRun(args []string) int {
 	}
 	cfgDir, skillFile := *agentConfig, filepath.Join(defaultConfigDir(), "skills", "test-strategy", "SKILL.md")
 	switch {
+	case configModeFor(*runner, *agentConfig) == bench.ConfigNone:
+		// The bare baseline: the operator's login, an empty home, and no skill, AGENTS.md or user config.
+		from := bench.DefaultPiConfigDir()
+		if *runner == bench.RunnerCodex {
+			from = bench.DefaultCodexConfigDir()
+		}
+		cfgDir = filepath.Join(*out, "."+*runner+"-none-config")
+		if err := bench.WriteNoneConfig(cfgDir, *runner, from); err != nil {
+			fmt.Fprintln(os.Stderr, "bench config:", err)
+			return 1
+		}
+		if abs, err := filepath.Abs(cfgDir); err == nil {
+			cfgDir = abs
+		}
+		skillFile = ""
 	case *runner == bench.RunnerPi && (cfgDir == "" || cfgDir == "bench"):
 		// A Pi run always gets a throwaway config: the runner exists so a reading is not shaped by
 		// the operator's packages, extensions, memory protocol, or MCP servers, and so no credential
@@ -1559,7 +1585,7 @@ func runBenchRun(args []string) int {
 			cfgDir = abs
 		}
 	}
-	if cfgDir != "" {
+	if cfgDir != "" && skillFile != "" {
 		skillFile = filepath.Join(cfgDir, "skills", "test-strategy", "SKILL.md")
 	}
 	_, code := bench.Run(bench.Options{

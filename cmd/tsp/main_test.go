@@ -75,7 +75,7 @@ func TestCLIContract(t *testing.T) {
 		{name: "bench with no subcommand exits 2", args: []string{"bench"}, wantExit: 2, wantOut: "usage: tsp"},
 		{name: "bench with an unknown subcommand exits 2", args: []string{"bench", "bogus"}, wantExit: 2, wantOut: "usage: tsp"},
 		// A runner the bench cannot spawn must be refused before it scaffolds or spawns anything.
-		{name: "bench run with an unknown runner exits 2", args: []string{"bench", "run", "--runner", "gemini"}, wantExit: 2, wantOut: "use pi or claude"},
+		{name: "bench run with an unknown runner exits 2", args: []string{"bench", "run", "--runner", "gemini"}, wantExit: 2, wantOut: "use pi, codex or claude"},
 		{name: "bench score without arguments exits 2", args: []string{"bench", "score"}, wantExit: 2, wantOut: "needs --case"},
 		{name: "bench score with both workspace and plan exits 2", args: []string{"bench", "score", "--case", "c", "--workspace", "w", "--plan", "p"}, wantExit: 2, wantOut: "exactly one"},
 		{name: "bench compare without two directories exits 2", args: []string{"bench", "compare", "only-one"}, wantExit: 2, wantOut: "two result directories"},
@@ -2297,10 +2297,30 @@ func TestConfigModeForTheAgentConfigFlag(t *testing.T) {
 		{"claude", "bench", bench.ConfigBench},
 		{"claude", "/tmp/op-config", bench.ConfigCustom},
 		{"claude", "", bench.ConfigInherited},
+		{"pi", "none", bench.ConfigNone},
+		{"codex", "none", bench.ConfigNone},
+		{"codex", "", bench.ConfigNone},
 	}
 	for _, tt := range tests {
 		if got := configModeFor(tt.runner, tt.agentConfig); got != tt.want {
 			t.Errorf("configModeFor(%q, %q) = %q, want %q", tt.runner, tt.agentConfig, got, tt.want)
+		}
+	}
+}
+
+// A runner and a config it cannot honor are refused at the flags: codex only runs bare, and the claude
+// runner has no bare mode. Neither may fall through to reading "none" or "bench" as a directory path.
+func TestBenchRunRefusesAConfigTheRunnerCannotHonor(t *testing.T) {
+	for _, args := range [][]string{
+		{"--runner", "codex", "--agent-config", "bench"},
+		{"--runner", "claude", "--agent-config", "none"},
+	} {
+		out := t.TempDir()
+		if code := runBenchRun(append(args, "--dry-run", "--cases", filepath.Join(t.TempDir(), "none-*"), "--out", out)); code != 2 {
+			t.Errorf("bench run %v exit = %d, want 2", args, code)
+		}
+		if entries, _ := os.ReadDir(out); len(entries) != 0 {
+			t.Errorf("bench run %v must refuse before building any config, wrote %d entries", args, len(entries))
 		}
 	}
 }
