@@ -43,14 +43,17 @@ type Miss struct {
 
 // Diagnose gives every defect a valid run did not catch one reason. It is mechanical: "seen" means the
 // plan credited a finding to the defect, or the final message cites its location or names one of its
-// keywords. A failed or invalid run, and a clean control, has no verdict to explain.
+// keywords. Once every finding row is adjudicated the plan credits only confirmed defects: a row can match
+// two defects by line or keyword, and the decision names the one it claims. A failed or invalid run, and a
+// clean control, has no verdict to explain.
 func Diagnose(r Result, key Key) []Miss {
 	if r.Failed || r.Invalid || r.Control {
 		return nil
 	}
+	decided := r.FindingRows > 0 && r.PendingAdjudication == 0 && r.AdjudicationComplete
 	found := map[string]bool{}
 	for _, d := range r.Defects {
-		found[d.ID] = d.Found
+		found[d.ID] = d.Found && (!decided || d.Confirmed)
 	}
 	wroteTests := len(r.Catch.TestFiles) > 0
 	var misses []Miss

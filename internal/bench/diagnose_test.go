@@ -52,6 +52,36 @@ func TestDiagnoseNamesWhyEachDefectWasMissed(t *testing.T) {
 			},
 		},
 		{
+			// A row can match two defects mechanically; adjudication decides which one it claims. Once every row
+			// is decided, only a confirmed defect was seen in the plan: the other match was the scorer's guess.
+			name: "an adjudicated plan credits only the defect its rows were decided for",
+			res: Result{
+				Defects:              []DefectResult{{ID: "D1", Found: true, Confirmed: true}, {ID: "D2", Found: true}, {ID: "D3"}},
+				FindingRows:          1,
+				AdjudicationComplete: true,
+				Catch: CatchResult{Checked: true, TestFiles: []string{"tests/a.test.js"},
+					Caught: map[string]bool{"D1": true, "D2": false, "D3": false}},
+			},
+			want: []Miss{
+				{Defect: "D2", Class: MissTestsBlind},
+				{Defect: "D3", Class: MissTestsBlind},
+			},
+		},
+		{
+			name: "a plan still pending adjudication keeps the mechanical credit",
+			res: Result{
+				Defects:             []DefectResult{{ID: "D1", Found: true}, {ID: "D2", Found: true}, {ID: "D3"}},
+				FindingRows:         1,
+				PendingAdjudication: 1,
+				Catch: CatchResult{Checked: true, TestFiles: []string{"tests/a.test.js"},
+					Caught: map[string]bool{"D1": true, "D2": false, "D3": false}},
+			},
+			want: []Miss{
+				{Defect: "D2", Class: MissSeenTestsMissed, SeenIn: "plan"},
+				{Defect: "D3", Class: MissTestsBlind},
+			},
+		},
+		{
 			name: "a defect the catch check never observed is not checkable",
 			res: Result{
 				Defects: []DefectResult{{ID: "D1"}, {ID: "D2"}, {ID: "D3"}},
