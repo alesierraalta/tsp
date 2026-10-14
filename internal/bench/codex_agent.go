@@ -59,7 +59,7 @@ func codexArgs(key Key, opts Options, ws string) []string {
 	if opts.Model != "" {
 		args = append(args, "-m", opts.Model)
 	}
-	return append(args, agentPrompt(key))
+	return append(args, agentPrompt(key, opts))
 }
 
 // codexEvent is the subset of Codex's exec JSON events a bench run needs: the thread id, the items the

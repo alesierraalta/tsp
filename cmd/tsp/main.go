@@ -1510,6 +1510,7 @@ func runBenchRun(args []string) int {
 	model := fs.String("model", "", "model for the agent runs; empty uses the runner's default ("+
 		bench.DefaultModel(bench.RunnerPi)+" for pi, "+bench.DefaultModel(bench.RunnerClaude)+" for claude)")
 	runs := fs.Int("runs", 1, "runs per case")
+	prompt := fs.String("prompt", "", "instruction every arm receives instead of the bench prompt (\""+bench.Prompt+"\"); recorded in the provenance")
 	maxTurns := fs.Int("max-turns", 70, "agent turn cap per run")
 	timeout := fs.Duration("timeout", 30*time.Minute, "agent wall-clock cap per run")
 	suiteTimeout := fs.Duration("suite-timeout", 10*time.Minute, "fixture suite cap")
@@ -1595,7 +1596,7 @@ func runBenchRun(args []string) int {
 		skillFile = filepath.Join(cfgDir, "skills", "test-strategy", "SKILL.md")
 	}
 	_, code := bench.Run(bench.Options{
-		CasesGlob: *cases, Model: *model, Runner: *runner, Runs: *runs, MaxTurns: *maxTurns,
+		CasesGlob: *cases, Model: *model, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
 		Timeout:      *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,

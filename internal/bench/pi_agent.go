@@ -52,7 +52,7 @@ func piAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult
 // workspace's ancestors and loads no built-in extension, and a bare run (ConfigNone) disables every
 // discovered and configured skill.
 func piArgs(key Key, opts Options) []string {
-	args := []string{"-p", agentPrompt(key), "--mode", "json", "--no-session"}
+	args := []string{"-p", agentPrompt(key, opts), "--mode", "json", "--no-session"}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}

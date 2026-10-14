@@ -35,6 +35,7 @@ type Provenance struct {
 	SkillsDigest   string `json:"skills_digest,omitempty"` // digest of the skills a throwaway config carried
 	Environment    string `json:"environment"`             // os/arch of the instrument
 	SuiteTools     string `json:"suite_tools,omitempty"`   // node and go versions the suites ran with
+	Prompt         string `json:"prompt,omitempty"`        // the instruction every arm got, when it was not the bench prompt
 }
 
 // Agent-config modes identify whether a run used the isolated benchmark configuration or an operator-owned one.
@@ -234,6 +235,7 @@ func provenanceForRun(opts Options, corpus string, cases int) Provenance {
 		AgentConfig:    configMode(opts.ConfigMode),
 		Environment:    environment(),
 		SuiteTools:     suiteTools(),
+		Prompt:         opts.Prompt,
 	}
 	if opts.ConfigDir != "" {
 		p.SkillsDigest, _ = SkillsDigest(opts.ConfigDir)

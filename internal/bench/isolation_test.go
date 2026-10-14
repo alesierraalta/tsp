@@ -206,7 +206,7 @@ func TestCodexArgsRunBareInTheWorkspace(t *testing.T) {
 			t.Fatalf("codex args %q lack %q", joined, want)
 		}
 	}
-	if args[len(args)-1] != agentPrompt(key) {
+	if args[len(args)-1] != agentPrompt(key, Options{}) {
 		t.Fatalf("the prompt must be the last argument: %q", args[len(args)-1])
 	}
 

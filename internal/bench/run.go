@@ -27,11 +27,15 @@ const Prompt = "haz el testing"
 // agentPrompt is what a run is actually told. A case with no request gets the bare prompt the bench has
 // always sent, byte for byte; a case with one names it and nothing more. Choosing the mode stays the
 // skill's decision, because that is the thing a reading measures.
-func agentPrompt(key Key) string {
-	if request := key.RequestText(); request != "" {
-		return Prompt + "\n\nTest request: " + request
+func agentPrompt(key Key, opts Options) string {
+	prompt := Prompt
+	if opts.Prompt != "" {
+		prompt = opts.Prompt
 	}
-	return Prompt
+	if request := key.RequestText(); request != "" {
+		return prompt + "\n\nTest request: " + request
+	}
+	return prompt
 }
 
 // Runners the bench can spawn. An empty Runner is the default: claude, so a run recorded before
@@ -73,10 +77,13 @@ func runnerAgent(runner string) Agent {
 
 // Options configures a benchmark run.
 type Options struct {
-	CasesGlob    string
-	Model        string
-	Runner       string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, or RunnerCodex
-	Runs         int
+	CasesGlob string
+	Model     string
+	Runner    string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, or RunnerCodex
+	Runs      int
+	// Prompt replaces the bare instruction for every arm of a reading, so a bare agent can be asked to hunt
+	// defects instead of rerunning the suite; empty keeps the bench prompt.
+	Prompt       string
 	MaxTurns     int
 	Timeout      time.Duration
 	SuiteTimeout time.Duration
@@ -838,7 +845,7 @@ func yesNo(b bool) string {
 
 // claudeAgent spawns the real CLI with the run's prompt and reads its stream-json.
 func claudeAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
-	args := []string{"-p", agentPrompt(key), "--output-format", "stream-json", "--verbose",
+	args := []string{"-p", agentPrompt(key, opts), "--output-format", "stream-json", "--verbose",
 		"--max-turns", fmt.Sprint(opts.MaxTurns), "--permission-mode", "bypassPermissions"}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
