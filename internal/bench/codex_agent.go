@@ -30,6 +30,7 @@ func codexAgent(ctx context.Context, ws string, key Key, opts Options) (AgentRes
 	ar := ParseCodexStream(bytes.NewReader(out.Bytes()))
 	ar.DurationMS = time.Since(started).Milliseconds()
 	ar.Raw = tail(out.String(), 64*1024) + "\n--- stderr ---\n" + tail(errb.String(), 4*1024)
+	ar.Transcript = out.Bytes()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		ar.TimedOut = true
 	}

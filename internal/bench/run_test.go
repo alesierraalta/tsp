@@ -2,6 +2,7 @@ package bench
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -252,6 +253,38 @@ func TestRunRecordsTheFinalMessageAndWhyDefectsWereMissed(t *testing.T) {
 	}
 	if !reflect.DeepEqual(stored.Misses, agg.Cases[0].Misses) || len(stored.Misses) != stored.Total-stored.Caught {
 		t.Fatalf("misses = %+v, want one per uncaught defect (total %d, caught %d)", stored.Misses, stored.Total, stored.Caught)
+	}
+}
+
+// agent.log keeps only the tail of the stream, which lost every run's exploration phase: the hard-suite audit
+// could not say where a run's turns went. The whole stream is kept beside the result, compressed.
+func TestRunKeepsTheWholeAgentTranscript(t *testing.T) {
+	requireNodeAndGit(t)
+	caseGlob := fakeCaseNamed(t, t.TempDir(), "case-trace")
+	stream := strings.Repeat(`{"type":"turn_end","note":"early exploration"}`+"\n", 4000) + `{"type":"agent_end"}` + "\n"
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+		writePlan(t, ws, plan("", ""))
+		return AgentResult{Result: "done", Turns: 1, Raw: tail(stream, 1024), Transcript: []byte(stream)}, nil
+	}
+	out := t.TempDir()
+	if _, code := Run(Options{CasesGlob: caseGlob, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: out, BenchDir: t.TempDir(), Agent: agent}); code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	f, err := os.Open(filepath.Join(out, "case-trace", "1", "transcript-1.jsonl.gz"))
+	if err != nil {
+		t.Fatalf("the run kept no transcript: %v", err)
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != stream {
+		t.Fatalf("transcript holds %d bytes, want the whole %d-byte stream", len(got), len(stream))
 	}
 }
 

@@ -2,6 +2,7 @@ package bench
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -630,6 +631,23 @@ func writeAgentLog(dir string, attempt int, ar AgentResult, err error) {
 		_, _ = f.WriteString(b.String())
 		_ = f.Close()
 	}
+	writeTranscript(filepath.Join(dir, fmt.Sprintf("transcript-%d.jsonl.gz", attempt+1)), ar.Transcript)
+}
+
+// writeTranscript keeps one attempt's whole stream, gzip-compressed. Like the log it is diagnosis, not a
+// record: a transcript that cannot be written costs the trace, never the case.
+func writeTranscript(path string, stream []byte) {
+	if len(stream) == 0 {
+		return
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return
+	}
+	zw := gzip.NewWriter(f)
+	_, _ = zw.Write(stream)
+	_ = zw.Close()
+	_ = f.Close()
 }
 
 // merge keeps the run's bookkeeping fields and takes the scorer's fields.
@@ -834,6 +852,7 @@ func claudeAgent(ctx context.Context, ws string, key Key, opts Options) (AgentRe
 	err := cmd.Run()
 	ar := ParseStream(bytes.NewReader(out.Bytes()))
 	ar.Raw = tail(out.String(), 64*1024) + "\n--- stderr ---\n" + tail(errb.String(), 4*1024)
+	ar.Transcript = out.Bytes()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		ar.TimedOut = true
 	}

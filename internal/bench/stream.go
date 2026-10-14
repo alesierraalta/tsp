@@ -19,6 +19,9 @@ type AgentResult struct {
 	IsError    bool    `json:"is_error"`
 	ErrorText  string  `json:"error_text,omitempty"`
 	Raw        string  `json:"-"` // tail of the raw stream, written to agent.log for diagnosis
+	// Transcript is the whole stream, kept compressed beside the result: the tail in agent.log loses the
+	// run's exploration, which is where a reading has to look to say what its turns were spent on.
+	Transcript []byte `json:"-"`
 }
 
 // ParseStream keeps the last "result" event of a stream-json transcript; every other line is

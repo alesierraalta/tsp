@@ -30,6 +30,7 @@ func piAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult
 	// Pi's stream carries no duration; the run's own clock is the only measure of it.
 	ar.DurationMS = time.Since(started).Milliseconds()
 	ar.Raw = tail(out.String(), 64*1024) + "\n--- stderr ---\n" + tail(errb.String(), 4*1024)
+	ar.Transcript = out.Bytes()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		ar.TimedOut = true
 	}

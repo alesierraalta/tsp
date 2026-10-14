@@ -511,7 +511,8 @@ only a brief acknowledgment after a successful write; the summary groups by proj
 verdict it could not classify.
 
 ```sh
-tsp feedback --template          # a fillable skeleton with the run's identity already filled
+tsp feedback --template          # a fillable skeleton with the run's identity already filled;
+                                 # with feedback disabled it says so instead and exits 0
 tsp feedback --file report.md    # record one report; refusals exit 2 and write nothing
 tsp feedback --summary           # counts per verdict and per skill version, plus the guesses
 tsp feedback                     # no flags: the summary, the cheapest path to the answer
