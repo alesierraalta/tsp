@@ -2,12 +2,14 @@ package bench
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -218,6 +220,71 @@ func TestRunReportsActivationPerCaseAndInTheAggregate(t *testing.T) {
 	}
 	if summary := Summary(agg); !strings.Contains(summary, "light runs: 1") {
 		t.Fatalf("the summary must report the count:\n%s", summary)
+	}
+}
+
+// A run keeps the agent's last answer in its record: a defect the run named there but never pinned is a
+// miss the diagnosis can only see through it.
+func TestRunRecordsTheFinalMessageAndWhyDefectsWereMissed(t *testing.T) {
+	requireNodeAndGit(t)
+	caseGlob := fakeCaseNamed(t, t.TempDir(), "case-final")
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+		writePlan(t, ws, plan("", ""))
+		return AgentResult{Result: "  the parser drops the comma  ", Turns: 1}, nil
+	}
+	out := t.TempDir()
+	agg, code := Run(Options{CasesGlob: caseGlob, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: out, BenchDir: t.TempDir(), Agent: agent})
+	if code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	if got := agg.Cases[0].FinalMessage; got != "the parser drops the comma" {
+		t.Fatalf("final message = %q", got)
+	}
+	data, err := os.ReadFile(filepath.Join(out, "case-final", "1", "result.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored Result
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.FinalMessage != "the parser drops the comma" {
+		t.Fatalf("result.json final message = %q", stored.FinalMessage)
+	}
+	if !reflect.DeepEqual(stored.Misses, agg.Cases[0].Misses) || len(stored.Misses) != stored.Total-stored.Caught {
+		t.Fatalf("misses = %+v, want one per uncaught defect (total %d, caught %d)", stored.Misses, stored.Total, stored.Caught)
+	}
+}
+
+// agent.log keeps only the tail of the stream, which lost every run's exploration phase: the hard-suite audit
+// could not say where a run's turns went. The whole stream is kept beside the result, compressed.
+func TestRunKeepsTheWholeAgentTranscript(t *testing.T) {
+	requireNodeAndGit(t)
+	caseGlob := fakeCaseNamed(t, t.TempDir(), "case-trace")
+	stream := strings.Repeat(`{"type":"turn_end","note":"early exploration"}`+"\n", 4000) + `{"type":"agent_end"}` + "\n"
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+		writePlan(t, ws, plan("", ""))
+		return AgentResult{Result: "done", Turns: 1, Raw: tail(stream, 1024), Transcript: []byte(stream)}, nil
+	}
+	out := t.TempDir()
+	if _, code := Run(Options{CasesGlob: caseGlob, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: out, BenchDir: t.TempDir(), Agent: agent}); code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	f, err := os.Open(filepath.Join(out, "case-trace", "1", "transcript-1.jsonl.gz"))
+	if err != nil {
+		t.Fatalf("the run kept no transcript: %v", err)
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != stream {
+		t.Fatalf("transcript holds %d bytes, want the whole %d-byte stream", len(got), len(stream))
 	}
 }
 

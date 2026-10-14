@@ -62,6 +62,10 @@ func Rescore(results string, lookup func(caseName string) (string, error), suite
 			res.Catch = old.Catch // no workspace to re-check: the run's own verdict stands
 		}
 		res.Caught = res.Catch.Count()
+		if res.FinalMessage == "" {
+			res.FinalMessage = finalMessageFromLog(dir)
+		}
+		res.Misses = Diagnose(res, key)
 		agg.Cases = append(agg.Cases, res)
 	}
 	finalizeAggregate(&agg)

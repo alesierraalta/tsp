@@ -198,7 +198,7 @@ func baselineProblems(lines []string) []string {
 		if m == nil || unrecordedFingerprints[m[1]] || fingerprintRe.MatchString(m[1]) {
 			continue
 		}
-		problems = append(problems, fmt.Sprintf("line %d: the Baseline fingerprint \"%s\" is not assets/fingerprint.sh output (64 lowercase hex): record the baseline or keep the unrecorded placeholder", i+1, quote(m[1])))
+		problems = append(problems, fmt.Sprintf("line %d: the Baseline fingerprint \"%s\" is not assets/fingerprint.sh output (64 lowercase hex): record it with the output of `bash <skills dir>/test-strategy/assets/fingerprint.sh`, or keep the placeholder `<assets/fingerprint.sh output>` until it is recorded", i+1, quote(m[1])))
 	}
 	return problems
 }
@@ -876,7 +876,7 @@ func lightDeclaration(lines []string) lightDecl {
 			target = ""
 		}
 		if classes == "" || placeholder.MatchString(classes) {
-			problems = append(problems, fmt.Sprintf("line %d: the Light declaration names no touched classes", line))
+			problems = append(problems, fmt.Sprintf("line %d: the Light declaration names no touched classes; it reads `Light: <blast radius> · touches <classes>`", line))
 		}
 		return lightDecl{target: target, line: line, problems: problems, found: true}
 	}

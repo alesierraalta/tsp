@@ -2,6 +2,7 @@ package bench
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -38,18 +39,22 @@ func agentPrompt(key Key) string {
 const (
 	RunnerClaude = "claude"
 	RunnerPi     = "pi"
+	RunnerCodex  = "codex"
 )
 
 // KnownRunner reports whether name selects a runner the bench can spawn; empty means the default.
 func KnownRunner(name string) bool {
-	return name == "" || name == RunnerClaude || name == RunnerPi
+	return name == "" || name == RunnerClaude || name == RunnerPi || name == RunnerCodex
 }
 
 // DefaultModel is the model a runner uses when the operator does not name one: the free Pi model the
 // readings run on, and the cheapest Claude model for the last-resort alternative.
 func DefaultModel(runner string) string {
-	if runner == RunnerClaude {
+	switch runner {
+	case RunnerClaude:
 		return "haiku"
+	case RunnerCodex:
+		return "gpt-6-luna"
 	}
 	return "opencode/muse-spark-1.3-contributor-free"
 }
@@ -57,8 +62,11 @@ func DefaultModel(runner string) string {
 // runnerAgent is the constructor a runner name selects. A test that sets Options.Agent bypasses
 // this entirely, so the bench suite never spawns either CLI.
 func runnerAgent(runner string) Agent {
-	if runner == RunnerPi {
+	switch runner {
+	case RunnerPi:
 		return piAgent
+	case RunnerCodex:
+		return codexAgent
 	}
 	return claudeAgent
 }
@@ -67,13 +75,13 @@ func runnerAgent(runner string) Agent {
 type Options struct {
 	CasesGlob    string
 	Model        string
-	Runner       string // which CLI spawns the agent: RunnerClaude (default) or RunnerPi
+	Runner       string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, or RunnerCodex
 	Runs         int
 	MaxTurns     int
 	Timeout      time.Duration
 	SuiteTimeout time.Duration
 	ConfigDir    string  // agent config directory (Claude config dir, or Pi agent dir); empty inherits the operator's
-	ConfigMode   string  // agent config mode: ConfigBench, ConfigInherited, or ConfigCustom
+	ConfigMode   string  // agent config mode: ConfigBench, ConfigNone, ConfigInherited, or ConfigCustom
 	BinDir       string  // put first on the agent's PATH, so `tpp plan init` is the build under test
 	Workers      int     // cases run side by side; below 1 means one at a time
 	MaxCostUSD   float64 // 0 means no ceiling
@@ -146,6 +154,8 @@ type Aggregate struct {
 	RecallUnique         float64    `json:"recall_unique"`
 	RecallUniqueCaught   float64    `json:"recall_unique_caught"`
 	Provenance           Provenance `json:"provenance"`
+	// Misses counts uncaught defect-runs by reason (Diagnose), so a reading says where defects were lost.
+	Misses map[string]int `json:"misses,omitempty"`
 }
 
 // CorpusCase is one case of a corpus: its name, the bounded request it is asked for, and the ids of
@@ -444,6 +454,7 @@ func finalizeAggregate(agg *Aggregate) {
 	agg.DefectRuns, agg.Controls, agg.Inconclusive = counts.DefectRuns, counts.Controls, counts.Inconclusive
 	agg.UnstableCases = counts.Unstable
 	agg.AdjudicationComplete = complete
+	agg.Misses = countMisses(agg.Cases)
 	agg.MetricsVersion = MetricsVersion
 	agg.Recall, agg.RecallCaught = 0, 0
 	if agg.Defects > 0 {
@@ -549,11 +560,28 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		res = merge(res, scored)
 		return finish(res, opts, false)
 	}
+	// Every run works on its own copy of the prepared config: a worker pool runs several cases at
+	// once, and a shared config would let them see each other's login refreshes, caches, and home
+	// writes, which is exactly the state the throwaway config exists to keep out of a measurement.
+	runOpts := opts
+	if opts.ConfigDir != "" {
+		// The agent runs inside its workspace, so a path relative to the bench's own cwd (the usual
+		// `--out bench/results/<run>`) would point at nothing from there.
+		clone, err := filepath.Abs(filepath.Join(filepath.Dir(ws), agentConfigDir))
+		if err == nil {
+			err = copyTree(opts.ConfigDir, clone)
+		}
+		if err != nil {
+			res.Failed, res.FailReason = true, "agent config could not be copied: "+err.Error()
+			return finish(res, opts, true)
+		}
+		runOpts.ConfigDir = clone
+	}
 	started := time.Now()
 	var ar AgentResult
 	for attempt := 0; ; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
-		ar, err = opts.Agent(ctx, ws, key, opts)
+		ar, err = opts.Agent(ctx, ws, key, runOpts)
 		cancel()
 		res.CostUSD += ar.CostUSD
 		res.Turns += ar.Turns
@@ -582,9 +610,11 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		res.Notes = append(res.Notes, res.FailReason)
 		return finish(res, opts, true)
 	}
+	res.FinalMessage = clipFinalMessage(ar.Result)
 	res = merge(res, ScoreWorkspace(ws, key))
 	res.Catch = Discriminate(caseDir, ws, key, opts.SuiteTimeout)
 	res.Caught = res.Catch.Count()
+	res.Misses = Diagnose(res, key)
 	// Misses of either measure keep their workspace so they can be classified.
 	return finish(res, opts, res.Recall < 1 || (res.Catch.Checked && res.Caught < res.Total))
 }
@@ -601,6 +631,23 @@ func writeAgentLog(dir string, attempt int, ar AgentResult, err error) {
 		_, _ = f.WriteString(b.String())
 		_ = f.Close()
 	}
+	writeTranscript(filepath.Join(dir, fmt.Sprintf("transcript-%d.jsonl.gz", attempt+1)), ar.Transcript)
+}
+
+// writeTranscript keeps one attempt's whole stream, gzip-compressed. Like the log it is diagnosis, not a
+// record: a transcript that cannot be written costs the trace, never the case.
+func writeTranscript(path string, stream []byte) {
+	if len(stream) == 0 {
+		return
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return
+	}
+	zw := gzip.NewWriter(f)
+	_, _ = zw.Write(stream)
+	_ = zw.Close()
+	_ = f.Close()
 }
 
 // merge keeps the run's bookkeeping fields and takes the scorer's fields.
@@ -609,12 +656,16 @@ func merge(res, scored Result) Result {
 	scored.CostUSD, scored.Turns, scored.Seconds = res.CostUSD, res.Turns, res.Seconds
 	scored.Suite, scored.Invalid, scored.InvalidReason = res.Suite, res.Invalid, res.InvalidReason
 	scored.Failed, scored.FailReason = res.Failed, res.FailReason
+	scored.FinalMessage = res.FinalMessage
 	scored.Notes = append(res.Notes, scored.Notes...)
 	return scored
 }
 
 func finish(res Result, opts Options, keepWS bool) Result {
 	dir := filepath.Dir(res.Workspace)
+	// The per-run config copy carries the operator's copied login: it exists for the run and goes away
+	// with it, whatever happens to the workspace.
+	_ = os.RemoveAll(filepath.Join(dir, agentConfigDir))
 	// The plan is the run's deliverable: keep it beside result.json so a later scorer can re-read it. A copy
 	// that fails is a note on the case, not a failure — the case was scored, what is lost is rescoring it
 	// later — and the note is computed here, before the result is persisted, because one added afterwards is
@@ -735,6 +786,7 @@ func Summary(agg Aggregate) string {
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %d | %.3f | %d | %.1f | %s | %s |\n",
 			c.Case, reported, pinned, caught, lightTag(c), microTag(c), c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note, precision)
 	}
+	b.WriteString(missSection(agg))
 	return b.String()
 }
 
@@ -800,6 +852,7 @@ func claudeAgent(ctx context.Context, ws string, key Key, opts Options) (AgentRe
 	err := cmd.Run()
 	ar := ParseStream(bytes.NewReader(out.Bytes()))
 	ar.Raw = tail(out.String(), 64*1024) + "\n--- stderr ---\n" + tail(errb.String(), 4*1024)
+	ar.Transcript = out.Bytes()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		ar.TimedOut = true
 	}

@@ -181,6 +181,58 @@ func TestDiscriminateReportsInvertedTests(t *testing.T) {
 	}
 }
 
+// A test that hangs while the defect stands is killed by the timeout before the runner names it, so the
+// run reports no per-test line at all. It is green on the fixed code and cannot pass on the defective
+// code: that is a catch, not a test that never ran.
+func TestDiscriminateCountsATestThatHangsOnTheDefectAsCaught(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs node")
+	}
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	caseDir, key := nodeCase(t)
+	ws := agentWorkspace(t, caseDir, map[string]string{
+		"tests/agent.test.js": "const test = require('node:test'); const assert = require('node:assert'); const s = require('../src.js');\n" +
+			"test('d1 settles', () => { while (s.d1() !== 'ok') {} });\n" +
+			"test('d2 is fixed', () => { assert.equal(s.d2(), 'ok'); });\n",
+	})
+	got := Discriminate(caseDir, ws, key, 10*time.Second)
+	if !got.Checked || !got.AllGreen {
+		t.Fatalf("checked=%v allGreen=%v notes=%v", got.Checked, got.AllGreen, got.Notes)
+	}
+	if !got.Caught["D1"] || !got.Caught["D2"] {
+		t.Fatalf("caught = %v, want both: the hang on D1 is a catch (notes=%v)", got.Caught, got.Notes)
+	}
+	if by := got.CaughtBy["D2"]; len(by) != 1 || by[0] != "d2 is fixed" {
+		t.Fatalf("caught by[D2] = %v, want only the test that named its failure", got.CaughtBy)
+	}
+	if !strings.Contains(strings.Join(got.Notes, " "), "D1: caught by a run that stopped before reporting") {
+		t.Fatalf("notes must say how D1 was caught: %v", got.Notes)
+	}
+}
+
+// A test absent from a run that failed nothing proves nothing: a green run that simply did not list a
+// test is not a catch.
+func TestDiscriminateDoesNotCreditAnAbsentTestOnAGreenRun(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs node")
+	}
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	caseDir, key := nodeCase(t)
+	ws := agentWorkspace(t, caseDir, map[string]string{
+		"tests/agent.test.js": "const test = require('node:test'); const s = require('../src.js');\n" +
+			"if (s.d1() === 'ok') test('only listed on the fix', () => {});\n" +
+			"test('always green', () => {});\n",
+	})
+	got := Discriminate(caseDir, ws, key, 10*time.Second)
+	if got.Caught["D1"] || got.Caught["D2"] {
+		t.Fatalf("caught = %v, want none (notes=%v)", got.Caught, got.Notes)
+	}
+}
+
 // nodeCase is a two-defect fixture whose suite reports one result per test.
 func nodeCase(t *testing.T) (string, Key) {
 	t.Helper()

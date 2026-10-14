@@ -3,6 +3,7 @@ package bench
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 )
@@ -15,6 +16,32 @@ func corpusDir(t *testing.T) string {
 		t.Skip("no shipped corpus beside the module")
 	}
 	return dir
+}
+
+// hiddenTriggerRe is a bench-internal hook a fixture must not carry: a TPP_ variable that switches a test on,
+// or a test named after the trigger that proves a planted defect.
+var hiddenTriggerRe = regexp.MustCompile(`TPP_[A-Z_]+|func Test\w*Trigger\b|test\(["'][^"']*trigger`)
+
+// The fixture is what the agent sees. A trigger test shipped in it, even one skipped by default, names the
+// defect and hands over its proof: the agent can run it instead of finding the defect, and the reading
+// stops measuring discovery.
+func TestCorpusFixturesCarryNoHiddenTriggers(t *testing.T) {
+	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	for _, c := range cases {
+		_ = filepath.Walk(filepath.Join(c, FixtureDir), func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if m := hiddenTriggerRe.Find(data); m != nil {
+				t.Errorf("%s: the fixture carries a hidden trigger %q", path, m)
+			}
+			return nil
+		})
+	}
 }
 
 // Every case ships the fixed versions the discriminating check needs.

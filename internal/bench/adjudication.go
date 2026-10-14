@@ -261,10 +261,18 @@ func validateDecisionDefects(key Key, decisions []Decision) error {
 	for _, defect := range key.Defects {
 		known[defect.ID] = true
 	}
+	traps := make(map[string]bool, len(key.Traps))
+	for _, trap := range key.Traps {
+		traps[trap.ID] = true
+	}
 	for _, decision := range decisions {
-		if decision.Verdict == VerdictDefect && !known[decision.Defect] {
-			return fmt.Errorf("decision for row %d names unknown defect id %q", decision.Row, decision.Defect)
+		if decision.Verdict != VerdictDefect || known[decision.Defect] {
+			continue
 		}
+		if traps[decision.Defect] {
+			return fmt.Errorf("decision for row %d confirms trap id %q as a defect; traps are documented behavior and must be false positives", decision.Row, decision.Defect)
+		}
+		return fmt.Errorf("decision for row %d names unknown defect id %q", decision.Row, decision.Defect)
 	}
 	return nil
 }

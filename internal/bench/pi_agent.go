@@ -18,11 +18,7 @@ import (
 // claudeAgent. Pi has no turn cap flag, so --timeout is the only wall-clock limit this runner
 // enforces; --max-turns applies to the claude runner alone.
 func piAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
-	args := []string{"-p", agentPrompt(key), "--mode", "json", "--no-session"}
-	if opts.Model != "" {
-		args = append(args, "--model", opts.Model)
-	}
-	cmd := exec.CommandContext(ctx, "pi", args...)
+	cmd := exec.CommandContext(ctx, "pi", piArgs(key, opts)...)
 	cmd.Dir = ws
 	cmd.Env = piEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
 	cmd.Stdin = strings.NewReader("")
@@ -34,6 +30,7 @@ func piAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult
 	// Pi's stream carries no duration; the run's own clock is the only measure of it.
 	ar.DurationMS = time.Since(started).Milliseconds()
 	ar.Raw = tail(out.String(), 64*1024) + "\n--- stderr ---\n" + tail(errb.String(), 4*1024)
+	ar.Transcript = out.Bytes()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		ar.TimedOut = true
 	}
@@ -49,6 +46,23 @@ func piAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult
 		}
 	}
 	return ar, nil
+}
+
+// piArgs builds the Pi invocation. A run with its own config reads no AGENTS.md or CLAUDE.md from the
+// workspace's ancestors and loads no built-in extension, and a bare run (ConfigNone) disables every
+// discovered and configured skill.
+func piArgs(key Key, opts Options) []string {
+	args := []string{"-p", agentPrompt(key), "--mode", "json", "--no-session"}
+	if opts.Model != "" {
+		args = append(args, "--model", opts.Model)
+	}
+	if opts.ConfigDir != "" {
+		args = append(args, "--no-context-files", "--no-extensions")
+		if opts.ConfigMode == ConfigNone {
+			args = append(args, "--no-skills")
+		}
+	}
+	return args
 }
 
 // piContentPart is one part of an assistant message; the text parts are the answer, thinking and

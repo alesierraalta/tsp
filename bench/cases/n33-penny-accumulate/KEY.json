@@ -1,0 +1,48 @@
+{
+  "id": "n33-penny-accumulate",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "etl",
+  "request": "the row-total ETL behavior",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/total.js",
+      "line": 5,
+      "class": "accumulation-drift",
+      "keywords": ["float", "accumulation", "integer-cent", "drift", "precision"],
+      "description": "The total adds decimal-dollar values as binary floating-point numbers, so repeated one-cent rows make the grand total drift from the exact integer-cent sum.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { makeRows, total } from \"./src/total.js\"; const rows = makeRows(10_000); console.log(JSON.stringify({ rows: rows.length, total: total(rows) }));'",
+        "expected": "{\"rows\":10000,\"total\":100}",
+        "actual": "{\"rows\":10000,\"total\":100.00000000001425}"
+      },
+      "why_missed": "The happy suite sums only a few exactly representable amounts, so repeated one-cent additions never reach the scale that exposes binary drift."
+    },
+    {
+      "id": "D2",
+      "file": "src/total.js",
+      "line": 25,
+      "class": "silent-truncation-parse",
+      "keywords": ["comma", "thousands", "separator", "parsefloat", "truncation"],
+      "description": "parseFloat stops at the comma in a grouped amount, so 1,234.56 is counted as 1 instead of 1,234.56.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { total } from \"./src/total.js\"; console.log(JSON.stringify({ input: \"1,234.56\", total: total([{ amount: \"1,234.56\" }]) }));'",
+        "expected": "{\"input\":\"1,234.56\",\"total\":1234.56}",
+        "actual": "{\"input\":\"1,234.56\",\"total\":1}"
+      },
+      "why_missed": "The happy suite uses ungrouped decimal strings and never checks whether a comma-formatted amount contributes its full value."
+    }
+  ],
+  "traps": [
+    {
+      "id": "T1",
+      "file": "src/total.js",
+      "line": 18,
+      "class": "documented-display-rounding",
+      "keywords": ["display", "rounding", "per-row", "formatting", "presentation"],
+      "description": "Each row's display value is rounded independently to cents for presentation; the display helper does not alter the aggregate.",
+      "documented": "README.md:7"
+    }
+  ]
+}

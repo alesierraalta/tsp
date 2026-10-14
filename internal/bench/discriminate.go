@@ -191,10 +191,23 @@ func discriminateDefect(caseDir, fixture, ws string, key Key, d Defect, tests, t
 		onKeep[name] = !redOnKeep[name]
 	}
 	got := defectOutcome{checked: true, attempts: attempts}
+	// A run that failed but never named a trusted test stopped before reporting it: a test that hangs
+	// on the defect is killed by the timeout, or its file is cancelled as a whole. Fixture and variant
+	// differ only by this defect, so that test could not pass here and counts as red. A run that
+	// failed nothing proves nothing about a test it did not list.
+	var stopped []string
 	for _, name := range trusted {
-		if passed, ran := onKeep[name]; ran && !passed {
+		passed, ran := onKeep[name]
+		switch {
+		case ran && !passed:
 			got.caughtBy = append(got.caughtBy, name)
+		case !ran && len(redOnKeep) > 0:
+			stopped = append(stopped, name)
 		}
+	}
+	if len(got.caughtBy) == 0 && len(stopped) > 0 {
+		got.caughtBy = stopped
+		got.note = fmt.Sprintf("%s: caught by a run that stopped before reporting %s (hang or cancelled file)", d.ID, strings.Join(stopped, ", "))
 	}
 	// A test red on the fix and green while the defect stands asserts the defective behaviour: it
 	// resists the fix instead of demanding it.

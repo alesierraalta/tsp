@@ -227,8 +227,8 @@ func runBind(args []string) int {
 	unset := fs.Bool("unset", false, "remove this session's binding instead of writing one")
 	cwd := fs.String("cwd", ".", "directory inside the worktree to bind")
 	configDir := fs.String("config-dir", "", "Claude config directory")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 	if strings.TrimSpace(*session) == "" {
 		fmt.Fprintln(os.Stderr, "bind: --session is required")
@@ -337,8 +337,8 @@ func statusView() (tui.StatusView, error) {
 func runUpdate(args []string) int {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	checkOnly := fs.Bool("check", false, "only check and refresh the cache; never install")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "update: unexpected argument %q\n", fs.Arg(0))
@@ -615,8 +615,8 @@ func runSync(args []string) int {
 	hostsFlag := fs.String("hosts", "", "comma-separated hosts to install into")
 	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
 	force := fs.Bool("force", false, "replace files this tool installed that were modified afterwards, after backing them up")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 
 	selected, err := parseSyncHostsAllowingPi(*hostsFlag, flagSet(fs, "hosts"))
@@ -775,8 +775,8 @@ func runUninstall(args []string) int {
 	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
 	orphans := fs.Bool("orphans", false, "also remove recorded assets the manifest no longer ships")
 	force := fs.Bool("force", false, "snapshot modified files to the central backup store, then remove them")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "uninstall: unexpected argument %q\n", fs.Arg(0))
@@ -809,8 +809,8 @@ func runRestore(args []string) int {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	id := fs.String("id", "", "backup id to restore (default: the latest backup)")
 	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "restore: unexpected argument %q\n", fs.Arg(0))
@@ -838,8 +838,8 @@ func runRepair(args []string) int {
 	configDir := fs.String("config-dir", defaultConfigDir(), "Claude config directory")
 	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
 	force := fs.Bool("force", false, "replace files this tool installed that were modified afterwards, after backing them up")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "repair: unexpected argument %q\n", fs.Arg(0))
@@ -865,8 +865,8 @@ func runDoctor(args []string) int {
 	configDir := fs.String("config-dir", defaultConfigDir(), "Claude config directory")
 	modeFlag := fs.String("mode", mode.Auto, "harness mode: auto, standalone, or gentle")
 	asJSON := fs.Bool("json", false, "machine-readable output")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 	// Resolve before inspecting anything: a mode this build cannot run must be refused at the
 	// flag, with the reason, rather than answered with a report from a different contract.
@@ -909,8 +909,8 @@ func runCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
 	path := fs.String("path", "", "plan file relative to the repository root")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 	if flagSet(fs, "path") {
 		if err := plan.ValidatePlanPath("--path", *path); err != nil {
@@ -948,8 +948,8 @@ func runFeedback(args []string) int {
 	summary := fs.Bool("summary", false, "read the all-history summary without moving the review cursor")
 	pending := fs.Bool("pending", false, "print reports appended since the review cursor")
 	markReviewed := fs.String("mark-reviewed", "", "acknowledge the exact review snapshot token")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 	fileSet := flagSet(fs, "file")
 	if fileSet && *file == "" {
@@ -977,6 +977,12 @@ func runFeedback(args []string) int {
 	}
 	switch {
 	case *template:
+		// A skeleton --file would refuse is three calls spent learning what one can say: with feedback
+		// disabled there is no retrospective to record, and asking for the template is not an error.
+		if enabled, err := feature.Enabled("feedback"); err != nil || !enabled {
+			fmt.Println("feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback")
+			return 0
+		}
 		fmt.Print(feedback.Template(feedback.Report{
 			TS:    time.Now().UTC().Format(time.RFC3339),
 			Repo:  feedback.RepoRoot("."),
@@ -1112,8 +1118,8 @@ func runPlan(args []string) int {
 	sandbox := fs.Bool("sandbox", false, "observe each command inside a container instead of on this machine (admit only; requires --execute and docker)")
 	sandboxImage := fs.String("sandbox-image", sandboxImageDefault, "image the sandbox runs in (admit only; see --sandbox); sandboxImage in the repository declaration overrides this default, which is pulled on first use")
 	commit := fs.String("commit", "", "commit the export covers; the default is the short HEAD of the repository (export only)")
-	if err := fs.Parse(args[1:]); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args[1:]); !ok {
+		return code
 	}
 	if *all && flagSet(fs, "run") {
 		fmt.Fprintln(os.Stderr, "plan gaps: --run and --all cannot combine")
@@ -1483,6 +1489,9 @@ func configModeFor(runner, agentConfig string) string {
 	switch {
 	case agentConfig == "bench":
 		return bench.ConfigBench
+	case agentConfig == "none", runner == bench.RunnerCodex:
+		// Codex runs only bare: the embedded skills target the hosts tsp installs into, not codex.
+		return bench.ConfigNone
 	case agentConfig != "":
 		return bench.ConfigCustom
 	case runner == bench.RunnerPi:
@@ -1497,7 +1506,7 @@ func configModeFor(runner, agentConfig string) string {
 func runBenchRun(args []string) int {
 	fs := flag.NewFlagSet("bench run", flag.ContinueOnError)
 	cases := fs.String("cases", "bench/cases/*", "glob of case directories (each with fixture/ and KEY.json)")
-	runner := fs.String("runner", bench.RunnerPi, "agent runner: pi (default) or claude (last resort)")
+	runner := fs.String("runner", bench.RunnerPi, "agent runner: pi (default), codex (bare baseline only), or claude (last resort)")
 	model := fs.String("model", "", "model for the agent runs; empty uses the runner's default ("+
 		bench.DefaultModel(bench.RunnerPi)+" for pi, "+bench.DefaultModel(bench.RunnerClaude)+" for claude)")
 	runs := fs.Int("runs", 1, "runs per case")
@@ -1512,12 +1521,20 @@ func runBenchRun(args []string) int {
 	retries := fs.Int("retries", 1, "retries per case on infrastructure failures (exit status, error result)")
 	retryDelay := fs.Duration("retry-delay", 60*time.Second, "pause before a retry")
 	workers := fs.Int("concurrency", 1, "cases to run side by side; the wall clock shortens, the cost does not")
-	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the embedded skills (the default for --runner pi)")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the embedded skills (the default for --runner pi); \"none\" builds one with no skill at all, the bare-agent baseline (pi and codex; the only mode for codex)")
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 	if !bench.KnownRunner(*runner) {
-		fmt.Fprintf(os.Stderr, "bench run: unknown runner %q: use %s or %s\n", *runner, bench.RunnerPi, bench.RunnerClaude)
+		fmt.Fprintf(os.Stderr, "bench run: unknown runner %q: use %s, %s or %s\n", *runner, bench.RunnerPi, bench.RunnerCodex, bench.RunnerClaude)
+		return 2
+	}
+	if *runner == bench.RunnerCodex && *agentConfig != "" && *agentConfig != "none" {
+		fmt.Fprintf(os.Stderr, "bench run: --runner codex runs only bare; use --agent-config none or omit it\n")
+		return 2
+	}
+	if *runner == bench.RunnerClaude && *agentConfig == "none" {
+		fmt.Fprintf(os.Stderr, "bench run: --agent-config none needs --runner pi or codex\n")
 		return 2
 	}
 	if *model == "" {
@@ -1528,6 +1545,21 @@ func runBenchRun(args []string) int {
 	}
 	cfgDir, skillFile := *agentConfig, filepath.Join(defaultConfigDir(), "skills", "test-strategy", "SKILL.md")
 	switch {
+	case configModeFor(*runner, *agentConfig) == bench.ConfigNone:
+		// The bare baseline: the operator's login, an empty home, and no skill, AGENTS.md or user config.
+		from := bench.DefaultPiConfigDir()
+		if *runner == bench.RunnerCodex {
+			from = bench.DefaultCodexConfigDir()
+		}
+		cfgDir = filepath.Join(*out, "."+*runner+"-none-config")
+		if err := bench.WriteNoneConfig(cfgDir, *runner, from); err != nil {
+			fmt.Fprintln(os.Stderr, "bench config:", err)
+			return 1
+		}
+		if abs, err := filepath.Abs(cfgDir); err == nil {
+			cfgDir = abs
+		}
+		skillFile = ""
 	case *runner == bench.RunnerPi && (cfgDir == "" || cfgDir == "bench"):
 		// A Pi run always gets a throwaway config: the runner exists so a reading is not shaped by
 		// the operator's packages, extensions, memory protocol, or MCP servers, and so no credential
@@ -1559,7 +1591,7 @@ func runBenchRun(args []string) int {
 			cfgDir = abs
 		}
 	}
-	if cfgDir != "" {
+	if cfgDir != "" && skillFile != "" {
 		skillFile = filepath.Join(cfgDir, "skills", "test-strategy", "SKILL.md")
 	}
 	_, code := bench.Run(bench.Options{
@@ -1585,7 +1617,10 @@ func runBenchScore(args []string) int {
 	ws := fs.String("workspace", "", "workspace to score")
 	planFile := fs.String("plan", "", "plan file to score, such as the test-plan.md a run keeps beside result.json")
 	adjFlag := fs.String("adjudication", "", "adjudication record to apply; named here or not at all, never discovered beside the plan (none is the same as omitting it)")
-	if err := fs.Parse(args); err != nil || *caseDir == "" || (*ws == "") == (*planFile == "") {
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
+	}
+	if *caseDir == "" || (*ws == "") == (*planFile == "") {
 		fmt.Fprintln(os.Stderr, "bench score needs --case and exactly one of --workspace or --plan")
 		return 2
 	}
@@ -1654,11 +1689,26 @@ type adjudicateInput struct {
 	replace  bool
 	show     bool
 	pending  bool
+	helped   bool // the invocation asked for help: the usage was the whole answer
+}
+
+// parseFlags parses a subcommand's flags. Asking for help is answered, not refused: the usage the flag
+// package already printed is the whole reply, so -h and --help exit 0, while any other parse error is a
+// usage error and exits 2. ok is false whenever the command must stop here.
+func parseFlags(fs *flag.FlagSet, args []string) (code int, ok bool) {
+	err := fs.Parse(args)
+	switch {
+	case err == nil:
+		return 0, true
+	case errors.Is(err, flag.ErrHelp):
+		return 0, false
+	}
+	return 2, false
 }
 
 func runBenchAdjudicate(args []string) int {
 	in, code := parseAdjudicate(args)
-	if code != 0 {
+	if code != 0 || in.helped {
 		return code
 	}
 	switch {
@@ -1687,8 +1737,9 @@ func parseAdjudicate(args []string) (adjudicateInput, int) {
 	fs.BoolVar(&in.replace, "replace", false, "displace the decision already standing for the row")
 	fs.BoolVar(&in.show, "show", false, "print the record and the rows it decides")
 	fs.BoolVar(&in.pending, "pending", false, "print the finding rows still undecided")
-	if err := fs.Parse(args); err != nil {
-		return in, 2
+	if code, ok := parseFlags(fs, args); !ok {
+		in.helped = code == 0
+		return in, code
 	}
 	if in.runDir == "" {
 		fmt.Fprintln(os.Stderr, "bench adjudicate: --run <dir> is required")
@@ -1934,7 +1985,10 @@ func runBenchRescore(args []string) int {
 	fs := flag.NewFlagSet("bench rescore", flag.ContinueOnError)
 	benchDir := fs.String("bench-dir", "bench", "benchmark directory holding cases/ and the history")
 	suiteTimeout := fs.Duration("suite-timeout", 10*time.Minute, "cap per suite run")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
+	}
+	if fs.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "bench rescore needs one results directory")
 		return 2
 	}
@@ -1979,8 +2033,8 @@ func runBenchCompare(args []string) int {
 func runBenchHistory(args []string) int {
 	fs := flag.NewFlagSet("bench history", flag.ContinueOnError)
 	benchDir := fs.String("bench-dir", "bench", "benchmark directory")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 	data, err := os.ReadFile(filepath.Join(*benchDir, "history.md"))
 	if err != nil {

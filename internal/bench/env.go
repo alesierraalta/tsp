@@ -3,6 +3,7 @@ package bench
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -57,9 +58,22 @@ func WriteBenchPiConfig(dir, configFrom string) error {
 	if err != nil {
 		return err
 	}
+	// Absolute: the path must resolve to this directory whatever base the agent dir implies.
+	if err := writePiConfig(dir, configFrom, []string{filepath.Join(abs, "skills")}); err != nil {
+		return err
+	}
+	return VerifyBenchSkills(dir)
+}
+
+// writePiConfig writes the settings an isolated Pi run loads, copies the operator's login, and gives the
+// run its own empty home: Pi discovers ~/.agents/skills whatever its settings say, so the operator's own
+// skills are only out of the measurement when HOME is not the operator's.
+func writePiConfig(dir, configFrom string, skills []string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
 	settings, err := json.MarshalIndent(map[string]any{
-		// Absolute: the path must resolve to this directory whatever base the agent dir implies.
-		"skills": []string{filepath.Join(abs, "skills")},
+		"skills": skills,
 		// Empty: the operator's packages bring their own skills, extensions, and MCP servers, which
 		// would cost turns and differ between machines.
 		"packages": []string{},
@@ -90,7 +104,36 @@ func WriteBenchPiConfig(dir, configFrom string) error {
 			return err
 		}
 	}
-	return VerifyBenchSkills(dir)
+	return writeIsolatedHome(dir)
+}
+
+// WriteNoneConfig builds the bare-agent configuration for a runner: the operator's login and an empty
+// home, and nothing that could instruct the agent — no skill, no AGENTS.md, no user config or rules. It
+// is the baseline a skill is measured against.
+func WriteNoneConfig(dir, runner, configFrom string) error {
+	switch runner {
+	case RunnerPi:
+		return writePiConfig(dir, configFrom, []string{})
+	case RunnerCodex:
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		if err := copyFile(filepath.Join(configFrom, CodexAuthFile), filepath.Join(dir, CodexAuthFile)); err != nil {
+			return err
+		}
+		return writeIsolatedHome(dir)
+	default:
+		return fmt.Errorf("runner %q has no bare configuration; use %s or %s", runner, RunnerPi, RunnerCodex)
+	}
+}
+
+// writeIsolatedHome replaces dir's home with an empty one, so a rerun into the same config starts clean.
+func writeIsolatedHome(dir string) error {
+	home := filepath.Join(dir, IsolatedHomeDir)
+	if err := os.RemoveAll(home); err != nil {
+		return err
+	}
+	return os.MkdirAll(home, 0o700)
 }
 
 // copyFile copies src to dst with owner-only permissions and does nothing when src is absent: a
@@ -138,6 +181,15 @@ func writeEmbeddedSkills(dir string) error {
 const (
 	ClaudeConfigEnv = "CLAUDE_CONFIG_DIR"
 	PiConfigEnv     = "PI_CODING_AGENT_DIR"
+	CodexConfigEnv  = "CODEX_HOME"
+)
+
+// CodexAuthFile is the login a bare codex run copies; IsolatedHomeDir is the empty HOME an isolated
+// config gives its agent; agentConfigDir is the per-run copy a run keeps beside its workspace.
+const (
+	CodexAuthFile   = "auth.json"
+	IsolatedHomeDir = "home"
+	agentConfigDir  = "agent-config"
 )
 
 // agentEnv returns the environment for the agent process: CLAUDE_CONFIG_DIR set to cfgDir,
@@ -151,7 +203,48 @@ func agentEnv(base []string, cfgDir, binDir string) []string {
 // credentials, and packages from (docs/environment-variables.md), so a throwaway config dir is
 // what keeps the operator's own configuration out of the measurement.
 func piEnv(base []string, cfgDir, binDir string) []string {
-	return agentEnvWith(base, PiConfigEnv, cfgDir, binDir)
+	return isolateHome(agentEnvWith(base, PiConfigEnv, cfgDir, binDir), cfgDir)
+}
+
+// codexEnv is the same contract for Codex: CODEX_HOME is where it reads its login, config, AGENTS.md
+// and skills, so a throwaway CODEX_HOME holding only the login is what makes a codex run bare.
+func codexEnv(base []string, cfgDir, binDir string) []string {
+	return isolateHome(agentEnvWith(base, CodexConfigEnv, cfgDir, binDir), cfgDir)
+}
+
+// isolateHome points HOME at cfgDir's own home when the config carries one, so nothing the operator keeps
+// under HOME (~/.agents/skills, ~/.codex, ~/.claude, AGENTS.md) reaches the agent. The Go build cache stays
+// the operator's: it holds compiled packages, never instructions.
+func isolateHome(env []string, cfgDir string) []string {
+	if env == nil || cfgDir == "" {
+		return env
+	}
+	home := filepath.Join(cfgDir, IsolatedHomeDir)
+	if st, err := os.Stat(home); err != nil || !st.IsDir() {
+		return env
+	}
+	out := make([]string, 0, len(env)+2)
+	operatorHome, goCache := "", false
+	for _, e := range env {
+		switch {
+		case strings.HasPrefix(e, "HOME="):
+			operatorHome = strings.TrimPrefix(e, "HOME=")
+			continue
+		// XDG's home-scoped directories are operator configuration too: left alone they point at the
+		// operator's own config, data, state, and cache whatever HOME says.
+		case strings.HasPrefix(e, "XDG_CONFIG_HOME="), strings.HasPrefix(e, "XDG_DATA_HOME="),
+			strings.HasPrefix(e, "XDG_STATE_HOME="), strings.HasPrefix(e, "XDG_CACHE_HOME="):
+			continue
+		case strings.HasPrefix(e, "GOCACHE="):
+			goCache = true
+		}
+		out = append(out, e)
+	}
+	out = append(out, "HOME="+home)
+	if operatorHome != "" && !goCache {
+		out = append(out, "GOCACHE="+filepath.Join(operatorHome, ".cache", "go-build"))
+	}
+	return out
 }
 
 func agentEnvWith(base []string, configKey, cfgDir, binDir string) []string {
@@ -174,6 +267,18 @@ func agentEnvWith(base []string, configKey, cfgDir, binDir string) []string {
 		out = append(out, prefix+cfgDir)
 	}
 	return out
+}
+
+// DefaultCodexConfigDir is where Codex keeps its login when CODEX_HOME is unset.
+func DefaultCodexConfigDir() string {
+	if dir := os.Getenv(CodexConfigEnv); dir != "" {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".codex")
 }
 
 // DefaultPiConfigDir is where Pi keeps its agent directory when PI_CODING_AGENT_DIR is unset; the

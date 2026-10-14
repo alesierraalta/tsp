@@ -511,7 +511,8 @@ only a brief acknowledgment after a successful write; the summary groups by proj
 verdict it could not classify.
 
 ```sh
-tsp feedback --template          # a fillable skeleton with the run's identity already filled
+tsp feedback --template          # a fillable skeleton with the run's identity already filled;
+                                 # with feedback disabled it says so instead and exits 0
 tsp feedback --file report.md    # record one report; refusals exit 2 and write nothing
 tsp feedback --summary           # counts per verdict and per skill version, plus the guesses
 tsp feedback                     # no flags: the summary, the cheapest path to the answer
@@ -571,7 +572,18 @@ Each case ships `fix/all/` (every defect fixed) and, when it has more than one, 
 (every defect but that one fixed). The test files the agent added or changed are carried onto each
 variant and run per test: a test green on `fix/all` and red on `fix/keep-D` catches D. A test red
 on `fix/all` is broken or written to another API, so it is ignored and counted separately; a test
-green everywhere catches nothing.
+green everywhere catches nothing. A test that hangs on `fix/keep-D` is killed by the suite timeout
+or cancelled with its whole file, so the run never names it: when a failed variant run never lists a
+test that was green on `fix/all`, that test catches D, and the catch notes say so.
+
+**Why it was missed** gives every uncaught defect of a valid run one reason, stored as `misses`
+in `result.json`, counted in `aggregate.json`, and listed with example runs under "Why defects
+were missed" in `summary.md`: *seen, no test written* (the run named it and left no test), *seen,
+tests missed it*, *tests pin the defect* (a test green with it and red once fixed), *tests blind to it*
+(tests written, defect never named), *never looked*, and *not
+checkable*. "Seen" is mechanical: a plan finding credited to the defect, or the agent's final
+message (kept as `final_message`) citing its location or naming one of its keywords. The section
+also counts the runs whose tests are red on the reference fix or pin the defective behaviour.
 
 **Pinned** reads the plan's `Pinning test` cell: it counts defects whose finding names a test that
 holds them. Naming a test and having one that distinguishes the defect are different claims, so
@@ -582,7 +594,8 @@ The gap between the columns is the interesting number. A run can report a defect
 pinned with a test, or catch one it never wrote down.
 
 Per run: `result.json` and the `test-plan.md` it produced, kept even when the workspace is
-removed. Per bench: `aggregate.json`, `summary.md`, one line in `bench/history.jsonl` and one row
+removed, plus `agent.log` (the tail of each attempt's stream) and `transcript-<attempt>.jsonl.gz`
+(the whole stream, so a reading can see where a run's turns went). Per bench: `aggregate.json`, `summary.md`, one line in `bench/history.jsonl` and one row
 in `bench/history.md` with the installed `test-strategy` version, so skill versions compare on
 identical fixtures. `--dry-run` scaffolds and checks fixtures without spawning or recording;
 `--max-cost-usd` stops early with exit code 2; a run with any failed or invalid case exits 3, so a
@@ -605,6 +618,40 @@ state straight through the link, logging the operator out of Claude Code everywh
 holds the line: the copy is a regular file, not a link, and the source still holds its token
 afterwards. When the operator has no `auth.json`, the run is not stopped: it says so and lets the CLI
 report the authentication error itself, as a failed case.
+
+Every isolated config also carries its own empty `home/`, and the run's `HOME` points at it. Pi
+discovers `~/.agents/skills/` whatever its settings say, so without that the operator's own skills
+(on many machines a symlink to `~/.claude/skills`, an installed `test-strategy` included) would leak
+into a reading that claims to measure only the embedded ones. Isolated Pi runs also pass
+`--no-context-files`, `--no-extensions`, and — for `--agent-config none` — `--no-skills`, so no
+`AGENTS.md` or `CLAUDE.md` above the workspace instructs the agent and no built-in extension
+registers tools behind the measurement. The home-scoped `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+`XDG_STATE_HOME`, and `XDG_CACHE_HOME` variables are dropped for the same reason: user-level config
+is found through `HOME`, so an inherited XDG path would undo the throwaway home. The Go build cache
+stays the operator's: it holds compiled packages, never instructions.
+
+Each run works on its own copy of that prepared config, kept beside its workspace and removed with
+it. A worker pool runs several cases at once, and one shared config would let them see each other's
+login refreshes, caches, and home writes — exactly the state the throwaway config exists to keep out
+of a measurement.
+
+`--agent-config none` is the bare-agent baseline a skill is measured against: the same isolation
+with no skill at all (`--no-skills` for Pi). The Codex runner (`--runner codex`) runs only bare:
+`codex exec --json` with a throwaway `CODEX_HOME` holding only `auth.json`, `--ignore-user-config`,
+`--ignore-rules`, `--ephemeral`, and no approval prompt; it defaults to `gpt-6-luna`. Codex reports
+tokens but no price, so a codex run records no cost and `--max-cost-usd` never stops it. Its turns
+count the actions the agent completed (commands, file changes, tool calls), the unit closest to the
+other runners' turns; a stream that ends without a completion event is an error, not an empty
+success. Comparing arms:
+
+```
+tsp bench run --runner codex --cases 'bench/cases/*'                       # codex, nothing
+tsp bench run --runner pi --agent-config none --cases 'bench/cases/*'      # pi, nothing
+tsp bench run --runner pi --agent-config bench --cases 'bench/cases/*'     # pi with the tsp skills
+```
+
+The bare arms write no tsp plan, so their reported column is empty by construction: caught is the
+measure that compares across arms.
 
 ## License
 
