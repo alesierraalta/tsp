@@ -593,7 +593,8 @@ The gap between the columns is the interesting number. A run can report a defect
 pinned with a test, or catch one it never wrote down.
 
 Per run: `result.json` and the `test-plan.md` it produced, kept even when the workspace is
-removed. Per bench: `aggregate.json`, `summary.md`, one line in `bench/history.jsonl` and one row
+removed, plus `agent.log` (the tail of each attempt's stream) and `transcript-<attempt>.jsonl.gz`
+(the whole stream, so a reading can see where a run's turns went). Per bench: `aggregate.json`, `summary.md`, one line in `bench/history.jsonl` and one row
 in `bench/history.md` with the installed `test-strategy` version, so skill versions compare on
 identical fixtures. `--dry-run` scaffolds and checks fixtures without spawning or recording;
 `--max-cost-usd` stops early with exit code 2; a run with any failed or invalid case exits 3, so a
