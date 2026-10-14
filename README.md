@@ -653,6 +653,16 @@ tsp bench run --runner pi --agent-config bench --cases 'bench/cases/*'     # pi 
 The bare arms write no tsp plan, so their reported column is empty by construction: caught is the
 measure that compares across arms.
 
+Given only the bench prompt (`haz el testing`), a bare agent usually reruns the existing suite and
+stops, so the comparison measures what the skill adds over an agent that does not search. To compare
+search strategies instead, give every arm the same explicit instruction with `--prompt`; the text is
+recorded as `prompt` in the run's provenance, so readings taken with different prompts never pass
+for one measurement:
+
+```
+tsp bench run --runner codex --prompt 'find the defects and pin each with a failing test' --cases 'bench/cases/*'
+```
+
 ## License
 
 Apache-2.0. See `LICENSE` and `NOTICE` for the attribution of the skills derived from the
