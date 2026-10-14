@@ -1,0 +1,37 @@
+{
+  "id": "f22-batch-publish",
+  "family": "resilience-io",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "publish.go",
+      "line": 15,
+      "class": "partial-rollback",
+      "keywords": ["rollback", "undo", "partial", "state"],
+      "description": "Rollback skips the first completed write, leaving state behind after a later application fails.",
+      "trigger": {
+        "input": "d=$(mktemp -d /tmp/tpp-T14-state-XXXXXXXX); printf '%s' 'package main\nimport(\"errors\";\"fmt\";p \"example.com/publish\")\nfunc main(){state:=0;err:=p.Publish([]p.Step{{Apply:func()error{state+=7;return nil},Undo:func()error{state-=7;return nil}},{Apply:func()error{state+=11;return nil},Undo:func()error{state-=11;return nil}},{Apply:func()error{return errors.New(\"offline\")},Undo:func()error{return nil}}});fmt.Printf(\"failed=%t state=%d\\n\",err!=nil,state)}\n' > \"$d/main.go\"; go run \"$d/main.go\"",
+        "actual": "failed=true state=7",
+        "expected": "failed=true state=0"
+      },
+      "why_missed": "S9(a,d): three applications followed by compensation; an error assertion or verification that the most recent write was undone is green even when an older externally visible write survives."
+    },
+    {
+      "id": "D2",
+      "file": "publish.go",
+      "line": 17,
+      "class": "cleanup-error-loss",
+      "keywords": ["cleanup", "error", "join", "compensation"],
+      "description": "A failing undo rejoins only the application error and drops the cleanup error identity.",
+      "trigger": {
+        "input": "d=$(mktemp -d /tmp/tpp-T14-errors-XXXXXXXX); printf '%s' 'package main\nimport(\"errors\";\"fmt\";p \"example.com/publish\")\nfunc main(){apply:=errors.New(\"offline\");cleanup:=errors.New(\"cleanup\");err:=p.Publish([]p.Step{{Apply:func()error{return nil},Undo:func()error{return nil}},{Apply:func()error{return nil},Undo:func()error{return cleanup}},{Apply:func()error{return apply},Undo:func()error{return nil}}});fmt.Printf(\"apply=%t cleanup=%t\\n\",errors.Is(err,apply),errors.Is(err,cleanup))}\n' > \"$d/main.go\"; go run \"$d/main.go\"",
+        "actual": "apply=true cleanup=false",
+        "expected": "apply=true cleanup=true"
+      },
+      "why_missed": "S9(a,d): three applications and a failing compensation; non-nil and original-error assertions cannot detect loss of cleanup identity. Testing only the first undo's error is also masked by D1; this trigger uses the second completed step."
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "id": "f28-credit-reservoir",
+  "language": "go",
+  "family": "boundary",
+  "suite": "go test ./...",
+  "surface": "state-machine",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "reservoir.go",
+      "line": 24,
+      "class": "replayed-refund-capacity-overflow",
+      "keywords": [
+        "refund",
+        "receipt",
+        "capacity",
+        "replay"
+      ],
+      "description": "Refund leaves the receipt live, so a replay after another reservation can make available units exceed capacity.",
+      "trigger": {
+        "input": "d=$(mktemp -d /tmp/tpp-T17-refund-XXXXXXXX); printf '%s' 'package main\nimport (\"fmt\"; r \"example.com/reservoir\")\nfunc main(){s:=r.New(5);id:=s.Reserve(2);s.Refund(id);s.Reserve(1);s.Refund(id);fmt.Println(s.Available(),s.Capacity())}\n' > \"$d/main.go\"; timeout 60s go run \"$d/main.go\"",
+        "expected": "4 5",
+        "actual": "6 5"
+      },
+      "why_missed": "The first refund is correct in both variants; a content test stopping there cannot establish receipt settlement. S9(a): reserve/refund/reserve/refund sequence."
+    },
+    {
+      "id": "D2",
+      "file": "reservoir.go",
+      "line": 29,
+      "class": "reservation-count-capacity-check",
+      "keywords": [
+        "resize",
+        "units",
+        "capacity",
+        "reservation"
+      ],
+      "description": "Resize checks receipt count instead of reserved units and accepts a capacity below the outstanding reservation's size.",
+      "trigger": {
+        "input": "d=$(mktemp -d /tmp/tpp-T17-resize-XXXXXXXX); printf '%s' 'package main\nimport (\"fmt\"; r \"example.com/reservoir\")\nfunc main(){s:=r.New(5);s.Reserve(3);s.Resize(4);ok:=s.Resize(2);fmt.Println(ok,s.Capacity(),s.Available())}\n' > \"$d/main.go\"; timeout 60s go run \"$d/main.go\"",
+        "expected": "false 4 1",
+        "actual": "true 2 0"
+      },
+      "why_missed": "Checking only nonnegative availability passes even with overcommitted reservations; counting receipts is a plausible but wrong oracle. S9(a,d): reserve/resize/resize and unit conservation rather than receipt count."
+    }
+  ]
+}

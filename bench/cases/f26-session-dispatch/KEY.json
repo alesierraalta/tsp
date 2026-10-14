@@ -1,0 +1,37 @@
+{
+  "id": "f26-session-dispatch",
+  "family": "security",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/index.js",
+      "line": 21,
+      "class": "revoked-session-refresh",
+      "keywords": ["revoked", "refresh", "session", "authorization"],
+      "description": "Refresh accepts an unexpired revoked source and issues a usable independent session.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { Sessions } from \"./src/index.js\"; const s = new Sessions(() => 0); const token = s.issue(\"alice\",10); s.revoke(token); try { const renewed = s.refresh(token,10); const ticket = s.submit(renewed,\"hello\"); s.dispatch(ticket); } catch {} console.log(JSON.stringify(s.effects()));'",
+        "expected": "[]",
+        "actual": "[{\"subject\":\"alice\",\"message\":\"hello\"}]"
+      },
+      "why_missed": "S9(a): issue, revoke, refresh, submit, dispatch demonstrates authority resurrection. Testing that the original revoked token is rejected names revocation but is green on every variant; the newly issued credential must actually be exercised."
+    },
+    {
+      "id": "D2",
+      "file": "src/index.js",
+      "line": 34,
+      "class": "dispatch-expiration-authorization",
+      "keywords": ["expiration", "dispatch", "queue", "authorization"],
+      "description": "Dispatch checks revocation but omits expiration, allowing an admitted job to execute with an expired session.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { Sessions } from \"./src/index.js\"; let now = 0; const s = new Sessions(() => now); const token = s.issue(\"alice\",10); const ticket = s.submit(token,\"hello\"); now = 10; try { s.dispatch(ticket); } catch {} console.log(JSON.stringify(s.effects()));'",
+        "expected": "[]",
+        "actual": "[{\"subject\":\"alice\",\"message\":\"hello\"}]"
+      },
+      "why_missed": "S9(a,d): issue, submit, clock advance, dispatch requires authorization at execution, not merely admission. An expired-submission rejection test never distinguishes variants; the naive queue oracle expects delivery of an already accepted message."
+    }
+  ]
+}

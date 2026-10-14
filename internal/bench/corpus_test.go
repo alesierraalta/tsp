@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -105,11 +104,23 @@ func TestCorpusKeyLinesSitOnTheFixedStatement(t *testing.T) {
 				continue
 			}
 			cited := lines[d.Line-1]
-			if strings.TrimSpace(cited) == "" || slices.Contains(strings.Split(string(fixed), "\n"), cited) {
+			// A statement repeated elsewhere in the file stays in fix/all where it is not the defect, so the
+			// fix must remove at least one of its occurrences rather than all of them.
+			if strings.TrimSpace(cited) == "" || occurrences(strings.Split(string(fixed), "\n"), cited) >= occurrences(lines, cited) {
 				t.Errorf("%s %s: %s:%d %q is not a statement fix/all changes", filepath.Base(c), d.ID, d.File, d.Line, strings.TrimSpace(cited))
 			}
 		}
 	}
+}
+
+func occurrences(lines []string, line string) int {
+	n := 0
+	for _, l := range lines {
+		if l == line {
+			n++
+		}
+	}
+	return n
 }
 
 func TestCorpusShipsCleanControlsWithoutFixVersions(t *testing.T) {

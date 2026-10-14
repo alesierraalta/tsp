@@ -1,0 +1,37 @@
+{
+  "id": "f21-delivery-session",
+  "family": "resilience-io",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/index.js",
+      "line": 4,
+      "class": "retry-idempotency-loss",
+      "keywords": ["retry", "idempotency", "receipt", "duplicate"],
+      "description": "The third send changes the operation key, allowing an acknowledged-late write to be committed twice.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { deliver } from \"./src/index.js\"; let calls=0,total=0; const receipts=new Map(); const reply=await deliver(\"invoice\",7,async(key,value)=>{if(!receipts.has(key)){total+=value;receipts.set(key,\"accepted\");} if(++calls<3) throw Error(\"lost acknowledgement\"); return receipts.get(key);}); console.log(JSON.stringify({reply,total,calls}));'",
+        "actual": "{\"reply\":\"accepted\",\"total\":14,\"calls\":3}",
+        "expected": "{\"reply\":\"accepted\",\"total\":7,\"calls\":3}"
+      },
+      "why_missed": "S9(a,d): three sends after committed-but-unacknowledged writes; checking the successful receipt or retry count uses an oracle identical on every variant, not the durable side effect."
+    },
+    {
+      "id": "D2",
+      "file": "src/index.js",
+      "line": 18,
+      "class": "retry-budget-reset",
+      "keywords": ["budget", "remaining", "deadline", "allowance"],
+      "description": "The third invocation receives a fresh budget instead of the allowance left by earlier invocations.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { request } from \"./src/index.js\"; let clock=0,calls=0; const allowances=[]; const reply=await request(10,()=>clock,async remaining=>{allowances.push(remaining);clock+=Math.min(4,remaining);if(++calls<3) throw Error(\"offline\");return \"ready\";}); console.log(JSON.stringify({reply,clock,allowances}));'",
+        "actual": "{\"reply\":\"ready\",\"clock\":12,\"allowances\":[10,6,10]}",
+        "expected": "{\"reply\":\"ready\",\"clock\":10,\"allowances\":[10,6,2]}"
+      },
+      "why_missed": "S9(a,d): the third invocation consumes prior work's allowance; asserting eventual success or using a stationary clock cannot distinguish a shared budget from a reset budget."
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+export class ProjectionStore {
+  #rows = new Map();
+  #pages = new Map();
+  #generation = 0;
+  constructor(project) { this.project = project; }
+  update(key, value) {
+    this.#rows.set(key, value);
+    this.#generation++;
+  }
+  page() {
+    if (!this.#pages.has(this.#generation)) {
+      this.#pages.set(this.#generation, [...this.#rows.values()].map(this.project));
+    }
+    return [...this.#pages.get(this.#generation)];
+  }
+  get retainedPages() { return this.#pages.size; }
+}
+
+export function mergeBatches(batches, keyOf) {
+  let indexed = new Map();
+  for (const batch of batches) {
+    if (indexed.size >= 1000) {
+      indexed = new Map([...indexed.values()].map(row => [keyOf(row), row]));
+    }
+    for (const row of batch) indexed.set(keyOf(row), row);
+  }
+  return [...indexed.values()];
+}
