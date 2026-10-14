@@ -1,0 +1,47 @@
+{
+  "id": "f34-service-calendar",
+  "family": "time",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/schedule.js",
+      "line": 31,
+      "class": "monthly-anchor-drift",
+      "keywords": [
+        "monthly",
+        "anchor",
+        "clamping",
+        "recurrence"
+      ],
+      "description": "Advancement adopts the previously clamped day instead of the original monthly anchor.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { Schedule } from \"./src/schedule.js\"; const s=new Schedule(); s.add(\"a\",\"2024-01-31T09:00:00Z\"); s.next(\"a\"); console.log(s.next(\"a\"));'",
+        "expected": "2024-03-31T09:00:00.000Z",
+        "actual": "2024-03-29T09:00:00.000Z"
+      },
+      "why_missed": "S9(a,d): add, advance, advance. A naive month-to-month oracle treats the February date as the next anchor; the original anchor must survive clamping."
+    },
+    {
+      "id": "D2",
+      "file": "src/reservations.js",
+      "line": 28,
+      "class": "clock-domain-expiration",
+      "keywords": [
+        "clock",
+        "elapsed",
+        "deadline",
+        "wall"
+      ],
+      "description": "Reservation expiry compares a wall instant with an elapsed-clock deadline.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { Clock } from \"./src/clock.js\"; import { Catalog } from \"./src/catalog.js\"; import { Reservations } from \"./src/reservations.js\"; const c=new Clock(0); const cat=new Catalog(); cat.register(\"repair\"); const r=new Reservations(cat,c); const id=r.hold(\"repair\",100000,100); c.advance(10); c.adjustWall(1000000); console.log(r.status(id));'",
+        "expected": "held",
+        "actual": "expired"
+      },
+      "why_missed": "S9(a,b): hold, advance, wall adjustment, status at a million milliseconds. Clock is correct in both independent domains; Reservations uses the wrong domain. Happy tests advance synchronized clocks."
+    }
+  ]
+}

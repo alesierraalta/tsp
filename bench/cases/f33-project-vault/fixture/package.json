@@ -1,0 +1,8 @@
+{
+  "name": "f33-project-vault",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "id": "f29-document-relay",
+  "language": "node",
+  "family": "resilience-io",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/transport.js",
+      "line": 16,
+      "class": "retry-body-consumption",
+      "keywords": [
+        "retry",
+        "iterator",
+        "body",
+        "replay"
+      ],
+      "description": "Upload retries reuse an advanced body iterator, so successful replacement requests can omit previously consumed chunks.",
+      "trigger": {
+        "input": "timeout 15s node --input-type=module -e 'import {Session} from \"./src/session.js\"; import {MemoryEndpoint} from \"./src/endpoint.js\"; import {TransferError} from \"./src/retry.js\"; const endpoint=new MemoryEndpoint(async ({attempt,position})=>{if(attempt<3 && position===0) throw new TransferError(\"offline\");}); const session=new Session(endpoint,{chunkSize:2,attempts:3}); session.enqueue(\"a\",\"abcdef\"); await session.flush(); console.log(JSON.stringify({body:endpoint.read(\"default/a\").toString(),requests:endpoint.stats().requests}));'",
+        "expected": "{\"body\":\"abcdef\",\"requests\":3}",
+        "actual": "{\"body\":\"ef\",\"requests\":3}"
+      },
+      "why_missed": "S9(a,d): two failed replacement attempts followed by success consume a shared cursor; a success-only oracle accepts the receipt without checking the original bytes. Endpoint iteration and retry policy pass their independent contracts."
+    },
+    {
+      "id": "D2",
+      "file": "src/session.js",
+      "line": 30,
+      "class": "premature-spool-acknowledgement",
+      "keywords": [
+        "receipt",
+        "commit",
+        "acknowledge",
+        "storage"
+      ],
+      "description": "Flush drops a pending entry before its receipt commits, losing the recovery obligation when receipt storage fails.",
+      "trigger": {
+        "input": "timeout 15s node --input-type=module -e 'import {Session} from \"./src/session.js\"; import {MemoryEndpoint} from \"./src/endpoint.js\"; import {Receipts} from \"./src/receipts.js\"; let writes=0; const receipts=new Receipts(async()=>{if(++writes===1) throw new Error(\"disk unavailable\");}); const session=new Session(new MemoryEndpoint(),{},receipts); session.enqueue(\"a\",\"report\"); try {await session.flush();} catch {} await session.flush(); console.log(JSON.stringify({pending:session.status().pending,delivered:session.status().delivered,receipt:session.receipt(\"a\")?.bytes??null}));'",
+        "expected": "{\"pending\":0,\"delivered\":1,\"receipt\":6}",
+        "actual": "{\"pending\":0,\"delivered\":0,\"receipt\":null}"
+      },
+      "why_missed": "S9(a,d): enqueue, failed receipt commit, and another flush leave no receipt despite an empty spool. Journal acknowledgement and atomic receipt save are individually correct, but their ordering is not."
+    }
+  ]
+}

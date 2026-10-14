@@ -1,0 +1,47 @@
+{
+  "id": "f32-stock-desk",
+  "family": "state-logic",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "state-machine",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "release.go",
+      "class": "partial-shipment-release",
+      "keywords": [
+        "release",
+        "remaining",
+        "shipped",
+        "inventory"
+      ],
+      "description": "Release credits the full original reservation after dispatch has already consumed part of it, restocking shipped units.",
+      "trigger": {
+        "input": "timeout 45s go run ./cmd/stockdesk receive:book:10 reserve:a:book:6 dispatch:a:first:2 release:a balance:book",
+        "actual": "10",
+        "expected": "8"
+      },
+      "why_missed": "S9(a,d): receive, reserve, partial dispatch, release violates stock conservation. The naive undo oracle returns the original quantity; the contract returns only unshipped units. Partial dispatch and full reservation release are tested separately.",
+      "line": 13
+    },
+    {
+      "id": "D2",
+      "file": "dispatch.go",
+      "class": "receipt-cycle-aliasing",
+      "keywords": [
+        "receipt",
+        "cycle",
+        "reopen",
+        "request"
+      ],
+      "description": "Dispatch uses a receipt key without the fulfillment cycle, so reopening an order replays an old receipt instead of shipping newly reserved stock.",
+      "trigger": {
+        "input": "timeout 45s go run ./cmd/stockdesk receive:book:20 reserve:a:book:4 dispatch:a:parcel:4 reopen:a:4 dispatch:a:parcel:4 order:a",
+        "actual": "remaining=4 shipped=0 cycle=2",
+        "expected": "remaining=0 shipped=4 cycle=2"
+      },
+      "why_missed": "S9(a,d): reserve, dispatch, reopen, dispatch reuses a request identifier in a new cycle. The receipt store correctly deduplicates exact keys and reopen correctly advances the cycle, but their dispatch composition omits that namespace. Tests retry within one cycle and use a fresh request after reopening.",
+      "line": 13
+    }
+  ]
+}

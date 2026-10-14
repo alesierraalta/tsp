@@ -1,0 +1,47 @@
+{
+  "id": "f31-profile-exchange",
+  "family": "contract",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/client.js",
+      "class": "patch-null-elision",
+      "keywords": [
+        "patch",
+        "null",
+        "compact",
+        "clear"
+      ],
+      "description": "The update adapter compacts a patch as a creation payload, removing explicit null before the codec can transmit a field clear.",
+      "trigger": {
+        "input": "timeout 30s node --input-type=module -e 'import { Service } from \"./src/service.js\"; const c = new Service().client(); c.create({id:\"a\",email:\"old@example.test\"}); c.update(\"a\",{name:\"Alice\"}); c.update(\"a\",{email:null}); console.log(JSON.stringify(c.read(\"a\")));'",
+        "actual": "{\"id\":\"a\",\"name\":\"Alice\",\"email\":\"old@example.test\",\"team\":null,\"note\":null}",
+        "expected": "{\"id\":\"a\",\"name\":\"Alice\",\"email\":null,\"team\":null,\"note\":null}"
+      },
+      "why_missed": "S9(a,d): create, update, clear, read crosses the transport boundary. The standalone creation normalizer and patch codec are correct, and each is tested, but ordinary text updates never expose their incompatible composition. A naive sparse-object oracle treats null as omission.",
+      "line": 21
+    },
+    {
+      "id": "D2",
+      "file": "src/export.js",
+      "class": "csv-positional-contract",
+      "keywords": [
+        "csv",
+        "null",
+        "column",
+        "position"
+      ],
+      "description": "CSV export removes null cells from data rows while retaining the negotiated header, shifting later fields into the wrong columns.",
+      "trigger": {
+        "input": "timeout 30s node --input-type=module -e 'import { Service } from \"./src/service.js\"; const c = new Service().client(); c.create({id:\"a\",name:\"Alice\",team:\"ops\"}); c.update(\"a\",{name:\"Alicia\"}); console.log(JSON.stringify(c.export([\"id\",\"email\",\"name\"])));'",
+        "actual": "\"id,email,name\\na,Alicia\"",
+        "expected": "\"id,email,name\\na,,Alicia\""
+      },
+      "why_missed": "S9(a,d): create, update, export projects an omitted nullable field between populated columns. The naive oracle counts populated values; the protocol requires one cell per selected column. Existing CSV checks select populated columns, while codec and null-cell tests are independently green.",
+      "line": 19
+    }
+  ]
+}

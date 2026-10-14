@@ -104,23 +104,55 @@ func TestCorpusKeyLinesSitOnTheFixedStatement(t *testing.T) {
 				continue
 			}
 			cited := lines[d.Line-1]
-			// A statement repeated elsewhere in the file stays in fix/all where it is not the defect, so the
-			// fix must remove at least one of its occurrences rather than all of them.
-			if strings.TrimSpace(cited) == "" || occurrences(strings.Split(string(fixed), "\n"), cited) >= occurrences(lines, cited) {
+			// The fix may rewrite the statement, delete one of its repeats, or move it (an ordering defect keeps
+			// the statement and changes where it runs), so the test asks the diff: the cited line must sit on or
+			// next to a line fix/all changes. A reflowed key points several lines away from any change.
+			if strings.TrimSpace(cited) == "" || !nearChange(changedLines(lines, strings.Split(string(fixed), "\n")), d.Line-1) {
 				t.Errorf("%s %s: %s:%d %q is not a statement fix/all changes", filepath.Base(c), d.ID, d.File, d.Line, strings.TrimSpace(cited))
 			}
 		}
 	}
 }
 
-func occurrences(lines []string, line string) int {
-	n := 0
-	for _, l := range lines {
-		if l == line {
-			n++
+// changedLines marks the lines of a that a longest-common-subsequence diff against b does not keep.
+func changedLines(a, b []string) []bool {
+	lcs := make([][]int, len(a)+1)
+	for i := range lcs {
+		lcs[i] = make([]int, len(b)+1)
+	}
+	for i := len(a) - 1; i >= 0; i-- {
+		for j := len(b) - 1; j >= 0; j-- {
+			if a[i] == b[j] {
+				lcs[i][j] = lcs[i+1][j+1] + 1
+			} else {
+				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
+			}
 		}
 	}
-	return n
+	changed := make([]bool, len(a))
+	for i, j := 0, 0; i < len(a); {
+		switch {
+		case j < len(b) && a[i] == b[j]:
+			i, j = i+1, j+1
+		case j < len(b) && lcs[i][j+1] >= lcs[i+1][j]:
+			j++
+		default:
+			changed[i] = true
+			i++
+		}
+	}
+	return changed
+}
+
+// nearChange reports whether line i, or a line next to it, is changed: a swap of two adjacent statements
+// leaves one of the pair in the common subsequence.
+func nearChange(changed []bool, i int) bool {
+	for k := i - 1; k <= i+1; k++ {
+		if k >= 0 && k < len(changed) && changed[k] {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCorpusShipsCleanControlsWithoutFixVersions(t *testing.T) {
