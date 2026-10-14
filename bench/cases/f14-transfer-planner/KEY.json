@@ -1,0 +1,45 @@
+{
+  "id": "f14-transfer-planner",
+  "language": "go",
+  "family": "performance",
+  "suite": "go test ./...",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "transfer.go",
+      "line": 7,
+      "class": "duplicate-read-amplification",
+      "keywords": [
+        "duplicate",
+        "reader",
+        "deduplication"
+      ],
+      "description": "Fetch shares reads only between adjacent equal keys instead of across the call.",
+      "trigger": {
+        "input": "d=$(mktemp -d /tmp/tpp-t9-fetch-XXXXXXXX); printf '%s' 'package main\nimport (\"fmt\"; transfer \"example.com/transfer\")\nfunc main(){calls:=0; keys:=make([]string,1000); for i:=range keys {if i%2==0 {keys[i]=\"a\"} else {keys[i]=\"b\"}}; values:=transfer.Fetch(keys,func(k string)string{calls++;return k}); if len(values)!=1000 {panic(\"length\")}; fmt.Println(calls)}\n' > \"$d/main.go\"; go run \"$d/main.go\"",
+        "actual": "1000",
+        "expected": "2"
+      },
+      "why_missed": "Small happy-path payload assertions do not establish the global remote-I/O work oracle."
+    },
+    {
+      "id": "D2",
+      "file": "transfer.go",
+      "line": 20,
+      "class": "empty-write-amplification",
+      "keywords": [
+        "empty",
+        "write",
+        "chunk"
+      ],
+      "description": "Send emits an empty final write when the payload ends on a block boundary.",
+      "trigger": {
+        "input": "d=$(mktemp -d /tmp/tpp-t9-send-XXXXXXXX); printf '%s' 'package main\nimport (\"fmt\"; transfer \"example.com/transfer\")\nfunc main(){calls:=0; bytes:=0; transfer.Send(make([]byte,1000000),1000,func(b []byte){calls++;bytes+=len(b)}); if bytes!=1000000 {panic(\"bytes\")}; fmt.Println(calls)}\n' > \"$d/main.go\"; go run \"$d/main.go\"",
+        "actual": "1001",
+        "expected": "1000"
+      },
+      "why_missed": "Small happy-path payload assertions do not establish the global remote-I/O work oracle."
+    }
+  ]
+}

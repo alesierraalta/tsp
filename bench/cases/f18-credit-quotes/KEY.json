@@ -1,0 +1,32 @@
+{
+  "id": "f18-credit-quotes",
+  "family": "numeric",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1", "file": "src/quotes.js", "line": 2,
+      "class": "signed-half-rounding",
+      "keywords": ["rounding", "halfway", "negative", "symmetric"],
+      "description": "Math.round chooses the integer toward positive infinity at negative ties instead of the contracted away-from-zero result.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {roundMinor} from \"./src/quotes.js\"; console.log(roundMinor(-2.5));'",
+        "expected": "-3", "actual": "-2"
+      },
+      "why_missed": "S9(d): the familiar JavaScript rounding oracle says -2, but the signed monetary contract requires -3; positive ties and negative non-ties do not distinguish them."
+    },
+    {
+      "id": "D2", "file": "src/quotes.js", "line": 6,
+      "class": "credit-tax-sign",
+      "keywords": ["credit", "tax", "sign", "absolute"],
+      "description": "Tax is computed on absolute net, making credits carry a charge rather than reverse the signed tax.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {quoteAdjustment} from \"./src/quotes.js\"; console.log(JSON.stringify(quoteAdjustment(-1000,2000)));'",
+        "expected": "{\"netMinor\":-1000,\"taxMinor\":-200,\"grossMinor\":-1200}",
+        "actual": "{\"netMinor\":-1000,\"taxMinor\":200,\"grossMinor\":-800}"
+      },
+      "why_missed": "S9(d): treating tax as an unsigned payable amount makes +200 look reasonable, but the credit contract requires reversing it to -200; an integral tax isolates this from rounding."
+    }
+  ]
+}

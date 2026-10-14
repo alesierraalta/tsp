@@ -1,0 +1,45 @@
+{
+  "id": "f19-tail-window",
+  "family": "boundary",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/index.js",
+      "line": 8,
+      "class": "relative-start-boundary",
+      "keywords": [
+        "negative",
+        "start",
+        "offset"
+      ],
+      "description": "Negative starts are clamped to zero instead of translated from the current end.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { Journal } from \"./src/index.js\"; const j = new Journal(); j.append([\"a\",\"b\"]); j.append([\"c\",\"d\",\"e\"]); console.log(JSON.stringify(j.window(-3,5)));'",
+        "expected": "[\"c\",\"d\",\"e\"]",
+        "actual": "[\"a\",\"b\",\"c\",\"d\",\"e\"]"
+      },
+      "why_missed": "Forward windows never translate tail-relative bounds; a first test with both bounds negative returns empty before the incorrect start becomes observable."
+    },
+    {
+      "id": "D2",
+      "file": "src/index.js",
+      "line": 9,
+      "class": "relative-end-boundary",
+      "keywords": [
+        "negative",
+        "end",
+        "interval"
+      ],
+      "description": "Negative ends are clamped to zero instead of translated from the current end.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { Journal } from \"./src/index.js\"; const j = new Journal(); j.append([\"a\",\"b\"]); j.append([\"c\",\"d\",\"e\"]); console.log(JSON.stringify(j.window(1,-1)));'",
+        "expected": "[\"b\",\"c\",\"d\"]",
+        "actual": "[]"
+      },
+      "why_missed": "Forward windows never translate tail-relative bounds; a first test with both bounds negative returns empty before the incorrect start becomes observable."
+    }
+  ]
+}
