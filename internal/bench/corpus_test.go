@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,6 +73,40 @@ func TestCorpusShipsFixedVersions(t *testing.T) {
 		for _, d := range key.Defects {
 			if st, err := os.Stat(filepath.Join(c, FixDir, "keep-"+d.ID)); err != nil || !st.IsDir() {
 				t.Errorf("%s: no fix/keep-%s", filepath.Base(c), d.ID)
+			}
+		}
+	}
+}
+
+// A defect's line is the statement fix/all corrects. A formatter that reflows the fixture after the key was
+// written moves that statement and leaves the key pointing at a blank line or a signature, so a finding that
+// cites the real line matches only by keyword. Checked for family-tagged cases, which are written to this rule.
+func TestCorpusKeyLinesSitOnTheFixedStatement(t *testing.T) {
+	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	for _, c := range cases {
+		key, err := LoadKey(c)
+		if err != nil || key.Family == "" {
+			continue
+		}
+		for _, d := range key.Defects {
+			fixture, err := os.ReadFile(filepath.Join(c, FixtureDir, d.File))
+			if err != nil {
+				t.Errorf("%s %s: %v", filepath.Base(c), d.ID, err)
+				continue
+			}
+			fixed, err := os.ReadFile(filepath.Join(c, FixDir, "all", d.File))
+			if err != nil {
+				t.Errorf("%s %s: fix/all does not correct %s", filepath.Base(c), d.ID, d.File)
+				continue
+			}
+			lines := strings.Split(string(fixture), "\n")
+			if d.Line > len(lines) {
+				t.Errorf("%s %s: line %d is past the end of %s", filepath.Base(c), d.ID, d.Line, d.File)
+				continue
+			}
+			cited := lines[d.Line-1]
+			if strings.TrimSpace(cited) == "" || slices.Contains(strings.Split(string(fixed), "\n"), cited) {
+				t.Errorf("%s %s: %s:%d %q is not a statement fix/all changes", filepath.Base(c), d.ID, d.File, d.Line, strings.TrimSpace(cited))
 			}
 		}
 	}
