@@ -22,8 +22,7 @@ from the state table, act. Never ask which mode; one question only if the target
 - **Pessimistic prior**: every selected target is assumed to hide defects until the tests prove
   otherwise, and a finding does not clear it: list every promise its contract makes (each
   sentence of the README, spec or doc comment) and give each one its own probe before the target
-  is closed, each across the input classes the contract admits (empty, boundary, non-ASCII,
-  malformed), not only the documented examples. Green tests, plausible code, and "this looks right" are claims to attack, not facts
+  is closed. Green tests, plausible code, and "this looks right" are claims to attack, not facts
   to trust. The prior widens the search; it never lowers rule 2's evidence bar — a suspicion
   without falsifiable evidence stays unreported.
 - **Suite-green close**: before the final message, run the whole suite on the final tree. A
@@ -61,12 +60,10 @@ hand-applied gate is a weaker claim than the binary's:
 1. **Risk, not the file, is the unit of decision.** Rank qualitatively
    ([references/prioritization.md](references/prioritization.md)); no numeric scores or targets.
 2. **Falsifiable evidence per selected risk**: mutation, contract, invariant, negative control,
-   differential, metamorphic (state the relation, such as idempotence, round trip or parts-vs-whole,
-   and run it at the magnitude where it can fail), or observed state. Coverage percentage is not evidence. Neither is a probe of a neighbouring path: enter the path
-   under test (its error returns, rejections and side effects), not only its happy output. Every
+   differential, metamorphic, or observed state. Coverage percentage is not evidence. Every
    expected value has a source, best first: written spec or issue text > invariant or round trip >
    independent reference model or differential > metamorphic relation > documented example >
-   current behavior. A finding or test assertion whose only oracle is the code's current behavior is characterization
+   current behavior. A finding whose only oracle is the code's current behavior is characterization
    (rule 4), never `confirmed`; without a better source, ask or record `razonado`.
 3. **Contract boundary that survives a refactor** ([references/altitude.md](references/altitude.md));
    doubles only at process boundaries.
