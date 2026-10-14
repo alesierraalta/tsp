@@ -128,7 +128,8 @@ hand-applied gate is a weaker claim than the binary's:
     only the exact revert and a wrong fix passes. Two failures look like compliance and are not: a test that passes
     either way pins nothing, and a test that asserts the defective output is a characterization
     test (rule 4) that turns red the day someone fixes the bug, so it defends the defect instead
-    of demanding its repair. Promote through `no-excess-tests`, name it in the finding row, and
+    of demanding its repair. Add it straight to the suite (`no-excess-tests` trims a bloated test
+    diff; it never decides whether a pinning test lands), name it in the finding row, and
     label any characterization test as such in its own name. A finding whose probe was never
     promoted stays `open`, reason `not pinned`. A run that reports a defect and adds no test file is not finished:
     before the final message, every reported finding names a test file this run added or changed,
@@ -248,7 +249,7 @@ branch forked, so a scoped plan would rank changes the branch never made.
    or gitignored `testLocales/`.
 3. Invoke the assigned sibling (read its `SKILL.md` and apply it inline where no Skill tool
    exists); it climbs to the target rung without reduction.
-4. Promote the reddening probe into the suite through `no-excess-tests`, asserting the promised
+4. Promote the reddening probe straight into the suite, asserting the promised
    behaviour, then run it twice: RED on the current code, GREEN with the minimal fix or the
    mutation reverted. If the first run is green, the assertion is pointing at the defect instead
    of the contract: rewrite it before promoting. Those two runs are one evidence row, and the
