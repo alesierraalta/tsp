@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -51,6 +52,9 @@ type Key struct {
 	Suite    string `json:"suite"`
 	Surface  string `json:"surface"`
 	Control  string `json:"control,omitempty"`
+	// Family is the failure kind the case's defects belong to, one of Families. Readings group by it so a
+	// variant tuned on one split is judged per family on another; cases that predate it leave it empty.
+	Family string `json:"family,omitempty"`
 	// Request is the bounded unit of work a run is asked to test, when the case has one. A case without
 	// it is the generic case the bench has always run. The pointer is what tells the two apart: a key
 	// that supplies a blank request is a mistake, not a generic case, and is refused rather than read
@@ -84,6 +88,16 @@ func controlProblems(control string, defectCount int) []string {
 		return []string{fmt.Sprintf("control %q is not accepted; accepted value is %q", control, ControlClean)}
 	}
 	return nil
+}
+
+// Families are the failure kinds a case may declare.
+var Families = []string{"boundary", "concurrency", "contract", "input-domain", "numeric", "performance", "resilience-io", "security", "state-logic", "time"}
+
+func familyProblems(family string) []string {
+	if family == "" || slices.Contains(Families, family) {
+		return nil
+	}
+	return []string{fmt.Sprintf("family %q is not one of %s", family, strings.Join(Families, ", "))}
 }
 
 // KeyFile is the answer-key file name; it must never be copied into a workspace.
@@ -128,6 +142,7 @@ func (k Key) Validate() error {
 		problems = append(problems, "request is present but empty")
 	}
 	problems = append(problems, controlProblems(k.Control, len(k.Defects))...)
+	problems = append(problems, familyProblems(k.Family)...)
 	seen := map[string]bool{}
 	for i, d := range k.Defects {
 		switch {
