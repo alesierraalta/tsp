@@ -1,0 +1,46 @@
+{
+  "id": "f03-request-coordination",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "family": "concurrency",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/coordinator.js",
+      "line": 10,
+      "class": "check-then-act-concurrency",
+      "keywords": [
+        "reservation",
+        "authorization",
+        "seats"
+      ],
+      "description": "Overlapping authorizations consume the same last seat.",
+      "trigger": {
+        "input": "timeout 60 node --input-type=module -e 'import {SeatPool} from \"./src/coordinator.js\"; const p=new SeatPool(1, async()=>{}); const results=await Promise.all([p.reserve(\"a\"),p.reserve(\"b\")]); console.log(`accepted=${results.filter(Boolean).length} available=${p.available}`);'",
+        "expected": "accepted=1 available=0\n",
+        "actual": "accepted=2 available=-1\n"
+      },
+      "why_missed": "Sequential reservations see the preceding decrement."
+    },
+    {
+      "id": "D2",
+      "file": "src/coordinator.js",
+      "line": 23,
+      "class": "missing-singleflight-concurrency",
+      "keywords": [
+        "cache",
+        "inflight",
+        "duplicate",
+        "fetch"
+      ],
+      "description": "Pending profile loads are not shared, so overlapping requests issue duplicate fetches.",
+      "trigger": {
+        "input": "timeout 60 node --input-type=module -e 'import {ProfileCache} from \"./src/coordinator.js\"; let loads=0; const c=new ProfileCache(async()=>{loads++; await new Promise(r=>setImmediate(r)); return \"profile\";}); await Promise.all([c.get(\"a\"),c.get(\"a\")]); console.log(`loads=${loads}`);'",
+        "expected": "loads=1\n",
+        "actual": "loads=2\n"
+      },
+      "why_missed": "The suite requests cached values only after each load completes."
+    }
+  ]
+}

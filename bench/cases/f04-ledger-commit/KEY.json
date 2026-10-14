@@ -1,0 +1,45 @@
+{
+  "id": "f04-ledger-commit",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "family": "concurrency",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "ledger.go",
+      "line": 28,
+      "class": "check-then-act-concurrency",
+      "keywords": [
+        "claim",
+        "winner",
+        "concurrent"
+      ],
+      "description": "The claim check is not repeated when committing after persistence.",
+      "trigger": {
+        "input": "timeout 60 sh -c 'd=$(mktemp -d /tmp/f04-probe.XXXXXX); cp go.mod ledger.go \"$d/\"; mkdir \"$d/cmd\"; printf %s \"package main\nimport (\\\"fmt\\\"; \\\"sync\\\"; ledger \\\"tpp.bench/f04\\\")\nfunc main() {\n arrived:=make(chan struct{},2); release:=make(chan struct{})\n l:=ledger.New(func(string,int) error { arrived<-struct{}{}; <-release; return nil })\n var wg sync.WaitGroup\n results:=make(chan bool,2)\n for i:=0;i<2;i++ { wg.Add(1); go func(){ defer wg.Done(); ok,err:=l.Claim(\\\"invoice\\\"); if err!=nil {panic(err)}; results<-ok }() }\n <-arrived; <-arrived; close(release); wg.Wait()\n close(results); winners:=0; for ok:=range results {if ok {winners++}}; fmt.Printf(\\\"winners=%d\\\\n\\\",winners)\n}\n\" > \"$d/cmd/main.go\"; cd \"$d\"; go run ./cmd'",
+        "expected": "winners=1\n",
+        "actual": "winners=2\n"
+      },
+      "why_missed": "Sequential claims observe the completed claim."
+    },
+    {
+      "id": "D2",
+      "file": "ledger.go",
+      "line": 41,
+      "class": "lost-update-concurrency",
+      "keywords": [
+        "balance",
+        "snapshot",
+        "adjustment"
+      ],
+      "description": "Concurrent adjustments overwrite each other with stale balance snapshots.",
+      "trigger": {
+        "input": "timeout 60 sh -c 'd=$(mktemp -d /tmp/f04-probe.XXXXXX); cp go.mod ledger.go \"$d/\"; mkdir \"$d/cmd\"; printf %s \"package main\nimport (\\\"fmt\\\"; \\\"sync\\\"; ledger \\\"tpp.bench/f04\\\")\nfunc main() {\n arrived:=make(chan struct{},2); release:=make(chan struct{})\n l:=ledger.New(func(string,int) error { arrived<-struct{}{}; <-release; return nil })\n var wg sync.WaitGroup\n results:=make(chan bool,2)\n for i:=0;i<2;i++ { wg.Add(1); go func(){ defer wg.Done(); if err:=l.Add(1); err!=nil {panic(err)} }() }\n <-arrived; <-arrived; close(release); wg.Wait()\n _ = results; fmt.Printf(\\\"balance=%d\\\\n\\\",l.Balance())\n}\n\" > \"$d/cmd/main.go\"; cd \"$d\"; go run ./cmd'",
+        "expected": "balance=2\n",
+        "actual": "balance=1\n"
+      },
+      "why_missed": "Sequential adjustments commit before the next snapshot."
+    }
+  ]
+}

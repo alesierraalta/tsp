@@ -1,0 +1,45 @@
+{
+  "id": "f09-job-catalog",
+  "language": "node",
+  "family": "performance",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/catalog.js",
+      "line": 5,
+      "class": "quadratic-id-scan",
+      "keywords": [
+        "quadratic",
+        "scan",
+        "reads"
+      ],
+      "description": "Distinct jobs scans all prior jobs for each id, exceeding the linear id-read budget.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { distinctJobs } from \"./src/catalog.js\"; let reads=0; const jobs=Array.from({length:1200}, (_,i)=>({get id(){reads++;return i;}})); distinctJobs(jobs); console.log(`id_reads=${reads}`);'",
+        "expected": "id_reads=2400",
+        "actual": "id_reads=1440000"
+      },
+      "why_missed": "Small correctness-only batches do not measure resource usage."
+    },
+    {
+      "id": "D2",
+      "file": "src/catalog.js",
+      "line": 22,
+      "class": "unbounded-label-cache",
+      "keywords": [
+        "cache",
+        "retention",
+        "eviction"
+      ],
+      "description": "Label insertion retains every distinct key instead of enforcing the configured FIFO capacity.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { JobLabels } from \"./src/catalog.js\"; const labels=new JobLabels(32,id=>id); for(let i=0;i<1200;i++) labels.label(String(i)); console.log(`retained=${labels.size}`);'",
+        "expected": "retained=32",
+        "actual": "retained=1200"
+      },
+      "why_missed": "Repeated hits on a few keys never exercise capacity replacement."
+    }
+  ]
+}

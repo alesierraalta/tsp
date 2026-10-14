@@ -1,0 +1,33 @@
+{
+  "id": "f12-directory-labels",
+  "family": "input-domain",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1", "file": "src/labels.js", "line": 2,
+      "class": "canonical-unicode-mismatch",
+      "keywords": ["unicode", "canonical", "normalization", "lookup"],
+      "description": "Lowercasing without canonical normalization fails to match canonically equivalent contact names.",
+      "trigger": {
+        "input": "timeout 60 node --input-type=module -e 'import { findContact } from \"./src/labels.js\"; console.log(JSON.stringify(findContact([{name: \"Jos\\u00e9\"}], \"Jose\\u0301\")));'",
+        "expected": "{\"name\":\"José\"}",
+        "actual": "null"
+      },
+      "why_missed": "ASCII case-insensitive lookup exercises both found and absent branches but never compares composed and decomposed representations."
+    },
+    {
+      "id": "D2", "file": "src/labels.js", "line": 8,
+      "class": "surrogate-pair-truncation",
+      "keywords": ["surrogate", "emoji", "truncation", "codepoint"],
+      "description": "Slicing UTF-16 code units instead of Unicode code points can return a label ending in an unpaired surrogate.",
+      "trigger": {
+        "input": "timeout 60 node --input-type=module -e 'import { shortenLabel } from \"./src/labels.js\"; console.log(JSON.stringify(shortenLabel(\"A\\u{1f600}B\", 2)));'",
+        "expected": "\"A😀\"",
+        "actual": "\"A\\ud83d\""
+      },
+      "why_missed": "The suite covers short, long and zero-length outputs with ASCII labels, where code-unit and code-point lengths coincide."
+    }
+  ]
+}
