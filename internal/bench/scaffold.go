@@ -82,6 +82,7 @@ func RunSuite(ws, suite string, timeout time.Duration) (SuiteResult, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, fields[0], fields[1:]...)
 	cmd.Dir = ws
+	boundProcessTree(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	err = cmd.Run()
