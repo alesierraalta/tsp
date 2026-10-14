@@ -1371,8 +1371,8 @@ func TestPlanAddFindingUsageRefusalExits2(t *testing.T) {
 func TestPlanAddFindingHelp(t *testing.T) {
 	bin := buildCLI(t)
 	out, code := runCLI(t, bin, "plan", "add-finding", "--help")
-	if code != 2 {
-		t.Fatalf("help exit = %d, want 2\n%s", code, out)
+	if code != 0 {
+		t.Fatalf("help exit = %d, want 0: the usage is the answer, not a refusal\n%s", code, out)
 	}
 	for _, want := range []string{"-id", "-location", "-data-safe", "-fingerprint"} {
 		if !strings.Contains(out, want) {
