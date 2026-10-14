@@ -759,8 +759,13 @@ func TestDefaultConfigDirUsesRunnerEnvironment(t *testing.T) {
 func TestFeedbackCLI(t *testing.T) {
 	bin := buildCLI(t)
 	dir := t.TempDir()
+	// The template is the first step of recording, so it is asked for with feedback enabled.
+	stateHome := t.TempDir()
+	if out, code := runCLIWithHomeEnv(t, stateHome, bin, "feature", "enable", "feedback"); code != 0 {
+		t.Fatalf("enable feedback exit = %d\n%s", code, out)
+	}
 
-	out, code := runCLI(t, bin, "feedback", "--config-dir", dir, "--template")
+	out, code := runCLIWithHomeEnv(t, stateHome, bin, "feedback", "--config-dir", dir, "--template")
 	if code != 0 {
 		t.Fatalf("template exit = %d\n%s", code, out)
 	}
@@ -792,10 +797,6 @@ func TestFeedbackCLI(t *testing.T) {
 		"guess: what a probe proves\n"
 	if err := os.WriteFile(report, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
-	}
-	stateHome := t.TempDir()
-	if out, code := runCLIWithHomeEnv(t, stateHome, bin, "feature", "enable", "feedback"); code != 0 {
-		t.Fatalf("enable feedback exit = %d\n%s", code, out)
 	}
 	out, code = runCLIWithHomeEnv(t, stateHome, bin, "feedback", "--config-dir", dir, "--file", report)
 	if code != 0 {

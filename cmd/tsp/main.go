@@ -977,6 +977,12 @@ func runFeedback(args []string) int {
 	}
 	switch {
 	case *template:
+		// A skeleton --file would refuse is three calls spent learning what one can say: with feedback
+		// disabled there is no retrospective to record, and asking for the template is not an error.
+		if enabled, err := feature.Enabled("feedback"); err != nil || !enabled {
+			fmt.Println("feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback")
+			return 0
+		}
 		fmt.Print(feedback.Template(feedback.Report{
 			TS:    time.Now().UTC().Format(time.RFC3339),
 			Repo:  feedback.RepoRoot("."),
