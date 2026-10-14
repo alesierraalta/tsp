@@ -579,7 +579,8 @@ test that was green on `fix/all`, that test catches D, and the catch notes say s
 **Why it was missed** gives every uncaught defect of a valid run one reason, stored as `misses`
 in `result.json`, counted in `aggregate.json`, and listed with example runs under "Why defects
 were missed" in `summary.md`: *seen, no test written* (the run named it and left no test), *seen,
-tests missed it*, *tests blind to it* (tests written, defect never named), *never looked*, and *not
+tests missed it*, *tests pin the defect* (a test green with it and red once fixed), *tests blind to it*
+(tests written, defect never named), *never looked*, and *not
 checkable*. "Seen" is mechanical: a plan finding credited to the defect, or the agent's final
 message (kept as `final_message`) citing its location or naming one of its keywords. The section
 also counts the runs whose tests are red on the reference fix or pin the defective behaviour.

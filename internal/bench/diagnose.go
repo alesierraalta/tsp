@@ -13,6 +13,7 @@ import (
 const (
 	MissSeenNoTest      = "seen_no_test"      // the run named the defect but left no test at all
 	MissSeenTestsMissed = "seen_tests_missed" // the run named the defect and wrote tests, none of which distinguish it
+	MissTestsInverted   = "tests_inverted"    // a test distinguishes the defect the wrong way: green with it, red once fixed
 	MissTestsBlind      = "tests_blind"       // the run wrote tests but never named the defect, and none distinguish it
 	MissNotLooked       = "not_looked"        // the run neither named the defect nor wrote a test
 	MissNotCheckable    = "not_checkable"     // the catch check never observed the defect's variant
@@ -22,6 +23,7 @@ const (
 var missOrder = []struct{ class, label string }{
 	{MissSeenNoTest, "seen, no test written"},
 	{MissSeenTestsMissed, "seen, tests missed it"},
+	{MissTestsInverted, "tests pin the defect"},
 	{MissTestsBlind, "tests blind to it"},
 	{MissNotLooked, "never looked"},
 	{MissNotCheckable, "not checkable"},
@@ -72,6 +74,8 @@ func Diagnose(r Result, key Key) []Miss {
 		switch {
 		case !r.Catch.Checked || (wroteTests && !observed):
 			m.Class = MissNotCheckable
+		case len(r.Catch.InvertedBy[d.ID]) > 0:
+			m.Class = MissTestsInverted
 		case m.SeenIn != "" && !wroteTests:
 			m.Class = MissSeenNoTest
 		case m.SeenIn != "":

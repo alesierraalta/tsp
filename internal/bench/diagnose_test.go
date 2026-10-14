@@ -82,6 +82,21 @@ func TestDiagnoseNamesWhyEachDefectWasMissed(t *testing.T) {
 			},
 		},
 		{
+			// A test green while the defect stands and red once it is fixed is not blind: it distinguishes the
+			// defect in the wrong direction, defending it. Folding it into tests_blind hides an oracle mistake.
+			name: "a test that pins the defective behaviour is inverted, not blind",
+			res: Result{
+				Defects: []DefectResult{{ID: "D1"}, {ID: "D2", Found: true}, {ID: "D3"}},
+				Catch: CatchResult{Checked: true, TestFiles: []string{"tests/a.test.js"},
+					Caught:     map[string]bool{"D1": false, "D2": false, "D3": true},
+					InvertedBy: map[string][]string{"D1": {"pins it"}, "D2": {"pins it too"}}},
+			},
+			want: []Miss{
+				{Defect: "D1", Class: MissTestsInverted},
+				{Defect: "D2", Class: MissTestsInverted, SeenIn: "plan"},
+			},
+		},
+		{
 			name: "a defect the catch check never observed is not checkable",
 			res: Result{
 				Defects: []DefectResult{{ID: "D1"}, {ID: "D2"}, {ID: "D3"}},
