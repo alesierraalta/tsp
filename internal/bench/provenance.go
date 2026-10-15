@@ -65,7 +65,8 @@ func SkillsDigest(skillsRoot string) (string, error) {
 	return digestSkillFiles(files), nil
 }
 
-// VerifyBenchSkills refuses a throwaway config whose skill tree is missing, extra, or changed from the embedded set.
+// VerifyBenchSkills refuses a throwaway config whose skill tree is missing, extra, or changed from the embedded
+// skill under test (BenchSkill).
 func VerifyBenchSkills(dir string) error {
 	root, err := resolveSkillsRoot(filepath.Join(dir, "skills"))
 	if err != nil {
@@ -192,8 +193,8 @@ func filesystemSkillFiles(root string) (map[string][]byte, error) {
 
 func embeddedSkillFiles() (map[string][]byte, error) {
 	files := map[string][]byte{}
-	err := fs.WalkDir(assets.Skills(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil || path == "." {
+	err := fs.WalkDir(assets.Skills(), BenchSkill, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
 			return walkErr
 		}
 		if entry.IsDir() {

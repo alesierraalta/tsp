@@ -604,7 +604,8 @@ partial number is never read as a corpus result.
 The Pi runner (`--runner pi`, the default) measures the same cases with Pi itself:
 `pi -p "haz el testing" --mode json --model <provider>/<model>[:<thinking>] --no-session`, spawned in
 the workspace with `PI_CODING_AGENT_DIR` pointed at a throwaway agent directory. That directory holds
-the same embedded skills and a `settings.json` that loads no packages, so the operator's extensions,
+the embedded `test-strategy` skill alone and a `settings.json` that loads no packages, so the other
+embedded skills (which would ride every turn as catalog entries), the operator's extensions,
 memory protocol, and MCP servers stay out of the reading. `--model` is optional: Pi defaults to
 `opencode/muse-spark-1.3-contributor-free`, while the `claude` runner takes a bare name and defaults
 to `haiku`. Pi has no turn cap, so `--timeout` is its only wall-clock limit. `--runner` defaults to

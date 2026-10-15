@@ -23,7 +23,7 @@ const (
 	PiModelsStoreFile = "models-store.json"
 )
 
-// WriteBenchConfig builds a Claude configuration directory holding the embedded skills and
+// WriteBenchConfig builds a Claude configuration directory holding the skill under test and
 // nothing else. A benchmark case must measure the testing skills, not the operator's global
 // instructions, memory protocol, or MCP servers, which cost turns and vary between machines.
 func WriteBenchConfig(dir, credentialsFrom string) error {
@@ -47,7 +47,7 @@ func WriteBenchConfig(dir, credentialsFrom string) error {
 }
 
 // WriteBenchPiConfig builds the Pi equivalent of WriteBenchConfig in the same directory: the
-// embedded skills and a settings.json that loads nothing else. Pi derives its package root, and
+// skill under test and a settings.json that loads nothing else. Pi derives its package root, and
 // therefore the operator's extensions, memory protocol, and MCP servers, from the agent dir the
 // run owns, and PI_CODING_AGENT_DIR is what points it there.
 func WriteBenchPiConfig(dir, configFrom string) error {
@@ -150,15 +150,19 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, 0o600)
 }
 
-// writeEmbeddedSkills materializes the embedded skills under dir/skills. Both runners write the
+// BenchSkill is the skill a reading measures. A throwaway config carries it alone: the other embedded skills
+// would ride every turn as catalog entries and change what the measurement costs.
+const BenchSkill = "test-strategy"
+
+// writeEmbeddedSkills materializes the embedded skill under test (BenchSkill) under dir/skills. Both runners write the
 // same bytes, so a case measures the same skill content whichever agent runs it.
 func writeEmbeddedSkills(dir string) error {
 	skills := filepath.Join(dir, "skills")
 	if err := os.RemoveAll(skills); err != nil {
 		return err
 	}
-	return fs.WalkDir(assets.Skills(), ".", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || p == "." {
+	return fs.WalkDir(assets.Skills(), BenchSkill, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
 			return err
 		}
 		target := filepath.Join(skills, filepath.FromSlash(p))

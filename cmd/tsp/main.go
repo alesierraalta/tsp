@@ -1570,7 +1570,7 @@ func runBenchRun(args []string) int {
 	retries := fs.Int("retries", 1, "retries per case on infrastructure failures (exit status, error result)")
 	retryDelay := fs.Duration("retry-delay", 60*time.Second, "pause before a retry")
 	workers := fs.Int("concurrency", 1, "cases to run side by side; the wall clock shortens, the cost does not")
-	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the embedded skills (the default for --runner pi); \"none\" builds one with no skill at all, the bare-agent baseline (pi and codex; the only mode for codex)")
+	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the skill under test (test-strategy) (the default for --runner pi); \"none\" builds one with no skill at all, the bare-agent baseline (pi and codex; the only mode for codex)")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
 	}
@@ -1633,7 +1633,7 @@ func runBenchRun(args []string) int {
 			cfgDir = abs
 		}
 	case cfgDir == "bench":
-		// A throwaway configuration holding only the embedded skills, so the run measures them
+		// A throwaway configuration holding only the skill under test, so the run measures it
 		// and not the operator's global instructions, memory protocol, or MCP servers.
 		cfgDir = filepath.Join(*benchDir, ".agent-config")
 		if err := bench.WriteBenchConfig(cfgDir, defaultConfigDir()); err != nil {
