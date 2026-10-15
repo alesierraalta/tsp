@@ -27,15 +27,18 @@ type Provenance struct {
 	Scorer         string `json:"scorer"` // build revision that produced the numbers
 	Model          string `json:"model"`
 	Runner         string `json:"runner"` // pi | claude
-	SkillVersion   string `json:"skill_version"`
-	Corpus         string `json:"corpus"` // digest of cases, requests and runs per case
-	Cases          int    `json:"cases"`
-	Runs           int    `json:"runs"`                    // runs per case
-	AgentConfig    string `json:"agent_config"`            // bench | inherited | custom | unspecified
-	SkillsDigest   string `json:"skills_digest,omitempty"` // digest of the skills a throwaway config carried
-	Environment    string `json:"environment"`             // os/arch of the instrument
-	SuiteTools     string `json:"suite_tools,omitempty"`   // node and go versions the suites ran with
-	Prompt         string `json:"prompt,omitempty"`        // the instruction every arm got, when it was not the bench prompt
+	// EscalateModel names the model a run fell back to when its first attempt pinned nothing; empty for a reading
+	// that ran one model, so an escalated reading is never compared with a plain one unawares.
+	EscalateModel string `json:"escalate_model,omitempty"`
+	SkillVersion  string `json:"skill_version"`
+	Corpus        string `json:"corpus"` // digest of cases, requests and runs per case
+	Cases         int    `json:"cases"`
+	Runs          int    `json:"runs"`                    // runs per case
+	AgentConfig   string `json:"agent_config"`            // bench | inherited | custom | unspecified
+	SkillsDigest  string `json:"skills_digest,omitempty"` // digest of the skills a throwaway config carried
+	Environment   string `json:"environment"`             // os/arch of the instrument
+	SuiteTools    string `json:"suite_tools,omitempty"`   // node and go versions the suites ran with
+	Prompt        string `json:"prompt,omitempty"`        // the instruction every arm got, when it was not the bench prompt
 }
 
 // Agent-config modes identify whether a run used the isolated benchmark configuration or an operator-owned one.
@@ -228,6 +231,7 @@ func provenanceForRun(opts Options, corpus string, cases int) Provenance {
 		Scorer:         buildinfo.Revision(),
 		Model:          opts.Model,
 		Runner:         effectiveRunner(opts.Runner),
+		EscalateModel:  opts.EscalateModel,
 		SkillVersion:   SkillVersion(opts.SkillFile),
 		Corpus:         corpus,
 		Cases:          cases,

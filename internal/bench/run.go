@@ -79,8 +79,11 @@ func runnerAgent(runner string) Agent {
 type Options struct {
 	CasesGlob string
 	Model     string
-	Runner    string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, or RunnerCodex
-	Runs      int
+	// EscalateModel, when set, reruns a case with this model in a fresh workspace whenever the first run left
+	// no new test failing on the unmodified code (RedCheck found no witness). Empty never escalates.
+	EscalateModel string
+	Runner        string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, or RunnerCodex
+	Runs          int
 	// Prompt replaces the bare instruction for every arm of a reading, so a bare agent can be asked to hunt
 	// defects instead of rerunning the suite; empty keeps the bench prompt.
 	Prompt       string
@@ -125,8 +128,9 @@ type Aggregate struct {
 	FalsePositives int      `json:"false_positives"`
 	CostUSD        float64  `json:"cost_usd"`
 	Invalid        int      `json:"invalid"`
-	Failed         int      `json:"failed"`  // agent did not run to completion; excluded from recall
-	NoPlan         int      `json:"no_plan"` // valid runs whose selected plan file is absent; scored zero
+	Failed         int      `json:"failed"`    // agent did not run to completion; excluded from recall
+	Escalated      int      `json:"escalated"` // runs rerun with Options.EscalateModel because the first pinned nothing
+	NoPlan         int      `json:"no_plan"`   // valid runs whose selected plan file is absent; scored zero
 	// LightActivated counts the valid runs whose own plan declares a validated scoped run: the reading's
 	// answer to "did the mode run?", next to what it cost and what it caught.
 	LightActivated int `json:"light_activated"`
@@ -390,6 +394,9 @@ func tallyUnits(agg Aggregate, units []unit, results []Result, skipped []bool, o
 func foldResult(agg *Aggregate, u unit, res Result) {
 	agg.Cases = append(agg.Cases, res)
 	agg.CostUSD += res.CostUSD
+	if res.Escalated {
+		agg.Escalated++
+	}
 	switch {
 	case u.invalid, res.Invalid:
 		agg.Invalid++
@@ -585,8 +592,50 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		runOpts.ConfigDir = clone
 	}
 	started := time.Now()
+	ar, attempts := runAgent(ws, key, runOpts, opts, &res, 0)
+	if res.Failed {
+		res.Seconds = time.Since(started).Seconds()
+		// An agent that never ran is not a detection result; scoring it would read as recall 0.
+		res.Notes = append(res.Notes, res.FailReason)
+		return finish(res, opts, true)
+	}
+	if opts.EscalateModel != "" && !pinsADefect(ws, opts.SuiteTimeout) {
+		// The first run left no new test failing on the unmodified code, so it pinned nothing: the case runs again
+		// from the fixture with the escalation model, and the run pays for both attempts.
+		res.Notes = append(res.Notes, "no new test failed on the unmodified code: escalated to "+opts.EscalateModel)
+		if err := rescaffold(caseDir, ws, key, runOpts.ConfigDir, opts); err != nil {
+			res.Seconds = time.Since(started).Seconds()
+			res.Failed, res.FailReason = true, "escalation could not reset the workspace: "+err.Error()
+			res.Notes = append(res.Notes, res.FailReason)
+			return finish(res, opts, true)
+		}
+		escOpts := runOpts
+		escOpts.Model = opts.EscalateModel
+		res.Escalated = true
+		if ar, _ = runAgent(ws, key, escOpts, opts, &res, attempts); res.Failed {
+			res.Seconds = time.Since(started).Seconds()
+			res.Notes = append(res.Notes, res.FailReason)
+			return finish(res, opts, true)
+		}
+	}
+	res.Seconds = time.Since(started).Seconds()
+	res.FinalMessage = clipFinalMessage(ar.Result)
+	res = merge(res, ScoreWorkspace(ws, key))
+	res.Catch = Discriminate(caseDir, ws, key, opts.SuiteTimeout)
+	res.Caught = res.Catch.Count()
+	res.Misses = Diagnose(res, key)
+	// Misses of either measure keep their workspace so they can be classified.
+	return finish(res, opts, res.Recall < 1 || (res.Catch.Checked && res.Caught < res.Total))
+}
+
+// runAgent runs the agent in ws, retrying infrastructure failures up to opts.Retries, adds every attempt's cost
+// and turns to res, and marks res failed when the last attempt has no verdict. Attempts are numbered from first,
+// so an escalated run's logs and transcripts follow the first run's instead of overwriting them.
+func runAgent(ws string, key Key, runOpts, opts Options, res *Result, first int) (AgentResult, int) {
 	var ar AgentResult
-	for attempt := 0; ; attempt++ {
+	var err error
+	attempt := first
+	for ; ; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 		ar, err = opts.Agent(ctx, ws, key, runOpts)
 		cancel()
@@ -597,13 +646,12 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		// so the run has no verdict for the case at all. Retrying it is bounded by --retries, and losing
 		// a case to a stall costs more than the second attempt.
 		infra := err != nil || ar.IsError || ar.TimedOut
-		if !infra || attempt >= opts.Retries {
+		if !infra || attempt-first >= opts.Retries {
 			break
 		}
 		res.Notes = append(res.Notes, fmt.Sprintf("attempt %d failed, retrying after %s", attempt+1, opts.RetryDelay))
 		time.Sleep(opts.RetryDelay)
 	}
-	res.Seconds = time.Since(started).Seconds()
 	switch {
 	case ar.TimedOut:
 		res.Failed, res.FailReason = true, "agent timed out"
@@ -612,18 +660,36 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	case ar.IsError:
 		res.Failed, res.FailReason = true, "agent result is an error: "+tail(ar.ErrorText, 200)
 	}
-	if res.Failed {
-		// An agent that never ran is not a detection result; scoring it would read as recall 0.
-		res.Notes = append(res.Notes, res.FailReason)
-		return finish(res, opts, true)
+	return ar, attempt + 1
+}
+
+// pinsADefect reports whether the agent left at least one new test that fails on the code the workspace's HEAD
+// holds. A check that cannot judge the workspace counts as no witness: escalating costs a run, missing costs a
+// defect.
+func pinsADefect(ws string, timeout time.Duration) bool {
+	rep, err := RedCheck(ws, "", timeout)
+	return err == nil && len(rep.Red) > 0
+}
+
+// rescaffold puts the workspace and the run's config copy back to their state before the first attempt.
+func rescaffold(caseDir, ws string, key Key, configClone string, opts Options) error {
+	if err := removeTree(ws); err != nil {
+		return err
 	}
-	res.FinalMessage = clipFinalMessage(ar.Result)
-	res = merge(res, ScoreWorkspace(ws, key))
-	res.Catch = Discriminate(caseDir, ws, key, opts.SuiteTimeout)
-	res.Caught = res.Catch.Count()
-	res.Misses = Diagnose(res, key)
-	// Misses of either measure keep their workspace so they can be classified.
-	return finish(res, opts, res.Recall < 1 || (res.Catch.Checked && res.Caught < res.Total))
+	suite, err := Scaffold(caseDir, ws, key, opts.SuiteTimeout)
+	if err != nil {
+		return err
+	}
+	if !suite.Green {
+		return fmt.Errorf("fixture suite not green (exit %d)", suite.ExitCode)
+	}
+	if opts.ConfigDir == "" {
+		return nil
+	}
+	if err := removeTree(configClone); err != nil {
+		return err
+	}
+	return copyTree(opts.ConfigDir, configClone)
 }
 
 // writeAgentLog keeps the tail of each attempt's raw stream beside result.json.
@@ -660,7 +726,7 @@ func writeTranscript(path string, stream []byte) {
 // merge keeps the run's bookkeeping fields and takes the scorer's fields.
 func merge(res, scored Result) Result {
 	scored.Case, scored.Run, scored.Workspace = res.Case, res.Run, res.Workspace
-	scored.CostUSD, scored.Turns, scored.Seconds = res.CostUSD, res.Turns, res.Seconds
+	scored.CostUSD, scored.Turns, scored.Seconds, scored.Escalated = res.CostUSD, res.Turns, res.Seconds, res.Escalated
 	scored.Suite, scored.Invalid, scored.InvalidReason = res.Suite, res.Invalid, res.InvalidReason
 	scored.Failed, scored.FailReason = res.Failed, res.FailReason
 	scored.FinalMessage = res.FinalMessage

@@ -1556,6 +1556,7 @@ func runBenchRun(args []string) int {
 	runner := fs.String("runner", bench.RunnerPi, "agent runner: pi (default), codex (bare baseline only), or claude (last resort)")
 	model := fs.String("model", "", "model for the agent runs; empty uses the runner's default ("+
 		bench.DefaultModel(bench.RunnerPi)+" for pi, "+bench.DefaultModel(bench.RunnerClaude)+" for claude)")
+	escalateModel := fs.String("escalate-model", "", "rerun a case with this model, from a fresh workspace, when the first run left no new test failing on the unmodified code (tsp redcheck found no witness); cost and turns count both attempts; recorded in the provenance")
 	runs := fs.Int("runs", 1, "runs per case")
 	prompt := fs.String("prompt", "", "instruction every arm receives instead of the bench prompt (\""+bench.Prompt+"\"); recorded in the provenance")
 	maxTurns := fs.Int("max-turns", 70, "agent turn cap per run")
@@ -1587,6 +1588,10 @@ func runBenchRun(args []string) int {
 	}
 	if *model == "" {
 		*model = bench.DefaultModel(*runner)
+	}
+	if *escalateModel != "" && *escalateModel == *model {
+		fmt.Fprintf(os.Stderr, "bench run: --escalate-model must differ from --model (%s): the rerun would pay twice for one model\n", *model)
+		return 2
 	}
 	if *out == "" {
 		*out = filepath.Join(*benchDir, "results", bench.Stamp(time.Now()))
@@ -1643,7 +1648,7 @@ func runBenchRun(args []string) int {
 		skillFile = filepath.Join(cfgDir, "skills", "test-strategy", "SKILL.md")
 	}
 	_, code := bench.Run(bench.Options{
-		CasesGlob: *cases, Model: *model, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
+		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
 		Timeout:      *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,

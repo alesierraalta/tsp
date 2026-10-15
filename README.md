@@ -663,6 +663,17 @@ for one measurement:
 tsp bench run --runner codex --prompt 'find the defects and pin each with a failing test' --cases 'bench/cases/*'
 ```
 
+To measure a cheap-first policy, `--escalate-model` names a second model. After each run the bench
+replays the agent's new tests on the unmodified code (the check `tsp redcheck` runs); when none of
+them fails there, the run pinned nothing, and the case runs again from a fresh workspace with the
+escalation model. The run is scored on that second attempt and its cost and turns count both. The
+aggregate counts `escalated` runs and the provenance records `escalate_model`. Naming the run's own
+model is refused.
+
+```
+tsp bench run --runner pi --model openai-codex/gpt-6-luna --escalate-model openai-codex/gpt-6-sol --cases 'bench/cases/*'
+```
+
 ## License
 
 Apache-2.0. See `LICENSE` and `NOTICE` for the attribution of the skills derived from the
