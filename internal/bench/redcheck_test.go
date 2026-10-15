@@ -78,6 +78,36 @@ func TestRedCheckNamesNewTestsThatPassOnTheUnmodifiedCode(t *testing.T) {
 	}
 }
 
+// A row added to an existing table test that runs its cases without subtests keeps the test's name, so the
+// name alone cannot say it is new. When the agent's version of a test that passed at HEAD fails on HEAD's code,
+// the agent's change made it red: it is a witness. A test that already failed at HEAD says nothing.
+func TestRedCheckCountsAnExistingTestTheAgentTurnedRed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go test")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+	dir := redCheckRepo(t)
+	writeFile(t, dir, "order_test.go", "package rc\n\nimport \"testing\"\n\nfunc TestLen(t *testing.T) {\n\tfor _, want := range []int{3} {\n\t\tif Len() != want {\n\t\t\tt.Fatal(Len())\n\t\t}\n\t}\n}\n\nfunc TestOrderTable(t *testing.T) {\n\tfor _, want := range []string{\"abc\"} {\n\t\tif Order() != want {\n\t\t\tt.Fatal(Order())\n\t\t}\n\t}\n}\n")
+	if out, err := exec.Command("git", "-C", dir, "commit", "-qam", "TestOrderTable already red at HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	// The agent adds a row to TestLen (passing at HEAD) that the defect breaks, and a row to TestOrderTable,
+	// which was red before the agent touched it.
+	writeFile(t, dir, "order_test.go", "package rc\n\nimport \"testing\"\n\nfunc TestLen(t *testing.T) {\n\tfor _, want := range []int{3, 4} {\n\t\tif Len() != want {\n\t\t\tt.Fatal(Len())\n\t\t}\n\t}\n}\n\nfunc TestOrderTable(t *testing.T) {\n\tfor _, want := range []string{\"abc\", \"cab\"} {\n\t\tif Order() != want {\n\t\t\tt.Fatal(Order())\n\t\t}\n\t}\n}\n")
+	got, err := RedCheck(dir, "", 2*time.Minute)
+	if err != nil {
+		t.Fatalf("RedCheck: %v", err)
+	}
+	if want := []string{"example.com/rc.TestLen"}; !reflect.DeepEqual(got.Red, want) {
+		t.Errorf("red = %v, want %v", got.Red, want)
+	}
+	if len(got.PinsNothing) != 0 {
+		t.Errorf("pins nothing = %v, want none: an existing test that keeps its verdict is not judged", got.PinsNothing)
+	}
+}
+
 // With no test file added or changed there is nothing to judge: the report says so instead of passing.
 func TestRedCheckReportsNoNewTests(t *testing.T) {
 	if testing.Short() {

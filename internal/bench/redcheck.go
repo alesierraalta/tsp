@@ -69,7 +69,15 @@ func RedCheck(dir, suite string, timeout time.Duration) (RedCheckReport, error) 
 		return rep, fmt.Errorf("the changed tests could not be run test by test with %q: %s", suite, tail(out, 600))
 	}
 	for name, passed := range after {
-		if hasOwnName(before, name) || newParentCovers(after, before, name) {
+		if newParentCovers(after, before, name) {
+			continue
+		}
+		if hasOwnName(before, name) {
+			// A test that existed keeps its name when the agent adds a row to it without a subtest. It passed at
+			// HEAD and fails with the agent's version on the same code: the agent's change made it red.
+			if before[name] && !passed {
+				rep.Red = append(rep.Red, name)
+			}
 			continue
 		}
 		if passed {
