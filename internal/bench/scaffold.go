@@ -80,7 +80,8 @@ func RunSuite(ws, suite string, timeout time.Duration) (SuiteResult, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, fields[0], fields[1:]...)
+	argv := suiteArgv(ws, fields)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = ws
 	boundProcessTree(cmd)
 	var buf bytes.Buffer

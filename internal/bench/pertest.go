@@ -41,6 +41,7 @@ func perTestCommand(suite string) (argv []string, parser func(string) map[string
 func runCapture(dir string, argv []string, timeout time.Duration) (int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	argv = suiteArgv(dir, argv)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	boundProcessTree(cmd)
