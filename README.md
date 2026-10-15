@@ -352,12 +352,16 @@ and `plan` fields are pseudonyms, not names.
 
 ## Skills
 
-The embedded skills live under `assets/skills/`. `test-strategy` is the organic entry point
-("haz test strategy"; aliases: "haz test stragety" and "haz el testing"): it infers the mode from repository state, persists a plan that never
-shrinks, sweeps the specialized skills for their own checks, and executes through
-`exploit-testing`, whose ladder climbs from contract classes and hostile inputs to real
-collaborators, real seams, injected faults, and concurrency. Every finding carries an executed
-evidence record; anything not executed is a hypothesis.
+The embedded skills live under `assets/skills/`. `test-strategy` is the entry point ("haz test
+strategy"; aliases: "haz test stragety" and "haz el testing"): it finds the defects the existing green
+suite misses and leaves one test per defect in the repository's own suite, red on today's code and
+green once the defect is fixed. It probes each promise across its input classes, writes family-wide
+promises (order, round trip, never panics) as property tests with generated inputs, and builds inputs
+that must pass a validator with the code's own encoder before perturbing them. It writes no plan file:
+the tests are the deliverable, and `tsp redcheck` says which new tests actually fail on the unmodified
+code. This lean version replaced the plan-driven skill after the benchmark showed most of that
+skill's cost was ceremony; `tsp plan`, `check` and the Stop gate remain for anyone who keeps a plan.
+The other skills are specialized and invoked by name.
 
 `breakcheck` is an explicitly invoked bounded adversarial campaign for one candidate between the Verifier and RDD; it reports evidence and a readiness disposition, not a score.
 
@@ -381,9 +385,8 @@ benchmark's JavaScript cases run instead of skipping, and it runs
 
 ## Pending
 
-- The eval harness (`assets/skills/test-strategy/evals/run_evals.py`, `selftest.py`) and the
-  calibration tools (`assets/skills/test-strategy/assets/seed-mutants.py`, `fingerprint.sh`) are
-  still Python and shell. They will become subcommands.
+- The plan baseline fingerprint (`assets/skills/test-strategy/assets/fingerprint.sh`) is still shell.
+  It will become a subcommand.
 - Replaying a ledger row's mutation before a finding is accepted, and `status --next-transition`,
   are the next binaries.
 
