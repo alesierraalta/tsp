@@ -671,8 +671,11 @@ func merge(res, scored Result) Result {
 func finish(res Result, opts Options, keepWS bool) Result {
 	dir := filepath.Dir(res.Workspace)
 	// The per-run config copy carries the operator's copied login: it exists for the run and goes away
-	// with it, whatever happens to the workspace.
-	_ = os.RemoveAll(filepath.Join(dir, agentConfigDir))
+	// with it, whatever happens to the workspace. A Go run leaves a read-only module cache in it, so a
+	// plain RemoveAll would fail and leave the whole cache on disk.
+	if err := removeTree(filepath.Join(dir, agentConfigDir)); err != nil {
+		res.Notes = append(res.Notes, "the per-run agent config could not be removed: "+err.Error())
+	}
 	// The plan is the run's deliverable: keep it beside result.json so a later scorer can re-read it. A copy
 	// that fails is a note on the case, not a failure — the case was scored, what is lost is rescoring it
 	// later — and the note is computed here, before the result is persisted, because one added afterwards is

@@ -134,6 +134,19 @@ func gitRun(dir string, args ...string) (string, error) {
 
 // copyTree copies files and directories, following the source's permissions; symlinks are
 // skipped so a fixture cannot reach outside itself.
+// removeTree deletes path even when it holds read-only directories, as a Go module cache does: each
+// directory is made writable first, because RemoveAll cannot unlink entries from a directory without
+// write permission. A path that is already gone is not an error.
+func removeTree(path string) error {
+	_ = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			_ = os.Chmod(p, 0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(path)
+}
+
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
