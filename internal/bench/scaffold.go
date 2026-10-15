@@ -133,8 +133,9 @@ func gitRun(dir string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// copyTree copies files and directories, following the source's permissions; symlinks are
-// skipped so a fixture cannot reach outside itself.
+// copyTree copies files and directories, following the source's permissions. A symlink is copied as a
+// symlink only when its target stays inside src, so a fixture still cannot reach outside itself; any other
+// link is skipped.
 // removeTree deletes path even when it holds read-only directories, as a Go module cache does: each
 // directory is made writable first, because RemoveAll cannot unlink entries from a directory without
 // write permission. A path that is already gone is not an error.
@@ -156,7 +157,19 @@ func copyTree(src, dst string) error {
 		rel, _ := filepath.Rel(src, p)
 		target := filepath.Join(dst, rel)
 		if d.Type()&fs.ModeSymlink != 0 {
-			return nil
+			// A link stays a link: suites that test link handling fail when the copy drops it. An overlay
+			// carrying the same link replaces the one already there.
+			link, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			if !linkStaysInside(src, p, link) {
+				return nil
+			}
+			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			return os.Symlink(link, target)
 		}
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o755)
@@ -180,4 +193,13 @@ func copyTree(src, dst string) error {
 		}
 		return out.Close()
 	})
+}
+
+// linkStaysInside reports whether a relative link at path p, read as target, resolves inside root.
+func linkStaysInside(root, p, target string) bool {
+if filepath.IsAbs(target) {
+	return false
+}
+rel, err := filepath.Rel(root, filepath.Join(filepath.Dir(p), target))
+return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
