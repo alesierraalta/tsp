@@ -113,5 +113,39 @@
     "ignored-ordering"
    ]
   }
+ },
+ "batch2": {
+  "rule": "Decided before building q cases (L23).",
+  "train": [
+   "q01",
+   "q03",
+   "q05"
+  ],
+  "held_out": [
+   "q02",
+   "q04"
+  ],
+  "cases": {
+   "q01": [
+    "title-inferred-demographic",
+    "mixed-format-read-modify-write"
+   ],
+   "q02": [
+    "dependency-failure-published-as-data",
+    "restart-resets-selected-state"
+   ],
+   "q03": [
+    "digest-collision-deduplication",
+    "error-payload-as-data"
+   ],
+   "q04": [
+    "cross-environment-reference",
+    "timeout-applied-to-wrong-scope"
+   ],
+   "q05": [
+    "unchecked-input-read-bound",
+    "transaction-id-wraparound"
+   ]
+  }
  }
 }
