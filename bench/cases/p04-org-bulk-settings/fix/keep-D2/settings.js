@@ -8,7 +8,7 @@ export class Settings {
   retire(id, requested, config = {}) {
     const org = this.store.get(id);
     const minimum = config.minimumHealthy ?? 1;
-    const removed = Math.min(requested, Math.max(0, org.healthy - minimum));
+    const removed = Math.min(Math.max(0, requested), Math.max(0, org.healthy - minimum));
     org.healthy -= removed;
     return removed;
   }
