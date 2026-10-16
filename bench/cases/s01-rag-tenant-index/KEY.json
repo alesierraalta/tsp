@@ -1,0 +1,49 @@
+{
+  "id": "s01-rag-tenant-index",
+  "family": "security",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/index.js",
+      "line": 19,
+      "class": "stale-index-after-delete",
+      "keywords": [
+        "delete",
+        "deletion",
+        "index",
+        "postings",
+        "stale"
+      ],
+      "description": "delete() leaves the note's owner entry and postings in place, so a deleted note is still returned by search.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {Index} from \"./src/index.js\"; const i=new Index(); i.add(\"alice\",\"a1\",\"salary review\"); i.delete(\"alice\",\"a1\"); console.log(JSON.stringify(i.search(\"alice\",\"salary\")));'",
+        "expected": "[]",
+        "actual": "[\"a1\"]"
+      },
+      "why_missed": "The suite only checks that delete refuses another owner's note; nothing searches after a successful delete."
+    },
+    {
+      "id": "D2",
+      "file": "src/index.js",
+      "line": 30,
+      "class": "acl-filter-after-topk",
+      "keywords": [
+        "top-k",
+        "tenant",
+        "filter",
+        "principal",
+        "starvation"
+      ],
+      "description": "search() cuts the top k across all owners before keeping the principal's notes, so higher-scoring notes of other owners crowd the principal's own matches out.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {Index} from \"./src/index.js\"; const i=new Index(); for (const n of [1,2,3]) i.add(\"bob\",\"b\"+n,\"q4 forecast revenue\"); i.add(\"alice\",\"a1\",\"q4 forecast\"); console.log(JSON.stringify(i.search(\"alice\",\"q4 forecast revenue\")));'",
+        "expected": "[\"a1\"]",
+        "actual": "[]"
+      },
+      "why_missed": "The isolation test has one note per owner, so the cut never drops a principal's match; it proves no leak, not that the principal gets its k results."
+    }
+  ]
+}
