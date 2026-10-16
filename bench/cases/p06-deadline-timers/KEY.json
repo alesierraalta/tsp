@@ -1,0 +1,47 @@
+{
+  "id": "p06-deadline-timers",
+  "family": "time",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "Timers delivers absolute wall-clock deadlines when due and relative delays after the requested elapsed duration. The caller supplies a clock and drives delivery by polling.",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "timers.js",
+      "line": 8,
+      "class": "clock-offset-not-rebased",
+      "keywords": [
+        "clock",
+        "offset",
+        "not",
+        "rebased"
+      ],
+      "description": "An absolute deadline retains a stale wall-to-monotonic offset after a clock adjustment.",
+      "trigger": {
+        "input": "Schedule wall 1010 at wall 1000/mono 0; rewind wall to 990 then advance both by 10; poll.",
+        "expected": "0 callbacks",
+        "actual": "1 callback"
+      },
+      "why_missed": "The clock advances with a constant offset in existing tests."
+    },
+    {
+      "id": "D2",
+      "file": "timers.js",
+      "line": 11,
+      "class": "clock-not-monotonic",
+      "keywords": [
+        "clock",
+        "not",
+        "monotonic"
+      ],
+      "description": "Relative timers measure elapsed duration with wall time, delaying delivery after a backward adjustment.",
+      "trigger": {
+        "input": "Schedule after 10 at wall 1000/mono 0; advance mono to 10 and wall to 990; poll.",
+        "expected": "1 callback",
+        "actual": "0 callbacks"
+      },
+      "why_missed": "Existing relative timers use a wall clock that never changes offset."
+    }
+  ]
+}

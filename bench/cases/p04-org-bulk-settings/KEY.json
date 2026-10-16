@@ -1,0 +1,47 @@
+{
+  "id": "p04-org-bulk-settings",
+  "family": "state-logic",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "Settings applies organization-wide flags and retires workers while preserving safe healthy capacity.",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "settings.js",
+      "line": 5,
+      "class": "silent-limit-cap",
+      "keywords": [
+        "silent",
+        "limit",
+        "cap"
+      ],
+      "description": "Bulk updates reuse the display limit and omit organizations.",
+      "trigger": {
+        "input": "Apply a flag to eleven organizations.",
+        "expected": "11 updated",
+        "actual": "10 updated"
+      },
+      "why_missed": "The suite uses two organizations."
+    },
+    {
+      "id": "D2",
+      "file": "settings.js",
+      "line": 10,
+      "class": "missing-config-unsafe-default",
+      "keywords": [
+        "missing",
+        "config",
+        "unsafe",
+        "default"
+      ],
+      "description": "An absent capacity policy permits retirement instead of preserving capacity.",
+      "trigger": {
+        "input": "Retire seven of eight workers with an omitted policy.",
+        "expected": "0 removed",
+        "actual": "7 removed"
+      },
+      "why_missed": "Capacity tests always provide a minimum."
+    }
+  ]
+}

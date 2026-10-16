@@ -1,0 +1,38 @@
+{
+  "id": "p03-rpc-multiplexer",
+  "family": "contract",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "request": "the response delivery and shared frame behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "mux.go",
+      "line": 65,
+      "class": "request-response-misalignment",
+      "keywords": ["cancel", "response", "queue", "slot", "misalignment"],
+      "description": "Cancel removes the response slot although the transport still emits that request's response. The next queued callback receives the cancelled request's data and its own response is discarded.",
+      "trigger": {
+        "input": "Submit Read(a) and Read(b) with distinct callbacks; Cancel the first handle; Receive(secret-a); Receive(value-b).",
+        "expected": "first callback not called; second callback receives value-b only",
+        "actual": "first callback not called; second callback receives secret-a only"
+      },
+      "why_missed": "Ordered delivery and cancellation are exercised separately. The cancellation test has no following request, so discarding the slot cannot visibly misroute a response."
+    },
+    {
+      "id": "D2",
+      "file": "mux.go",
+      "line": 6,
+      "class": "reused-protocol-bit",
+      "keywords": ["flag", "bit", "generation", "inspection", "replication"],
+      "description": "The inspection flag reuses the legacy replication bit. An inspection frame routed to a generation-one handler silently causes replication rather than remaining read-only.",
+      "trigger": {
+        "input": "Create Data with value a=one and no replicas; pass Inspect(a) to Handle(1,frame,data); inspect data.Replicas[a].",
+        "expected": "replication count remains 0",
+        "actual": "replication count becomes 1"
+      },
+      "why_missed": "The suite checks replication on generation one and inspection on generation two. It never dispatches a newly encoded inspection frame to a legacy handler using the shared wire format."
+    }
+  ]
+}

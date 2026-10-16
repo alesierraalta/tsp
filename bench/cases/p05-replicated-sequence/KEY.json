@@ -1,0 +1,48 @@
+{
+  "id": "p05-replicated-sequence",
+  "family": "state-logic",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "request": "Sequence preserves acknowledged identifiers across promotion and recovery and issues consecutive identifiers. Storage and replication steps are supplied by the caller.",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "sequence.go",
+      "line": 24,
+      "class": "stale-replica-promotion",
+      "keywords": [
+        "stale",
+        "replica",
+        "promotion"
+      ],
+      "description": "Promotion replaces acknowledged state with a lagging snapshot.",
+      "trigger": {
+        "input": "Next; Promote; Values",
+        "expected": "[1]",
+        "actual": "[]"
+      },
+      "why_missed": "Promotion is tested only after replication."
+    },
+    {
+      "id": "D2",
+      "file": "sequence.go",
+      "line": 27,
+      "class": "reserved-counter-gap-on-recovery",
+      "keywords": [
+        "reserved",
+        "counter",
+        "gap",
+        "on",
+        "recovery"
+      ],
+      "description": "Recovery resumes from the reserved endpoint rather than the issued value.",
+      "trigger": {
+        "input": "Next; Recover; Next",
+        "expected": "2",
+        "actual": "33"
+      },
+      "why_missed": "Recovery is tested only on empty storage."
+    }
+  ]
+}
