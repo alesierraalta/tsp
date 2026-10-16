@@ -35,7 +35,7 @@ unaffected: run `tsp check` from a shell to see what the change still owes, plan
 included.
 
 **Extensions.** The host loads an extension file and calls back into it. Pi works this way:
-`pi/tsp.ts` registers native `/tsp` and backward-compatible `/tpp` commands (`check`, `feedback --summary`, `doctor`) through the same dispatcher, spawning the `tsp` CLI — it adds no skills and none of Gentle's surfaces (ODD, Engram, review lifecycle remain Gentle's). `tsp sync --hosts pi` is the only installer for it and writes just one file,
+`pi/tsp.ts` registers native `/tsp` and backward-compatible `/tpp` commands (`check`, `feedback --summary`, `doctor`) through the same dispatcher, spawning the `tsp` CLI. When a run ends after the agent edited source code (an `edit` or `write` result on a non-test code file), it asks in the chat "¿Quieres hacer TSP?": "Sí" sends "haz el TSP" as a user message, which invokes `test-strategy`; "No" is remembered for those files. It does not ask after a TSP run, an aborted run, without UI, or in a repo with `.no-testing-gate`; changes made through a shell command are not seen. It adds no skills and none of Gentle's surfaces (ODD, Engram, review lifecycle remain Gentle's). `tsp sync --hosts pi` is the only installer for it and writes just one file,
 `~/.pi/agent/extensions/tpp/index.ts` — the destination stays `tpp` to preserve recorded installation state, sync, and uninstall behavior; never skills, never hook settings. The Pi Stop hook is a
 separate, unverified surface (its row below is contract-read, not run here).
 
@@ -49,7 +49,7 @@ from a Makefile, a pre-push script, or CI.
 |---|---|---|
 | Claude Code | Stop command hook | yes: wired, run, exit code checked by `tsp doctor` |
 | Anything with a shell | `tsp check` | yes |
-| Pi | native `/tsp` command and `/tpp` compatibility alias via the extension (`sync --hosts pi` → `~/.pi/agent/extensions/tpp/index.ts`); Stop command hook, Claude-compatible payload | `/tsp` and `/tpp` dispatch covered by `pi/tsp.test.mjs` (run in CI); Stop hook contract read from the pi-hooks package; not run here |
+| Pi | native `/tsp` command and `/tpp` compatibility alias via the extension (`sync --hosts pi` → `~/.pi/agent/extensions/tpp/index.ts`); Stop command hook, Claude-compatible payload | `/tsp` and `/tpp` dispatch and the TSP offer covered by `pi/tsp.test.mjs` (run in CI), the offer not yet watched in a live Pi session; Stop hook contract read from the pi-hooks package; not run here |
 | OpenCode | plugin event, disabled (adapter export only) | contract read from the OpenCode plugin docs; not run here |
 | Codex, Gemini CLI | not implemented | their payload and output schemas are not verified here |
 

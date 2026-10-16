@@ -255,7 +255,7 @@ duplicates nothing of Gentle's: ODD, Engram memory, and the review lifecycle rem
 | `tsp repair` | Claude-only: re-syncs the managed skills and re-wires Claude's Stop hook; the Pi extension is untouched. |
 
 Load the extension (`pi --extension <path>/tsp.ts`, or let Pi load it from
-`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. The Pi Stop hook is a separate,
+`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks "¿Quieres hacer TSP?" in the chat; "Sí" sends "haz el TSP", which invokes `test-strategy` (details in `assets/hosts/README.md`). The Pi Stop hook is a separate,
 **not verified** surface: its payload contract was read from the pi-hooks package and nobody has
 watched it fire here, so merging `assets/hosts/pi/settings.stop-hook.json` into Pi's settings is
 ready to test, not working.
