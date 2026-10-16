@@ -155,6 +155,36 @@ func nearChange(changed []bool, i int) bool {
 	return false
 }
 
+// A fix variant of a Go case is an overlay: it holds only the files the fix changes, so on its own it often does
+// not compile (it uses types the fixture's other files declare). Without a module of its own it is a package of
+// this repository's module, and `go test ./...` and `go vet ./...` at the root fail on it. Each variant carries
+// its fixture's go.mod, byte for byte: that makes it a module of its own, and overlaying it changes nothing.
+func TestCorpusGoFixVariantsAreModulesOfTheirOwn(t *testing.T) {
+	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	for _, c := range cases {
+		want, err := os.ReadFile(filepath.Join(c, FixtureDir, "go.mod"))
+		if err != nil {
+			continue // not a Go case
+		}
+		variants, _ := filepath.Glob(filepath.Join(c, FixDir, "*"))
+		for _, v := range variants {
+			goFiles, _ := filepath.Glob(filepath.Join(v, "**", "*.go"))
+			top, _ := filepath.Glob(filepath.Join(v, "*.go"))
+			if len(goFiles)+len(top) == 0 {
+				continue
+			}
+			got, err := os.ReadFile(filepath.Join(v, "go.mod"))
+			if err != nil {
+				t.Errorf("%s: a Go fix variant without its own go.mod is a package of this module", v)
+				continue
+			}
+			if string(got) != string(want) {
+				t.Errorf("%s/go.mod differs from the fixture's: overlaying it would change the case", v)
+			}
+		}
+	}
+}
+
 func TestCorpusShipsCleanControlsWithoutFixVersions(t *testing.T) {
 	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
 	controls := 0
