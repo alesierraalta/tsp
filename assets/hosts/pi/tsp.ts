@@ -9,6 +9,8 @@
 // authority is never called; UI writes are guarded by ctx.hasUI.
 
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 /** Protocol with internal/mode (Go); mode.VerifiedGentleSignal accepts only this exact pair. */
@@ -126,7 +128,59 @@ export async function runTppCommand(rawArgs: string, deps: TppDeps): Promise<voi
   }
 }
 
-export default function (pi: ExtensionAPI) {
+// The TSP offer. When a run ends after the agent edited source code, Pi asks in the chat whether to run TSP;
+// "Sí" sends "haz el TSP" as if the user typed it, which invokes the test-strategy skill. Only edit and write
+// results are seen, so a change made through a shell command is not noticed.
+export const OFFER_QUESTION = "¿Quieres hacer TSP?";
+export const OFFER_YES = "Sí";
+export const OFFER_NO = "No";
+export const TSP_PROMPT = "haz el TSP";
+
+const SOURCE_EXT = /\.(go|ts|tsx|js|jsx|mjs|cjs|py|rs|java|kt|rb|php|cs|c|cc|cpp|h|hpp|swift|scala|sh)$/;
+const TEST_PATH = /(^|\/)(tests?|__tests__|testdata)\/|_test\.go$|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$/;
+
+/** True for a source file the agent may have changed behaviour in; tests, docs and config are not. */
+export function isSourcePath(path: string): boolean {
+  const p = path.replace(/\\/g, "/");
+  return SOURCE_EXT.test(p) && !TEST_PATH.test(p);
+}
+
+/** A run the user started to do TSP: its own edits never trigger another offer. */
+const isTspPrompt = (prompt: string | undefined): boolean => /\b(tsp|test[- ]strategy)\b/i.test(prompt ?? "");
+
+export interface OfferOptions {
+  optedOut?: (cwd: string) => boolean; // the repo's .no-testing-gate opt-out, shared with the Stop gate
+}
+
+function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
+  const optedOut = opts.optedOut ?? ((cwd: string) => existsSync(join(cwd, ".no-testing-gate")));
+  const edited = new Set<string>(); // source paths changed in the current run
+  const declined = new Set<string>(); // paths the user already said No to
+  let tspRun = false;
+  pi.on("before_agent_start", (event) => {
+    edited.clear();
+    tspRun = event.messageType === "user" && isTspPrompt(event.prompt);
+  });
+  pi.on("tool_result", (event) => {
+    const path = (event.input as { path?: unknown }).path;
+    if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string" && isSourcePath(path)) edited.add(path);
+  });
+  pi.on("agent_settled", async (event, ctx) => {
+    const fresh = [...edited].filter((p) => !declined.has(p));
+    edited.clear();
+    if (event.aborted || tspRun || !ctx.hasUI || fresh.length === 0 || optedOut(ctx.cwd)) return;
+    const answer = await ctx.ui.select(OFFER_QUESTION, [OFFER_YES, OFFER_NO]);
+    if (answer === OFFER_YES) {
+      declined.clear();
+      pi.sendUserMessage(TSP_PROMPT);
+    } else if (answer === OFFER_NO) {
+      fresh.forEach((p) => declined.add(p));
+    }
+  });
+}
+
+export default function (pi: ExtensionAPI, offer: OfferOptions = {}) {
+  registerOffer(pi, offer);
   const register = (name: "tsp" | "tpp") => pi.registerCommand(name, {
     description: `${name} check · feedback --summary · doctor [--mode auto|gentle] in this session`,
     handler: (args: string, ctx: ExtensionCommandContext) =>

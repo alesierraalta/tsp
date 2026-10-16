@@ -26,6 +26,7 @@ test("observation protocol matches Go literals; registered commands invoke the s
   const pi = {
     registerCommand: (name, options) => calls.push({ name, options }),
     getAllTools: () => [],
+    on: () => {},
   };
   tppExtension(pi);
   assert.deepEqual(calls.map(({ name }) => name), ["tsp", "tpp"]);
@@ -175,4 +176,75 @@ test("without UI nothing renders — and help never spawns a process", async () 
   assert.deepEqual(help.rec.exec, [], "an unknown subcommand never reaches a child process");
   assert.equal(help.rec.notify.length, 1);
   assert.match(help.rec.notify[0].message, /Usage/);
+});
+
+// The TSP offer: after a run that changed source code, Pi asks in the chat whether to run TSP; "Sí" sends the
+// identity prompt "haz el TSP" as if the user typed it. Every collaborator is faked: no Pi, no files.
+function offerHarness(opts = {}) {
+  const { hasUI = true, optedOut = false } = opts;
+  const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
+  const asked = [], sent = [];
+  const handlers = {};
+  const pi = {
+    registerCommand: () => {},
+    getAllTools: () => [],
+    on: (event, handler) => { handlers[event] = handler; },
+    sendUserMessage: (text) => sent.push(text),
+  };
+  tppExtension(pi, { optedOut: () => optedOut });
+  const ctx = { hasUI, cwd: "/repo", ui: { select: async (title, options) => { asked.push({ title, options }); return answer; } } };
+  const run = async (prompt, edits, { aborted = false } = {}) => {
+    await handlers.before_agent_start?.({ type: "before_agent_start", messageType: "user", prompt }, ctx);
+    for (const [toolName, path, isError = false] of edits) {
+      await handlers.tool_result({ type: "tool_result", toolName, input: { path }, isError, content: [] }, ctx);
+    }
+    await handlers.agent_settled({ type: "agent_settled", aborted }, ctx);
+  };
+  return { asked, sent, run };
+}
+
+test("a run that edits source code ends with the TSP question, and Sí sends haz el TSP", async () => {
+  const h = offerHarness();
+  await h.run("add a retry limit", [["edit", "internal/retry/retry.go"], ["write", "src/new.ts"]]);
+  assert.deepEqual(h.asked, [{ title: "¿Quieres hacer TSP?", options: ["Sí", "No"] }]);
+  assert.deepEqual(h.sent, ["haz el TSP"]);
+});
+
+test("No sends nothing and the same files are not offered again; a new file is", async () => {
+  const h = offerHarness({ answer: "No" });
+  await h.run("change a", [["edit", "a.go"]]);
+  await h.run("change a again", [["edit", "a.go"]]);
+  assert.equal(h.asked.length, 1);
+  await h.run("change b", [["edit", "b.go"]]);
+  assert.equal(h.asked.length, 2);
+  assert.deepEqual(h.sent, []);
+});
+
+test("no question when the run touched no source: tests, docs, config, failed edits, or nothing", async () => {
+  const h = offerHarness();
+  await h.run("tests and docs", [["edit", "a_test.go"], ["write", "src/a.test.ts"], ["edit", "tests/x.py"], ["edit", "README.md"], ["write", "config.json"], ["edit", "a.go", true]]);
+  await h.run("just reading", []);
+  assert.deepEqual(h.asked, []);
+});
+
+test("no question after a TSP run, an aborted run, without UI, or when the repo opted out", async () => {
+  const tsp = offerHarness();
+  await tsp.run("haz el TSP", [["edit", "a.go"]]);
+  assert.deepEqual(tsp.asked, []);
+  const aborted = offerHarness();
+  await aborted.run("change a", [["edit", "a.go"]], { aborted: true });
+  assert.deepEqual(aborted.asked, []);
+  const headless = offerHarness({ hasUI: false });
+  await headless.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(headless.asked, []);
+  const optedOut = offerHarness({ optedOut: true });
+  await optedOut.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(optedOut.asked, []);
+});
+
+test("dismissing the question (no answer) sends nothing", async () => {
+  const h = offerHarness({ answer: undefined });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.equal(h.asked.length, 1);
+  assert.deepEqual(h.sent, []);
 });

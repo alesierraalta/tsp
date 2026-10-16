@@ -1,6 +1,6 @@
 ---
 name: test-strategy
-description: "Trigger: haz test stragety, haz test strategy, test-strategy, haz el testing, testea esto, prueba esto, test this, test the app, test my change, run the testing, calibra el testing, calibrate the testing, test strategy, what to test, where to start testing, test planning, testing priorities, test altitude, low coverage, legacy code testing, test plan for the app, testing roadmap, plan de testing, roadmap de pruebas. Find the defects a green suite hides and pin each one with a failing test."
+description: "Trigger: haz el TSP, haz TSP, TSP, haz test stragety, haz test strategy, test-strategy, haz el testing, testea esto, prueba esto, test this, test the app, test my change, run the testing, calibra el testing, calibrate the testing, test strategy, what to test, where to start testing, test planning, testing priorities, test altitude, low coverage, legacy code testing, test plan for the app, testing roadmap, plan de testing, roadmap de pruebas. Find the defects a green suite hides and pin each one with a failing test."
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
