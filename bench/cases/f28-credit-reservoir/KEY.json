@@ -8,7 +8,7 @@
     {
       "id": "D1",
       "file": "reservoir.go",
-      "line": 24,
+      "line": 26,
       "class": "replayed-refund-capacity-overflow",
       "keywords": [
         "refund",
@@ -27,7 +27,7 @@
     {
       "id": "D2",
       "file": "reservoir.go",
-      "line": 29,
+      "line": 31,
       "class": "reservation-count-capacity-check",
       "keywords": [
         "resize",

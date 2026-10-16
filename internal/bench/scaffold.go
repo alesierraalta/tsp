@@ -197,9 +197,9 @@ func copyTree(src, dst string) error {
 
 // linkStaysInside reports whether a relative link at path p, read as target, resolves inside root.
 func linkStaysInside(root, p, target string) bool {
-if filepath.IsAbs(target) {
-	return false
-}
-rel, err := filepath.Rel(root, filepath.Join(filepath.Dir(p), target))
-return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	if filepath.IsAbs(target) {
+		return false
+	}
+	rel, err := filepath.Rel(root, filepath.Join(filepath.Dir(p), target))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

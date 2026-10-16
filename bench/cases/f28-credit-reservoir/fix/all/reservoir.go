@@ -1,10 +1,10 @@
 package reservoir
 
 type Reservoir struct {
-	capacity int
+	capacity  int
 	available int
-	next int
-	holds map[int]int
+	next      int
+	holds     map[int]int
 }
 
 func New(capacity int) *Reservoir {
@@ -12,7 +12,9 @@ func New(capacity int) *Reservoir {
 }
 
 func (r *Reservoir) Reserve(units int) int {
-	if units <= 0 || units > r.available { return 0 }
+	if units <= 0 || units > r.available {
+		return 0
+	}
 	r.next++
 	r.holds[r.next] = units
 	r.available -= units
@@ -21,12 +23,15 @@ func (r *Reservoir) Reserve(units int) int {
 
 func (r *Reservoir) Refund(id int) {
 	if units, ok := r.holds[id]; ok {
-		r.available += units; delete(r.holds, id)
+		r.available += units
+		delete(r.holds, id)
 	}
 }
 
 func (r *Reservoir) Resize(capacity int) bool {
-	if capacity < r.capacity-r.available { return false }
+	if capacity < r.capacity-r.available {
+		return false
+	}
 	used := r.capacity - r.available
 	r.capacity = capacity
 	r.available = max(0, capacity-used)
@@ -34,4 +39,4 @@ func (r *Reservoir) Resize(capacity int) bool {
 }
 
 func (r *Reservoir) Available() int { return r.available }
-func (r *Reservoir) Capacity() int { return r.capacity }
+func (r *Reservoir) Capacity() int  { return r.capacity }

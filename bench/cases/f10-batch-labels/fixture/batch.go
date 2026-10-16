@@ -11,10 +11,10 @@ func VisitIDs(ids []uint64, visit func([]byte)) {
 }
 
 type Labels struct {
-	limit int
+	limit   int
 	entries map[string]string
-	order []string
-	render func(string) string
+	order   []string
+	render  func(string) string
 }
 
 func NewLabels(limit int, render func(string) string) *Labels {
@@ -22,7 +22,9 @@ func NewLabels(limit int, render func(string) string) *Labels {
 }
 
 func (l *Labels) Label(id string) string {
-	if value, ok := l.entries[id]; ok { return value }
+	if value, ok := l.entries[id]; ok {
+		return value
+	}
 	value := l.render(id)
 	l.entries[id] = value
 	l.order = append(l.order, id)

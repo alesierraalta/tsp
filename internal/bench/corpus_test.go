@@ -114,7 +114,8 @@ func TestCorpusKeyLinesSitOnTheFixedStatement(t *testing.T) {
 	}
 }
 
-// changedLines marks the lines of a that a longest-common-subsequence diff against b does not keep.
+// changedLines marks the lines of a that a longest-common-subsequence diff against b does not keep, and the
+// line of a that an insertion from b lands before.
 func changedLines(a, b []string) []bool {
 	lcs := make([][]int, len(a)+1)
 	for i := range lcs {
@@ -135,6 +136,7 @@ func changedLines(a, b []string) []bool {
 		case j < len(b) && a[i] == b[j]:
 			i, j = i+1, j+1
 		case j < len(b) && lcs[i][j+1] >= lcs[i+1][j]:
+			changed[i] = true
 			j++
 		default:
 			changed[i] = true
@@ -142,6 +144,20 @@ func changedLines(a, b []string) []bool {
 		}
 	}
 	return changed
+}
+
+// A fix that only inserts statements changes no fixture line, yet it corrects the place it is inserted: the
+// fixture line it lands before counts as changed, so a key line on the statement above it sits next to a change.
+func TestChangedLinesMarksTheLineAnInsertionLandsBefore(t *testing.T) {
+	fixture := []string{"a", "b", "c"}
+	fixed := []string{"a", "b", "inserted", "c"}
+	changed := changedLines(fixture, fixed)
+	if changed[0] || changed[1] || !changed[2] {
+		t.Fatalf("changedLines = %v, want only the line after the insertion (c) marked", changed)
+	}
+	if !nearChange(changed, 1) {
+		t.Fatalf("the statement right above the insertion must sit next to a change")
+	}
 }
 
 // nearChange reports whether line i, or a line next to it, is changed: a swap of two adjacent statements
