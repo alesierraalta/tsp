@@ -4,7 +4,7 @@
   "language": "node",
   "suite": "node --test",
   "surface": "library",
-  "request": "Settings applies organization-wide flags and retires workers while preserving safe healthy capacity.",
+  "request": "the organization settings and worker retirement behaviour",
   "defects": [
     {
       "id": "D1",

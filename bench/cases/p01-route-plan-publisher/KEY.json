@@ -9,7 +9,7 @@
     {
       "id": "D1",
       "file": "publisher.go",
-      "line": 63,
+      "line": 61,
       "class": "stale-writer-overwrites-newer",
       "keywords": ["stale", "revision", "head", "fence", "publication"],
       "description": "Publish replaces the head without comparing revisions. A delayed publication step silently replaces a newer published route plan with its older staged plan.",
@@ -23,7 +23,7 @@
     {
       "id": "D2",
       "file": "publisher.go",
-      "line": 75,
+      "line": 73,
       "class": "filter-matches-everything",
       "keywords": ["state", "filter", "pending-deletion", "retained", "sweep"],
       "description": "Candidates ignores the requested lifecycle state and returns every plan through the watermark. Sweep silently removes retained plans along with pending-deletion plans.",

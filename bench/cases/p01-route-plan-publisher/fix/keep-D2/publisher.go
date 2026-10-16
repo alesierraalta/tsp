@@ -9,8 +9,7 @@ type Plan struct {
 	State    string
 }
 
-// Store operations are atomic. A publisher step can be scheduled independently
-// of the step that stages a plan.
+// Store operations are atomic.
 type Store interface {
 	Stage(Plan)
 	Publish(uint64)

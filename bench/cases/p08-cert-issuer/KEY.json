@@ -4,12 +4,12 @@
   "language": "go",
   "suite": "go test ./...",
   "surface": "library",
-  "request": "Verify the documented library promise.",
+  "request": "the certificate issuing behaviour",
   "defects": [
     {
       "id": "D1",
       "file": "issuer.go",
-      "line": 18,
+      "line": 22,
       "class": "calendar-edge-date",
       "keywords": [
         "calendar",
@@ -27,14 +27,14 @@
     {
       "id": "D2",
       "file": "issuer.go",
-      "line": 19,
+      "line": 11,
       "class": "fixed-width-overflow",
       "keywords": [
         "fixed",
         "width",
         "overflow"
       ],
-      "description": "Narrowing allocated serials silently changes their identity and breaks lookup.",
+      "description": "The issuance record's narrow Serial field silently changes allocated identities and breaks lookup.",
       "trigger": {
         "input": "Allocate returns 2147483648; Lookup allocated serial",
         "expected": "serial preserved; lookup succeeds",

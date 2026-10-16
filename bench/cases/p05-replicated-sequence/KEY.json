@@ -4,7 +4,7 @@
   "language": "go",
   "suite": "go test ./...",
   "surface": "library",
-  "request": "Sequence preserves acknowledged identifiers across promotion and recovery and issues consecutive identifiers. Storage and replication steps are supplied by the caller.",
+  "request": "the identifier sequence behaviour",
   "defects": [
     {
       "id": "D1",
@@ -16,9 +16,9 @@
         "replica",
         "promotion"
       ],
-      "description": "Promotion replaces acknowledged state with a lagging snapshot.",
+      "description": "Promotion overwrites identifiers already returned by Next with a lagging replica snapshot.",
       "trigger": {
-        "input": "Next; Promote; Values",
+        "input": "Next returns 1 without replication; Promote; Values",
         "expected": "[1]",
         "actual": "[]"
       },
@@ -27,7 +27,7 @@
     {
       "id": "D2",
       "file": "sequence.go",
-      "line": 27,
+      "line": 28,
       "class": "reserved-counter-gap-on-recovery",
       "keywords": [
         "reserved",

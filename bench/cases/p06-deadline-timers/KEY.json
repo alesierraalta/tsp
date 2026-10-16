@@ -4,7 +4,7 @@
   "language": "node",
   "suite": "node --test",
   "surface": "library",
-  "request": "Timers delivers absolute wall-clock deadlines when due and relative delays after the requested elapsed duration. The caller supplies a clock and drives delivery by polling.",
+  "request": "the timer delivery behaviour",
   "defects": [
     {
       "id": "D1",

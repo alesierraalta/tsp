@@ -4,7 +4,7 @@
   "language": "go",
   "suite": "go test ./...",
   "surface": "library",
-  "request": "Verify the documented library promise.",
+  "request": "the image reaping behaviour",
   "defects": [
     {
       "id": "D1",

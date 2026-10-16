@@ -20,9 +20,12 @@ func (s *Sequence) Next() int {
 	return p.Issued
 }
 func (s *Sequence) Replicate() { s.Store.Replica = clone(s.Store.Primary) }
-func (s *Sequence) Promote() {
-	s.Replicate()
+func (s *Sequence) Promote() bool {
+	if s.Store.Replica.Issued < s.Store.Primary.Issued {
+		return false
+	}
 	s.Store.Primary = clone(s.Store.Replica)
+	return true
 }
 func (s *Sequence) Recover() {
 	s.Store.Primary.Issued = s.Store.Primary.Reserved

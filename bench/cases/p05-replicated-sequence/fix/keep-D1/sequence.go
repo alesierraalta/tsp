@@ -20,8 +20,9 @@ func (s *Sequence) Next() int {
 	return p.Issued
 }
 func (s *Sequence) Replicate() { s.Store.Replica = clone(s.Store.Primary) }
-func (s *Sequence) Promote() {
+func (s *Sequence) Promote() bool {
 	s.Store.Primary = clone(s.Store.Replica)
+	return true
 }
 func (s *Sequence) Recover() {
 	s.Store.Primary.Issued = len(s.Store.Primary.Values)

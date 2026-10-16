@@ -2,14 +2,13 @@ package multiplexer
 
 import "fmt"
 
-const replicaFlag byte = 1
-const inspectFlag byte = 2
-
 // Frame is the shared wire format for both handler generations.
 type Frame struct {
 	Key   string
 	Flags byte
 }
+
+const inspectFlag byte = 1 << 1
 
 func Read(key string) Frame    { return Frame{Key: key} }
 func Inspect(key string) Frame { return Frame{Key: key, Flags: inspectFlag} }
@@ -22,6 +21,8 @@ type Data struct {
 	Values   map[string]string
 	Replicas map[string]int
 }
+
+const replicaFlag byte = 0x01
 
 // Handle executes a frame on an injected data store. Generation one supports
 // reads and replication; generation two also supports inspection.

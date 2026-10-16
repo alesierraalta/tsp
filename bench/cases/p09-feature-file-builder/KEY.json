@@ -4,7 +4,7 @@
   "language": "node",
   "suite": "node --test",
   "surface": "library",
-  "request": "Verify the documented library promise.",
+  "request": "the feature frame building behaviour",
   "defects": [
     {
       "id": "D1",

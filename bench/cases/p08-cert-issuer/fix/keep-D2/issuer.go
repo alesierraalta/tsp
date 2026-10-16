@@ -7,6 +7,10 @@ type Certificate struct {
 	Serial          int64
 	Issued, Expires time.Time
 }
+type issuanceRecord struct {
+	Serial int32
+}
+
 type Issuer struct {
 	Now          func() time.Time
 	Allocate     func() int64
@@ -19,7 +23,8 @@ func (s *Issuer) Issue(subject string) Certificate {
 	if expires.Month() != now.Month() {
 		expires = expires.AddDate(0, 0, -1)
 	}
-	serial := int64(int32(s.Allocate()))
+	record := issuanceRecord{Serial: int32(s.Allocate())}
+	serial := int64(record.Serial)
 	cert := Certificate{subject, serial, now, expires}
 	if s.Certificates == nil {
 		s.Certificates = map[int64]Certificate{}

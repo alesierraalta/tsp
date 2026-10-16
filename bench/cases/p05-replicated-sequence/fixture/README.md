@@ -1,1 +1,1 @@
-Sequence preserves acknowledged identifiers across promotion and recovery and issues consecutive identifiers. Storage and replication steps are supplied by the caller.
+Promote never loses an identifier that Next has already returned. Sequence issues consecutive identifiers, also after recovery. Storage and replication steps are supplied by the caller.
