@@ -4,7 +4,7 @@ description: "Trigger: haz el TSP, haz TSP, TSP, haz test stragety, haz test str
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.7.0"
+  version: "0.7.1"
   requires_tsp: "0.6.6"
   requires_tpp: "0.5.1"
   scope: [common]
@@ -14,6 +14,18 @@ metadata:
 Goal: find the defects the existing green suite misses, and leave one test per defect in the
 suite that is RED on today's code and would be GREEN once the defect is fixed. Do not change
 source code. Spend turns on probes and tests, not on documents.
+
+**Route special surfaces.** Look at what the code under test is made of (manifests, imports, directories). For each surface below that it actually has, read that skill's `SKILL.md` and apply its probes to that surface in steps 2-4; its defects are pinned the same way, one failing test each. Skip a row whose surface is absent and a skill that is not installed; plain logic needs none of them.
+- RAG retrieval, vector search, embeddings, citations: `rag-audit-evaluator`
+- LLM features, prompts, LLM judges: `llm-eval-design`; untrusted content reaching an LLM that holds tools: `llm-redteam`
+- Agents that call tools and change state: `agent-eval`
+- Terraform or other infrastructure as code: `iac-safe-auditor`
+- Database schema, migrations, transactions: `database-persistence-testing`
+- Queue, event or webhook consumers: `messaging-eventdriven-testing`
+- An API, schema or payload that others consume: `contract-compat-testing`
+- Files or durable state that must survive a kill or a full disk, CLIs, signal handlers: `crash-and-process-testing`
+- Calls to remote dependencies (timeouts, retries, circuit breakers): `resilience-fault-injection`
+- Authentication, permissions, parsing untrusted input, secrets: `appsec-adversarial-auditor`
 
 1. **Read the contract once.** README, doc comments, the source files, the existing tests. Write
    down (in your head, not a file) every promise the contract makes.
