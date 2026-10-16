@@ -44,7 +44,8 @@ type Provenance struct {
 // Agent-config modes identify whether a run used the isolated benchmark configuration or an operator-owned one.
 const (
 	ConfigBench     = "bench"
-	ConfigNone      = "none" // isolated like bench, with no skill at all: the bare-agent baseline
+	ConfigBenchAll  = "bench-all" // isolated like bench, with every embedded skill so routed siblings can load
+	ConfigNone      = "none"      // isolated like bench, with no skill at all: the bare-agent baseline
 	ConfigInherited = "inherited"
 	ConfigCustom    = "custom"
 )
@@ -67,7 +68,12 @@ func SkillsDigest(skillsRoot string) (string, error) {
 
 // VerifyBenchSkills refuses a throwaway config whose skill tree is missing, extra, or changed from the embedded
 // skill under test (BenchSkill).
-func VerifyBenchSkills(dir string) error {
+func VerifyBenchSkills(dir string) error { return verifySkillTree(dir, BenchSkill) }
+
+// VerifyBenchAllSkills is VerifyBenchSkills for a bench-all config: every embedded skill, byte for byte.
+func VerifyBenchAllSkills(dir string) error { return verifySkillTree(dir, AllSkills) }
+
+func verifySkillTree(dir, embeddedRoot string) error {
 	root, err := resolveSkillsRoot(filepath.Join(dir, "skills"))
 	if err != nil {
 		return err
@@ -76,7 +82,7 @@ func VerifyBenchSkills(dir string) error {
 	if err != nil {
 		return err
 	}
-	expected, err := embeddedSkillFiles()
+	expected, err := embeddedSkillFiles(embeddedRoot)
 	if err != nil {
 		return err
 	}
@@ -191,9 +197,9 @@ func filesystemSkillFiles(root string) (map[string][]byte, error) {
 	return files, err
 }
 
-func embeddedSkillFiles() (map[string][]byte, error) {
+func embeddedSkillFiles(root string) (map[string][]byte, error) {
 	files := map[string][]byte{}
-	err := fs.WalkDir(assets.Skills(), BenchSkill, func(path string, entry fs.DirEntry, walkErr error) error {
+	err := fs.WalkDir(assets.Skills(), root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
