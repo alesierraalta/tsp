@@ -14,8 +14,9 @@ import (
 // error. --map-current-user keeps the suite's uid and --keep-caps lets the shell mount; setpriv then drops
 // every capability before the suite starts, because a suite that kept them could write where the operator
 // cannot and would fail its own permission tests (gin's TestSaveUploadedFileWithPermissionFailed did).
+// A TMPDIR under /tmp is hidden by the fresh tmpfs, so it is pointed at the private /tmp instead.
 var privateTmpPrefix = []string{"unshare", "--map-current-user", "--keep-caps", "-m",
-	"sh", "-c", `mount -t tmpfs tmpfs /tmp && exec setpriv --inh-caps=-all --ambient-caps=-all --bounding-set=-all -- "$@"`, "sh"}
+	"sh", "-c", `mount -t tmpfs tmpfs /tmp && case "${TMPDIR:-}" in /tmp/*) export TMPDIR=/tmp;; esac && exec setpriv --inh-caps=-all --ambient-caps=-all --bounding-set=-all -- "$@"`, "sh"}
 
 var (
 	privateTmpOnce sync.Once

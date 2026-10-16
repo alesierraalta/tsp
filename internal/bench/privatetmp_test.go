@@ -73,6 +73,46 @@ func TestASuiteUnderTmpStillSeesItsOwnDirectory(t *testing.T) {
 	}
 }
 
+// An operator whose TMPDIR sits under /tmp still gets a working temp dir inside the private /tmp: the fresh
+// tmpfs hides that directory, and go cannot even create its work dir there ("stat /tmp/x: no such file").
+func TestASuiteWithItsOwnTmpGetsAUsableTempDirWhenTMPDIRIsUnderTmp(t *testing.T) {
+	if !privateTmpAvailable() {
+		t.Skip("this kernel does not allow an unprivileged mount namespace")
+	}
+	hostTmp, err := os.MkdirTemp("/tmp", "tsp-tmpdir-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(hostTmp) })
+	t.Setenv("TMPDIR", hostTmp)
+	dir, err := os.MkdirTemp(stageRoot(), "privtmpdir-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	res, err := RunSuite(dir, `sh -c 'd=$(mktemp -d) && test -d "$d"'`, time.Minute)
+	if err != nil || !res.Green {
+		t.Fatalf("mktemp -d with TMPDIR=%s: green=%v err=%v output=%q", hostTmp, res.Green, err, res.Output)
+	}
+}
+
+// A TMPDIR outside /tmp stays visible in the private /tmp, so the suite keeps using the operator's choice.
+func TestASuiteWithItsOwnTmpKeepsATMPDIROutsideTmp(t *testing.T) {
+	if !privateTmpAvailable() {
+		t.Skip("this kernel does not allow an unprivileged mount namespace")
+	}
+	dir, err := os.MkdirTemp(stageRoot(), "privkeep-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Setenv("TMPDIR", dir)
+	res, err := RunSuite(dir, `sh -c 'test "$TMPDIR" = "`+dir+`"'`, time.Minute)
+	if err != nil || !res.Green {
+		t.Fatalf("TMPDIR outside /tmp must reach the suite unchanged: green=%v err=%v output=%q", res.Green, err, res.Output)
+	}
+}
+
 // The catch check stages fixture + fix + agent tests outside /tmp, so that check is the one that gets a
 // private /tmp: it is where a collision would silently flip a catch.
 func TestStageBuildsOutsideTmp(t *testing.T) {
