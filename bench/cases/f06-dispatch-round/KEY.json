@@ -1,0 +1,33 @@
+{
+  "id": "f06-dispatch-round",
+  "family": "state-logic",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "state-machine",
+  "defects": [
+    {
+      "id": "D1", "file": "dispatch.go", "line": 32,
+      "class": "cancelled-state-overwrite",
+      "keywords": ["cancelled", "acknowledge", "terminal", "state"],
+      "description": "Acknowledge checks pending membership without checking active state, so a late acknowledgement replaces cancelled with completed.",
+      "trigger": {
+        "input": "bash -c 'set -euo pipefail; d=$(mktemp -d); cp go.mod dispatch.go \"$d/\"; printf \"%s\\n\" \"package dispatch\" \"import (\\\"testing\\\"; \\\"fmt\\\")\" \"func TestObservation(t *testing.T) { r := NewRound(1); r.Start(); r.Dispatch(\\\"a\\\"); r.Cancel(); ok := r.Acknowledge(\\\"a\\\"); fmt.Printf(\\\"ack=%t state=%s\\\\n\\\", ok, r.State()) }\" > \"$d/observation_test.go\"; cd \"$d\"; timeout 60 go test -count=1 -run ^TestObservation$ -v | awk \"/^ack=/\"'",
+        "expected": "ack=false state=cancelled\n",
+        "actual": "ack=true state=completed\n"
+      },
+      "why_missed": "The suite checks cancellation and acknowledgement separately, but never acknowledges a pending delivery after cancellation."
+    },
+    {
+      "id": "D2", "file": "dispatch.go", "line": 54,
+      "class": "round-quota-not-reset",
+      "keywords": ["restart", "quota", "used", "reset"],
+      "description": "Restart replaces pending jobs but retains the prior round's used quota, refusing valid jobs in the next round.",
+      "trigger": {
+        "input": "bash -c 'set -euo pipefail; d=$(mktemp -d); cp go.mod dispatch.go \"$d/\"; printf \"%s\\n\" \"package dispatch\" \"import (\\\"testing\\\"; \\\"fmt\\\")\" \"func TestObservation(t *testing.T) { r := NewRound(1); r.Start(); r.Dispatch(\\\"a\\\"); r.Acknowledge(\\\"a\\\"); r.Restart(); fmt.Printf(\\\"dispatch=%t state=%s\\\\n\\\", r.Dispatch(\\\"b\\\"), r.State()) }\" > \"$d/observation_test.go\"; cd \"$d\"; timeout 60 go test -count=1 -run ^TestObservation$ -v | awk \"/^dispatch=/\"'",
+        "expected": "dispatch=true state=active\n",
+        "actual": "dispatch=false state=active\n"
+      },
+      "why_missed": "The restart test uses only one slot of a two-slot quota and sends only one job in the next round, hiding the reduced remaining allowance."
+    }
+  ]
+}

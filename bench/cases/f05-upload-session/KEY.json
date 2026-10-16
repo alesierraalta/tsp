@@ -1,0 +1,33 @@
+{
+  "id": "f05-upload-session",
+  "family": "state-logic",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "state-machine",
+  "defects": [
+    {
+      "id": "D1", "file": "src/upload.js", "line": 26,
+      "class": "terminal-state-reentry",
+      "keywords": ["resume", "completed", "terminal", "transition"],
+      "description": "Resume rejects only uploading sessions, so a completed upload can become active again.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { UploadSession } from \"./src/upload.js\"; const s = new UploadSession(); s.start(); s.recordPart(\"a\"); s.complete(1); console.log(`resume=${s.resume()} state=${s.state}`);'",
+        "expected": "resume=false state=completed\n",
+        "actual": "resume=true state=uploading\n"
+      },
+      "why_missed": "The suite resumes a paused session but never delivers a resume after completion; executing the resume branch does not establish its state precondition."
+    },
+    {
+      "id": "D2", "file": "src/upload.js", "line": 39,
+      "class": "attempt-state-not-reset",
+      "keywords": ["retry", "parts", "attempt", "reset"],
+      "description": "Retry copies acknowledgements from the failed attempt, allowing a new attempt to complete without uploading its parts.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { UploadSession } from \"./src/upload.js\"; const s = new UploadSession(); s.start(); s.recordPart(\"a\"); s.fail(); s.retry(); console.log(`complete=${s.complete(1)} state=${s.state}`);'",
+        "expected": "complete=false state=uploading\n",
+        "actual": "complete=true state=completed\n"
+      },
+      "why_missed": "The retry test fails before any part is acknowledged, so preserving an empty set is indistinguishable from starting fresh."
+    }
+  ]
+}

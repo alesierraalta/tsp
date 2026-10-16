@@ -48,7 +48,7 @@ func TestTestStrategyDescriptionPreservesDiscoveryTriggers(t *testing.T) {
 	if description == nil {
 		t.Fatal("test-strategy frontmatter has no single-line description")
 	}
-	const want = "Trigger: haz test stragety, haz test strategy, test-strategy, haz el testing, testea esto, prueba esto, test this, test the app, test my change, run the testing, calibra el testing, calibrate the testing, test strategy, what to test, where to start testing, test planning, testing priorities, test altitude, low coverage, legacy code testing, test plan for the app, testing roadmap, plan de testing, roadmap de pruebas. Organic entry point for testing: infers scope and mode from repository state, builds or resumes a persisted test plan, and executes it through specialized testing skills."
+	const want = "Trigger: haz test stragety, haz test strategy, test-strategy, haz el testing, testea esto, prueba esto, test this, test the app, test my change, run the testing, calibra el testing, calibrate the testing, test strategy, what to test, where to start testing, test planning, testing priorities, test altitude, low coverage, legacy code testing, test plan for the app, testing roadmap, plan de testing, roadmap de pruebas. Find the defects a green suite hides and pin each one with a failing test."
 	if got := string(description[1]); got != want {
 		t.Fatalf("test-strategy description = %q, want %q", got, want)
 	}
@@ -67,11 +67,8 @@ func TestSkillNamesTheTppVersionItRequires(t *testing.T) {
 	if got := string(field[1]); got != "0.5.1" {
 		t.Fatalf("test-strategy requires tpp %s, want legacy bridge version 0.5.1", got)
 	}
-	if !strings.Contains(string(data), "make build") ||
-		!strings.Contains(string(data), "go install github.com/alesierraalta/tsp/cmd/tsp@latest") ||
-		!strings.Contains(string(data), "go install github.com/alesierraalta/tpp/cmd/tpp@v0.5.1") {
-		t.Fatal("test-strategy requires tpp 0.5.1 but names no install path")
-	}
+	// The lean skill never runs tsp itself, so it names no install path: the requirement lives in the
+	// frontmatter, where doctor and sync read it.
 }
 
 // The canonical requirement is the TSP release this skill ships with, installed from the new module.
@@ -89,9 +86,6 @@ func TestSkillRequiresTheTspReleaseItShipsWith(t *testing.T) {
 	}
 	if got := string(requiredVersion(data)[1]); got != "0.6.6" {
 		t.Fatalf("required version = %s, want requires_tsp to win over legacy keys", got)
-	}
-	if !strings.Contains(string(data), "go install github.com/alesierraalta/tsp/cmd/tsp@latest") {
-		t.Fatal("test-strategy requires tsp 0.6.6 but names no install path")
 	}
 }
 
@@ -122,51 +116,9 @@ func TestNoRunArtifactsAreEmbedded(t *testing.T) {
 	}
 }
 
-// F24: every number `plan gaps` prints is read from the plan's own cells, so a status saying a sibling was
-// invoked is believed even when nothing can prove it, and an inline run of a sibling is indistinguishable from a
-// skipped one. The mitigation is disclosure, and this skill is what tells the session to write it: the routing
-// ledger entry for an invoked sibling has to say which mode it ran in. This pins that rule, because its removal
-// is what puts the plan back to reporting coverage nobody can check.
-func TestTestStrategySkillRequiresTheInvocationModeInTheRoutingLedger(t *testing.T) {
-	data, err := fs.ReadFile(Skills(), "test-strategy/SKILL.md")
-	if err != nil {
-		t.Fatalf("SKILL.md missing: %v", err)
-	}
-	text := string(data)
-	for _, want := range []struct{ phrase, contract string }{
-		{"routing ledger", "the reply section that carries the per-sibling verdicts, so the mode has somewhere to live"},
-		{"`inline: <path to its SKILL.md>`", "the mode an inline run has to report, which is the only thing that separates it from a skipped one"},
-		{"`skipped`", "the other entry the same ledger rule has to carry"},
-	} {
-		if !strings.Contains(text, want.phrase) {
-			t.Errorf("test-strategy no longer names %s: %s", want.phrase, want.contract)
-		}
-	}
-}
-
-// The gpt-6-luna baseline (b2aff3f, 90 runs) lost 20 runs to an absent plan: 9 wrote a template at an
-// undeclared alternate path, 11 wrote nothing, and every agent still exited 0. The rule existed but never
-// ordered the plan before the probing, so the session could reach its final message with no plan on disk.
-// This pins the ordering and the consequence of the undeclared path.
-func TestTestStrategySkillPutsThePlanBeforeAnyOtherArtifact(t *testing.T) {
-	data, err := fs.ReadFile(Skills(), "test-strategy/SKILL.md")
-	if err != nil {
-		t.Fatalf("SKILL.md missing: %v", err)
-	}
-	text := string(data)
-	for _, want := range []struct{ phrase, contract string }{
-		{"The plan file is the first artifact", "the ordering that stops a run from probing before it plans"},
-		{"is a run with no plan", "the consequence of writing a plan at a path nothing declares"},
-	} {
-		if !strings.Contains(text, want.phrase) {
-			t.Errorf("test-strategy no longer names %q: %s", want.phrase, want.contract)
-		}
-	}
-}
-
-// The test gap in both gpt-6-luna readings is runs that wrote no test file at all (30 of 90 before plan-first,
-// 37 of 90 after it), not pinning claims the suite fails to back (1 and 2). Reporting a defect and writing no
-// test has to read as unfinished work, so the run cannot close on the plan alone.
+// The test gap in the gpt-6-luna readings was runs that reported defects and wrote no test file at all. The
+// lean skill has no plan to close on: its deliverable is the test itself, one per defect, red on today's code
+// and green once fixed, in the repository's own test files. This pins that deliverable.
 func TestTestStrategySkillRequiresATestFileForEveryReportedFinding(t *testing.T) {
 	data, err := fs.ReadFile(Skills(), "test-strategy/SKILL.md")
 	if err != nil {
@@ -174,8 +126,10 @@ func TestTestStrategySkillRequiresATestFileForEveryReportedFinding(t *testing.T)
 	}
 	text := string(data)
 	for _, want := range []struct{ phrase, contract string }{
-		{"A run that reports a defect and adds no test file is not finished", "the completion rule the no-test-file runs broke"},
-		{"a test file this run added or changed", "what each reported finding owes in the tree"},
+		{"leave one test per defect in the", "the deliverable: a test in the suite for every defect"},
+		{"RED on today's code", "the test has to fail on the defective code"},
+		{"GREEN once the defect is fixed", "and pass once it is fixed, so it pins the defect and not today's output"},
+		{"Pin every defect** in the repository's own test files", "where the tests go: the suite, not a scratch file"},
 	} {
 		if !strings.Contains(text, want.phrase) {
 			t.Errorf("test-strategy no longer names %q: %s", want.phrase, want.contract)

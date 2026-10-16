@@ -292,11 +292,11 @@ func TestRunKeepsTheWholeAgentTranscript(t *testing.T) {
 // the bench has always sent, and a case with one names it without deciding the mode, which is the
 // skill's call and the thing a reading measures.
 func TestAgentPromptCarriesTheRequestOnlyWhenThereIsOne(t *testing.T) {
-	if got := agentPrompt(Key{}); got != Prompt {
+	if got := agentPrompt(Key{}, Options{}); got != Prompt {
 		t.Fatalf("a generic case got %q, want exactly %q", got, Prompt)
 	}
 	request := "src/slug.js"
-	got := agentPrompt(Key{Request: &request})
+	got := agentPrompt(Key{Request: &request}, Options{})
 	if !strings.HasPrefix(got, Prompt) {
 		t.Fatalf("the prompt must stay the instruction: %q", got)
 	}
@@ -307,6 +307,27 @@ func TestAgentPromptCarriesTheRequestOnlyWhenThereIsOne(t *testing.T) {
 		if strings.Contains(got, word) {
 			t.Fatalf("the framing must not decide the mode: %q appears in %q", word, got)
 		}
+	}
+}
+
+// A reading may give every arm one explicit instruction instead of the bare prompt, so a bare agent that
+// only reruns the suite is compared with one that was asked to hunt defects too. The override replaces the
+// instruction, keeps the case's request, and is recorded in the provenance so readings with different
+// prompts are never compared as one.
+func TestAgentPromptOverrideReplacesTheInstructionAndIsRecorded(t *testing.T) {
+	custom := "find the defects and pin each with a failing test"
+	if got := agentPrompt(Key{}, Options{Prompt: custom}); got != custom {
+		t.Fatalf("override got %q, want exactly %q", got, custom)
+	}
+	request := "src/slug.js"
+	if got := agentPrompt(Key{Request: &request}, Options{Prompt: custom}); got != custom+"\n\nTest request: "+request {
+		t.Fatalf("override with a request got %q", got)
+	}
+	if p := provenanceForRun(Options{Prompt: custom}, "c", 1); p.Prompt != custom {
+		t.Fatalf("provenance prompt = %q, want %q", p.Prompt, custom)
+	}
+	if p := provenanceForRun(Options{}, "c", 1); p.Prompt != "" {
+		t.Fatalf("the default prompt must leave provenance unchanged, got %q", p.Prompt)
 	}
 }
 
@@ -332,7 +353,7 @@ func TestBothRunnersSendTheSameRequestFraming(t *testing.T) {
 	if _, err := claudeAgent(context.Background(), ws, key, Options{MaxTurns: 1}); err == nil {
 		t.Fatal("the fake claude exits non-zero, so the run reports it")
 	}
-	want := agentPrompt(key)
+	want := agentPrompt(key, Options{})
 	for _, runner := range []string{"pi", "claude"} {
 		raw, err := os.ReadFile(filepath.Join(bin, runner+".argv"))
 		if err != nil {

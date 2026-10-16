@@ -1,0 +1,47 @@
+{
+  "id": "f01-renewal-calendar",
+  "family": "time",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/renewal.js",
+      "line": 3,
+      "class": "month-end-rollover",
+      "keywords": [
+        "month",
+        "renewal",
+        "rollover",
+        "clamp"
+      ],
+      "description": "Monthly renewal overflows the destination month instead of using its last day.",
+      "trigger": {
+        "input": "timeout 60 node --input-type=module -e 'import { monthlyRenewal } from \"./src/renewal.js\"; console.log(monthlyRenewal(\"2024-01-31\"));'",
+        "expected": "2024-02-29\n",
+        "actual": "2024-03-02\n"
+      },
+      "why_missed": "Ordinary mid-month dates and December rollover exercise the same statements without a missing destination day."
+    },
+    {
+      "id": "D2",
+      "file": "src/renewal.js",
+      "line": 9,
+      "class": "leap-day-renewal",
+      "keywords": [
+        "leap",
+        "annual",
+        "february",
+        "renewal"
+      ],
+      "description": "Annual renewal rolls February 29 into March rather than clamping to February.",
+      "trigger": {
+        "input": "timeout 60 node --input-type=module -e 'import { annualRenewal } from \"./src/renewal.js\"; console.log(annualRenewal(\"2024-02-29\"));'",
+        "expected": "2025-02-28\n",
+        "actual": "2025-03-01\n"
+      },
+      "why_missed": "Annual tests use dates present in both years, including an ordinary February date."
+    }
+  ]
+}

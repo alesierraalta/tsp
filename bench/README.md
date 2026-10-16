@@ -83,7 +83,8 @@ another matter: cases are independent, so `--concurrency N` runs N of them side 
 run takes about as long as its slowest case instead of the sum of all of them. In the four runs
 measured so far the sum was 26 to 39 minutes and the slowest single case was 5.4 minutes.
 
-`--agent-config bench` builds a throwaway Claude configuration holding only the embedded skills,
+`--agent-config bench` builds a throwaway Claude configuration holding only the skill under test
+(the embedded `test-strategy`; the other embedded skills would ride every turn as catalog entries),
 with the operator's credentials symlinked in. A case then measures the skills rather than whatever
 else the machine makes a session do: in one 15-case run, 82 tool calls went to the memory protocol
 and to loading it, roughly a fifth of the turns.
@@ -257,7 +258,7 @@ different model, runner, skill version, number of runs per case, agent-config mo
 (os/arch) or metrics version is a field that moved, and the refusal names it. A difference in the
 suite runtimes (`node`, `go`) is reported in the comparison header without a refusal, because a
 refusal there would block every pair across a toolchain patch. The throwaway agent config is
-verified to hold exactly the embedded skills: a config that quietly carries anything else fails the
+verified to hold exactly the embedded `test-strategy` skill: a config that quietly carries anything else fails the
 run before it spends, which is what keeps an inherited configuration or a stray memory skill out of
 the measurement. Every run records `corpus`, a digest over the case names and
 defect ids it measured, in its aggregate and in a `corpus` column appended last to the history; a

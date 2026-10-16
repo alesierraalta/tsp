@@ -1,0 +1,45 @@
+{
+  "id": "f23-expiry-wire",
+  "family": "contract",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/index.js",
+      "line": 4,
+      "class": "legacy-expiry-unit",
+      "keywords": [
+        "legacy",
+        "decode",
+        "seconds"
+      ],
+      "description": "The version 1 decoder returns seconds as internal milliseconds.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {decode} from \"./src/index.js\"; console.log(decode(JSON.stringify({version:1,expires:1700000000})).expiresAt);'",
+        "expected": "1700000000000",
+        "actual": "1700000000"
+      },
+      "why_missed": "A local legacy round trip masks the decoder with the matching encoder defect; even after naming units, a round-trip oracle cannot establish interoperability (S9c,d)."
+    },
+    {
+      "id": "D2",
+      "file": "src/index.js",
+      "line": 9,
+      "class": "legacy-wire-unit",
+      "keywords": [
+        "legacy",
+        "encode",
+        "milliseconds"
+      ],
+      "description": "The version 1 encoder emits milliseconds where the external contract requires seconds.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {encode} from \"./src/index.js\"; console.log(encode({expiresAt:1700000000000},1));'",
+        "expected": "{\"version\":1,\"expires\":1700000000}",
+        "actual": "{\"version\":1,\"expires\":1700000000000}"
+      },
+      "why_missed": "A round-trip oracle validates agreement between local functions rather than the external wire contract (S9c,d)."
+    }
+  ]
+}

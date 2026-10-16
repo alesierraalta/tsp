@@ -115,6 +115,43 @@ func TestLoadKeyCleanControl(t *testing.T) {
 	}
 }
 
+// A case's family groups its defects by failure kind, so a reading can be reported per family and a skill
+// variant tuned on one split is judged on another. It is optional for the cases that predate it; a value
+// outside the known families is a typo the reports would silently split into a family of its own.
+func TestLoadKeyValidatesTheFamily(t *testing.T) {
+	valid := `{"id":"c1","language":"node","suite":"node --test","surface":"lib","defects":[{"id":"d1","file":"src/a.js","line":3,"class":"boundary","keywords":["limit"],"description":"x","trigger":{"input":"i","expected":"e","actual":"a"},"why_missed":"w"}]}`
+	withFamily := func(value string) string {
+		return strings.Replace(valid, `"surface":"lib"`, `"surface":"lib","family":`+value, 1)
+	}
+	cases := []struct {
+		name    string
+		body    string
+		want    string
+		wantErr string
+	}{
+		{"no family is a case that predates families", valid, "", ""},
+		{"a known family is read", withFamily(`"state-logic"`), "state-logic", ""},
+		{"an unknown family is refused with the accepted list", withFamily(`"statelogic"`), "", "state-logic"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k, err := LoadKey(writeKey(t, tc.body))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) || !strings.Contains(err.Error(), "statelogic") {
+					t.Fatalf("error = %v, want the bad value and the accepted list", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if k.Family != tc.want {
+				t.Fatalf("Family = %q, want %q", k.Family, tc.want)
+			}
+		})
+	}
+}
+
 // A case's bounded request is the unit of work the run is asked to test. A key without one is the
 // generic case the bench has always run; a key that supplies a blank one is a mistake in the key, so
 // it is refused instead of being read back as "no request".

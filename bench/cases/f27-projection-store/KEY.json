@@ -1,0 +1,46 @@
+{
+  "id": "f27-projection-store",
+  "language": "node",
+  "family": "performance",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/store.js",
+      "line": 8,
+      "class": "obsolete-projection-retention",
+      "keywords": [
+        "cache",
+        "generation",
+        "retention"
+      ],
+      "description": "Updates advance the generation without evicting cached projections of obsolete states.",
+      "trigger": {
+        "input": "timeout 20s node --input-type=module -e 'import {ProjectionStore} from \"./src/store.js\"; const s=new ProjectionStore(x=>x); for(let i=0;i<1000;i++){s.update(\"a\",i);s.page();} console.log(s.retainedPages);'",
+        "expected": "1",
+        "actual": "1000"
+      },
+      "why_missed": "A test of updated page contents passes on both variants; only retained state after repeated update/read cycles distinguishes them. S9(a): repeated multi-step sequence."
+    },
+    {
+      "id": "D2",
+      "file": "src/store.js",
+      "line": 23,
+      "class": "quadratic-key-reindexing",
+      "keywords": [
+        "quadratic",
+        "merge",
+        "callback",
+        "reindex"
+      ],
+      "description": "Once the index reaches 1000 keys, each subsequent batch re-evaluates every retained key, making work quadratic.",
+      "trigger": {
+        "input": "timeout 20s node --input-type=module -e 'import {mergeBatches} from \"./src/store.js\"; let calls=0; const rows=mergeBatches(Array.from({length:2000},(_,id)=>[{id}]),x=>{calls++;return x.id;}); console.log(rows.length,calls);'",
+        "expected": "2000 2000",
+        "actual": "2000 1501500"
+      },
+      "why_missed": "Result equality and counters below the index threshold are identical across variants. S9(b): callback work diverges only after at least 1000 distinct items; the probe accumulates work over 2000 items."
+    }
+  ]
+}

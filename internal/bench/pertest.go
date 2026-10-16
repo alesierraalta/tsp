@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -39,8 +41,10 @@ func perTestCommand(suite string) (argv []string, parser func(string) map[string
 func runCapture(dir string, argv []string, timeout time.Duration) (int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	argv = suiteArgv(dir, argv)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
+	boundProcessTree(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	err := cmd.Run()
@@ -54,15 +58,107 @@ func runCapture(dir string, argv []string, timeout time.Duration) (int, string) 
 	return code, buf.String()
 }
 
+// goValueFlags are the go test and build flags whose value may be the next word, so that word is
+// not a package ("-coverpkg ./..." would otherwise read as a pattern covering every directory).
+var goValueFlags = map[string]bool{
+	"-bench": true, "-benchtime": true, "-blockprofile": true, "-blockprofilerate": true, "-count": true,
+	"-covermode": true, "-coverpkg": true, "-coverprofile": true, "-cpu": true, "-cpuprofile": true,
+	"-fuzz": true, "-fuzzminimizetime": true, "-fuzztime": true, "-list": true, "-memprofile": true,
+	"-memprofilerate": true, "-mutexprofile": true, "-mutexprofilefraction": true, "-outputdir": true,
+	"-parallel": true, "-run": true, "-shuffle": true, "-skip": true, "-timeout": true, "-trace": true,
+	"-vet": true, "-C": true, "-asmflags": true, "-compiler": true, "-exec": true, "-gccgoflags": true,
+	"-gcflags": true, "-installsuffix": true, "-ldflags": true, "-mod": true, "-modfile": true, "-o": true,
+	"-overlay": true, "-p": true, "-pgo": true, "-pkgdir": true, "-tags": true, "-toolexec": true,
+	"-buildmode": true,
+}
+
+// goFlagName reduces a go test flag word to its canonical spelling: one dash, without the "test."
+// prefix the test binary's flags also accept, so "--test.run" looks up as "-run".
+func goFlagName(word string) string {
+	return "-" + strings.TrimPrefix(strings.TrimLeft(word, "-"), "test.")
+}
+
+// withTestPackages adds to a go test argv the directory of every Go test file its package patterns do
+// not already cover, so a test placed outside a scoped suite runs instead of being scored without ever
+// executing. The packages go right after the suite's own: go test reads a package named after a flag
+// as an argument for the test binary and silently skips it.
+func withTestPackages(argv, testFiles []string) []string {
+	var patterns []string
+	at := 2
+	for i := 2; i < len(argv); i++ {
+		if argv[i] == "-args" || argv[i] == "--args" {
+			break // everything after -args belongs to the test binary
+		}
+		if strings.HasPrefix(argv[i], "-") {
+			if goValueFlags[goFlagName(argv[i])] {
+				i++
+			}
+			continue
+		}
+		patterns = append(patterns, argv[i])
+		at = i + 1
+	}
+	implicit := len(patterns) == 0
+	if implicit {
+		patterns = []string{"."}
+	}
+	var extra []string
+	for _, f := range testFiles {
+		if !strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		dir := path.Dir(filepath.ToSlash(f))
+		if goPatternsCover(append(patterns, extra...), dir) {
+			continue
+		}
+		if dir == "." {
+			extra = append(extra, ".")
+		} else {
+			extra = append(extra, "./"+dir)
+		}
+	}
+	if len(extra) == 0 {
+		return argv
+	}
+	if implicit {
+		extra = append([]string{"."}, extra...)
+	}
+	out := append(append([]string{}, argv[:at]...), extra...)
+	return append(out, argv[at:]...)
+}
+
+// goPatternsCover reports whether relative package patterns (., ./x, ./x/, ./x/..., ./...) include dir.
+func goPatternsCover(patterns []string, dir string) bool {
+	for _, p := range patterns {
+		p = strings.TrimSuffix(strings.TrimPrefix(p, "./"), "/")
+		if p == "" {
+			p = "."
+		}
+		switch base, recursive := strings.CutSuffix(p, "/..."); {
+		case p == "...":
+			return true
+		case recursive && (dir == base || strings.HasPrefix(dir, base+"/")):
+			return true
+		case !recursive && p == dir:
+			return true
+		}
+	}
+	return false
+}
+
 // perTest runs the suite and returns each test's outcome by name. A runner without a per-test
 // format yields the single entry "suite". A suite the splitter cannot read is refused before it runs.
-func perTest(dir, suite string, timeout time.Duration) (map[string]bool, int, string, error) {
+// A go suite also runs the packages of the given test files that it does not already cover.
+func perTest(dir, suite string, timeout time.Duration, testFiles ...string) (map[string]bool, int, string, error) {
 	argv, parser, err := perTestCommand(suite)
 	if err != nil {
 		return nil, -1, "", err
 	}
 	if argv == nil {
 		return nil, -1, "", nil
+	}
+	if argv[0] == "go" && argv[1] == "test" {
+		argv = withTestPackages(argv, testFiles)
 	}
 	code, out := runCapture(dir, argv, timeout)
 	if parser == nil {

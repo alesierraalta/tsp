@@ -1,0 +1,47 @@
+{
+  "id": "f02-usage-periods",
+  "family": "time",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "periods.go",
+      "line": 10,
+      "class": "iso-week-year",
+      "keywords": [
+        "iso",
+        "week",
+        "year",
+        "grouping"
+      ],
+      "description": "Weekly keys combine the ISO week number with the calendar year.",
+      "trigger": {
+        "input": "scratch=$(mktemp -d /tmp/f02-probe.XXXXXX) && printf %s 'package main\nimport(\"fmt\";\"time\"; periods \"tpp.bench/f02\")\nfunc main(){fmt.Println(periods.WeeklyKey(time.Date(2021,1,1,12,0,0,0,time.UTC)))}\n' > \"$scratch/main.go\" && timeout 60 go run \"$scratch/main.go\"",
+        "expected": "2020-W53\n",
+        "actual": "2021-W53\n"
+      },
+      "why_missed": "Adjacent summer dates satisfy the grouping property while calendar and ISO years coincide."
+    },
+    {
+      "id": "D2",
+      "file": "periods.go",
+      "line": 18,
+      "class": "partial-hour-truncation",
+      "keywords": [
+        "elapsed",
+        "hour",
+        "billing",
+        "truncation"
+      ],
+      "description": "Usage billing discards partial elapsed hours.",
+      "trigger": {
+        "input": "scratch=$(mktemp -d /tmp/f02-probe.XXXXXX) && printf %s 'package main\nimport(\"fmt\";\"time\"; periods \"tpp.bench/f02\")\nfunc main(){start:=time.Date(2024,6,12,12,0,0,0,time.UTC);fmt.Println(periods.BillableHours(start,start.Add(90*time.Minute)))}\n' > \"$scratch/main.go\" && timeout 60 go run \"$scratch/main.go\"",
+        "expected": "2\n",
+        "actual": "1\n"
+      },
+      "why_missed": "Whole-hour and nonpositive intervals cover both branches without exercising a positive remainder."
+    }
+  ]
+}

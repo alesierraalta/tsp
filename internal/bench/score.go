@@ -55,6 +55,7 @@ type Result struct {
 	Notes                []string       `json:"notes,omitempty"`
 	CostUSD              float64        `json:"cost_usd"`
 	Turns                int            `json:"turns"`
+	Escalated            bool           `json:"escalated,omitempty"` // scored on a rerun with Options.EscalateModel; cost and turns count both
 	Seconds              float64        `json:"seconds"`
 	Invalid              bool           `json:"invalid"`
 	InvalidReason        string         `json:"invalid_reason,omitempty"`

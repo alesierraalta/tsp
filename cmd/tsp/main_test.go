@@ -2326,6 +2326,22 @@ func TestBenchRunRefusesAConfigTheRunnerCannotHonor(t *testing.T) {
 	}
 }
 
+// --escalate-model names the model a run falls back to when its first attempt pinned nothing. It is accepted
+// like any other run flag, and naming the run's own model is refused: the rerun would pay twice for one model.
+func TestBenchRunEscalateModelFlag(t *testing.T) {
+	none := filepath.Join(t.TempDir(), "none-*")
+	if code := runBenchRun([]string{"--runner", "pi", "--model", "cheap", "--escalate-model", "strong", "--dry-run", "--cases", none, "--out", t.TempDir()}); code != 1 {
+		t.Errorf("a valid --escalate-model exit = %d, want 1 (flags accepted, no case matched)", code)
+	}
+	out := t.TempDir()
+	if code := runBenchRun([]string{"--runner", "pi", "--model", "cheap", "--escalate-model", "cheap", "--dry-run", "--cases", none, "--out", out}); code != 2 {
+		t.Errorf("--escalate-model equal to --model exit = %d, want 2", code)
+	}
+	if entries, _ := os.ReadDir(out); len(entries) != 0 {
+		t.Errorf("a refused --escalate-model wrote %d entries", len(entries))
+	}
+}
+
 // setupEnv isolates a setup run: its own HOME and installation state, and exactly the PATH given, so
 // the PATH check sees only what the test decided.
 func setupEnv(t *testing.T, home, path string) []string {

@@ -1,0 +1,33 @@
+{
+  "id": "f08-token-pool",
+  "family": "boundary",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1", "file": "pool.go", "line": 17,
+      "class": "exclusive-budget-boundary",
+      "keywords": ["reserve", "budget", "equality", "remaining"],
+      "description": "A reservation equal to the remaining budget is rejected even though it fits.",
+      "trigger": {
+        "input": "d=$(mktemp -d /tmp/f08-probe.XXXXXX) && printf %s 'package main\nimport (\"fmt\"; pool \"tpp.bench/f08\")\nfunc main() { p := pool.New(5); p.Reserve(2); fmt.Printf(\"accepted=%t available=%d\\n\", p.Reserve(3), p.Available()) }\n' > \"$d/main.go\" && timeout 60 go run \"$d/main.go\"",
+        "expected": "accepted=true available=0\n",
+        "actual": "accepted=false available=3\n"
+      },
+      "why_missed": "Tests reserve small quantities and reject over-budget requests, but never consume the exact remaining balance after an earlier reservation."
+    },
+    {
+      "id": "D2", "file": "pool.go", "line": 30,
+      "class": "saturation-boundary-underfill",
+      "keywords": ["refund", "saturation", "capacity", "token"],
+      "description": "A refund crossing capacity saturates one token below the configured ceiling.",
+      "trigger": {
+        "input": "d=$(mktemp -d /tmp/f08-probe.XXXXXX) && printf %s 'package main\nimport (\"fmt\"; pool \"tpp.bench/f08\")\nfunc main() { p := pool.New(5); p.Reserve(2); p.Refund(4); fmt.Printf(\"available=%d\\n\", p.Available()) }\n' > \"$d/main.go\" && timeout 60 go run \"$d/main.go\"",
+        "expected": "available=5\n",
+        "actual": "available=4\n"
+      },
+      "why_missed": "Tests refund only previously reserved quantities, reaching capacity exactly without crossing the saturation boundary."
+    }
+  ]
+}

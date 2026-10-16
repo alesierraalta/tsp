@@ -27,14 +27,18 @@ type Provenance struct {
 	Scorer         string `json:"scorer"` // build revision that produced the numbers
 	Model          string `json:"model"`
 	Runner         string `json:"runner"` // pi | claude
-	SkillVersion   string `json:"skill_version"`
-	Corpus         string `json:"corpus"` // digest of cases, requests and runs per case
-	Cases          int    `json:"cases"`
-	Runs           int    `json:"runs"`                    // runs per case
-	AgentConfig    string `json:"agent_config"`            // bench | inherited | custom | unspecified
-	SkillsDigest   string `json:"skills_digest,omitempty"` // digest of the skills a throwaway config carried
-	Environment    string `json:"environment"`             // os/arch of the instrument
-	SuiteTools     string `json:"suite_tools,omitempty"`   // node and go versions the suites ran with
+	// EscalateModel names the model a run fell back to when its first attempt pinned nothing; empty for a reading
+	// that ran one model, so an escalated reading is never compared with a plain one unawares.
+	EscalateModel string `json:"escalate_model,omitempty"`
+	SkillVersion  string `json:"skill_version"`
+	Corpus        string `json:"corpus"` // digest of cases, requests and runs per case
+	Cases         int    `json:"cases"`
+	Runs          int    `json:"runs"`                    // runs per case
+	AgentConfig   string `json:"agent_config"`            // bench | inherited | custom | unspecified
+	SkillsDigest  string `json:"skills_digest,omitempty"` // digest of the skills a throwaway config carried
+	Environment   string `json:"environment"`             // os/arch of the instrument
+	SuiteTools    string `json:"suite_tools,omitempty"`   // node and go versions the suites ran with
+	Prompt        string `json:"prompt,omitempty"`        // the instruction every arm got, when it was not the bench prompt
 }
 
 // Agent-config modes identify whether a run used the isolated benchmark configuration or an operator-owned one.
@@ -61,7 +65,8 @@ func SkillsDigest(skillsRoot string) (string, error) {
 	return digestSkillFiles(files), nil
 }
 
-// VerifyBenchSkills refuses a throwaway config whose skill tree is missing, extra, or changed from the embedded set.
+// VerifyBenchSkills refuses a throwaway config whose skill tree is missing, extra, or changed from the embedded
+// skill under test (BenchSkill).
 func VerifyBenchSkills(dir string) error {
 	root, err := resolveSkillsRoot(filepath.Join(dir, "skills"))
 	if err != nil {
@@ -188,8 +193,8 @@ func filesystemSkillFiles(root string) (map[string][]byte, error) {
 
 func embeddedSkillFiles() (map[string][]byte, error) {
 	files := map[string][]byte{}
-	err := fs.WalkDir(assets.Skills(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil || path == "." {
+	err := fs.WalkDir(assets.Skills(), BenchSkill, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
 			return walkErr
 		}
 		if entry.IsDir() {
@@ -227,6 +232,7 @@ func provenanceForRun(opts Options, corpus string, cases int) Provenance {
 		Scorer:         buildinfo.Revision(),
 		Model:          opts.Model,
 		Runner:         effectiveRunner(opts.Runner),
+		EscalateModel:  opts.EscalateModel,
 		SkillVersion:   SkillVersion(opts.SkillFile),
 		Corpus:         corpus,
 		Cases:          cases,
@@ -234,6 +240,7 @@ func provenanceForRun(opts Options, corpus string, cases int) Provenance {
 		AgentConfig:    configMode(opts.ConfigMode),
 		Environment:    environment(),
 		SuiteTools:     suiteTools(),
+		Prompt:         opts.Prompt,
 	}
 	if opts.ConfigDir != "" {
 		p.SkillsDigest, _ = SkillsDigest(opts.ConfigDir)

@@ -51,9 +51,9 @@ type Report struct {
 
 var capabilities = []Capability{
 	{Name: "git", Required: true, Degrades: "the gate and the fingerprint cannot run at all"},
-	{Name: "claude", Degrades: "the eval harness cannot drive sessions"},
+	{Name: "claude", Degrades: "bench run --runner claude has no agent to spawn"},
 	{Name: "node", Degrades: "fixtures that use node:test cannot run"},
-	{Name: "python3", Degrades: "the eval harness and seed-mutants (still Python) cannot run"},
+	{Name: "python3", Degrades: "the Python helper scripts some skills ship cannot run"},
 	{Name: "docker", Degrades: "plan admit --sandbox has no container to observe in, so a sandbox pin cannot be checked and a mutation cannot be replayed"},
 	{Name: "codegraph", Degrades: "inventory falls back to git ls-files plus grep"},
 	{Name: "rtk", Degrades: "shell output is not compacted; nothing else changes"},

@@ -1,0 +1,47 @@
+{
+  "id": "f33-project-vault",
+  "family": "security",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/workspace.js",
+      "line": 50,
+      "class": "stale-membership-authorization",
+      "keywords": [
+        "membership",
+        "deferred",
+        "authorization",
+        "snapshot"
+      ],
+      "description": "Execution authorizes a deferred edit with its old membership snapshot instead of current project membership.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { Workspace } from \"./src/workspace.js\"; const w=new Workspace(); w.createProject(\"p\",\"alice\"); w.policy.grant(\"p\",\"alice\",\"bob\",\"editor\"); w.createDocument(\"alice\",\"d\",\"p\",\"Draft\"); const j=w.prepare(\"bob\",\"d\",{title:\"Published\"}); w.policy.revoke(\"p\",\"alice\",\"bob\"); try {w.apply(j)} catch {} console.log(w.read(\"alice\",\"d\").title);'",
+        "expected": "Draft",
+        "actual": "Published"
+      },
+      "why_missed": "S9(a): prepare, revoke, apply crosses a membership change. Policy snapshots are correct historical views and Store updates are correct unauthenticated persistence; Workspace composes them as live authority."
+    },
+    {
+      "id": "D2",
+      "file": "src/links.js",
+      "line": 41,
+      "class": "revocation-resurrection",
+      "keywords": [
+        "revocation",
+        "renewal",
+        "capability",
+        "recipient"
+      ],
+      "description": "Renewing a permanently revoked recipient token restores access.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import { Workspace } from \"./src/workspace.js\"; import { Links } from \"./src/links.js\"; const w=new Workspace(); w.createProject(\"p\",\"alice\"); w.createDocument(\"alice\",\"d\",\"p\",\"Draft\"); const l=new Links(w,()=>10); const k=l.issue(\"alice\",\"d\",\"guest\",20); l.revoke(\"alice\",k); l.renew(\"alice\",k,30); let out=\"denied\"; try {out=l.read(\"guest\",k).title} catch {} console.log(out);'",
+        "expected": "denied",
+        "actual": "Draft"
+      },
+      "why_missed": "S9(a,d): issue, revoke, renew, read. Naive renewal tests expect usable links, whereas the secondary contract makes revocation permanent."
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "id": "f36-catalog-pages",
+  "family": "boundary",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "page.go",
+      "class": "exclusive-cursor-adaptation",
+      "keywords": [
+        "cursor",
+        "inclusive",
+        "pagination",
+        "duplicate"
+      ],
+      "description": "List passes its exclusive cursor directly to an inclusive index range, repeating the last record.",
+      "trigger": {
+        "input": "d=$(mktemp -d /tmp/tpp-T22-XXXXXXXX); printf %s 'package main\nimport (\"fmt\"; c \"example.com/catalog\")\nfunc main(){s:=c.NewStore(); s.Put(c.Record{ID:\"a\",Title:\"A\"}); s.Put(c.Record{ID:\"b\",Title:\"B\"}); p,_:=c.List(s,\"\",1); q,_:=c.List(s,p.Next,1); fmt.Println(q.IDs())}\n' > \"$d/main.go\"; go run \"$d/main.go\"",
+        "expected": "[b]",
+        "actual": "[a]"
+      },
+      "why_missed": "S9(a,d): populate, page, resume crosses the index/page contract boundary; an inclusive lower bound is correct for Index.From but wrong for a continuation cursor. Single-page and standalone range tests both pass.",
+      "line": 15
+    },
+    {
+      "id": "D2",
+      "file": "label.go",
+      "class": "utf8-byte-boundary",
+      "keywords": [
+        "utf8",
+        "label",
+        "boundary",
+        "prefix"
+      ],
+      "description": "Label slices at the byte budget even when that bisects a multibyte rune.",
+      "trigger": {
+        "input": "d=$(mktemp -d /tmp/tpp-T22-XXXXXXXX); printf %s 'package main\nimport (\"fmt\"; c \"example.com/catalog\")\nfunc main(){label,_:=c.Label(\"ab\u732bz\",4); fmt.Printf(\"%x\\n\",[]byte(label))}\n' > \"$d/main.go\"; go run \"$d/main.go\"",
+        "expected": "6162",
+        "actual": "6162e78c"
+      },
+      "why_missed": "S9(d): taking exactly the byte budget appears natural, but the documented oracle is the longest valid UTF-8 prefix within it. ASCII truncation covers the branch without distinguishing variants.",
+      "line": 20
+    }
+  ]
+}

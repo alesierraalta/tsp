@@ -1,0 +1,33 @@
+{
+  "id": "f11-tabular-import",
+  "family": "input-domain",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "etl",
+  "defects": [
+    {
+      "id": "D1", "file": "src/table.js", "line": 3,
+      "class": "line-ending-contamination",
+      "keywords": ["crlf", "carriage", "field", "record"],
+      "description": "Splitting records only on LF leaves the carriage return in the final field of CRLF records.",
+      "trigger": {
+        "input": "timeout 60 node --input-type=module -e 'import { parseTable } from \"./src/table.js\"; console.log(JSON.stringify(parseTable(\"pear\\t3\\r\\n\")));'",
+        "expected": "[[\"pear\",\"3\"]]",
+        "actual": "[[\"pear\",\"3\\r\"]]"
+      },
+      "why_missed": "The suite imports only LF documents; identical branch execution with a different line-ending representation changes the field contents."
+    },
+    {
+      "id": "D2", "file": "src/table.js", "line": 5,
+      "class": "empty-field-collapse",
+      "keywords": ["empty", "column", "filter", "position"],
+      "description": "Filtering falsy fields removes empty columns and shifts subsequent values into the wrong positions.",
+      "trigger": {
+        "input": "timeout 60 node --input-type=module -e 'import { parseTable } from \"./src/table.js\"; console.log(JSON.stringify(parseTable(\"pear\\t\\t3\\t\\n\")));'",
+        "expected": "[[\"pear\",\"\",\"3\",\"\"]]",
+        "actual": "[[\"pear\",\"3\"]]"
+      },
+      "why_missed": "The happy suite uses populated columns, so the filtering callback runs without ever exercising an empty field."
+    }
+  ]
+}

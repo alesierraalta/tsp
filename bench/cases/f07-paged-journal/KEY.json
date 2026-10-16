@@ -1,0 +1,33 @@
+{
+  "id": "f07-paged-journal",
+  "family": "boundary",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1", "file": "src/journal.js", "line": 9,
+      "class": "exclusive-capacity-boundary",
+      "keywords": ["capacity", "append", "full", "batch"],
+      "description": "Appending a batch that exactly fills the journal is rejected because the capacity comparison excludes equality.",
+      "trigger": {
+        "input": "timeout 60 node --input-type=module -e 'import { Journal } from \"./src/journal.js\"; const j = new Journal(3); j.append([\"a\",\"b\"]); console.log(JSON.stringify({accepted:j.append([\"c\"]),items:j.page(0,10).items}));'",
+        "expected": "{\"accepted\":true,\"items\":[\"a\",\"b\",\"c\"]}\n",
+        "actual": "{\"accepted\":false,\"items\":[\"a\",\"b\"]}\n"
+      },
+      "why_missed": "Tests accept batches with spare capacity and reject oversized batches, covering both outcomes without ever filling the last slot."
+    },
+    {
+      "id": "D2", "file": "src/journal.js", "line": 20,
+      "class": "pagination-boundary-skip",
+      "keywords": ["pagination", "cursor", "offset", "skip"],
+      "description": "The continuation offset advances past the exclusive slice end, losing the first entry of the next page.",
+      "trigger": {
+        "input": "timeout 60 node --input-type=module -e 'import { Journal } from \"./src/journal.js\"; const j = new Journal(10); j.append([\"a\",\"b\",\"c\",\"d\"]); const p=j.page(0,2); console.log(JSON.stringify([...p.items,...j.page(p.next,2).items]));'",
+        "expected": "[\"a\",\"b\",\"c\",\"d\"]\n",
+        "actual": "[\"a\",\"b\",\"d\"]\n"
+      },
+      "why_missed": "Tests inspect complete pages or explicit offsets, never joining consecutive calls through a returned continuation offset."
+    }
+  ]
+}

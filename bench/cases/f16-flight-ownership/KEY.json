@@ -1,0 +1,37 @@
+{
+  "id": "f16-flight-ownership",
+  "language": "node",
+  "family": "concurrency",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/leases.js",
+      "line": 9,
+      "class": "concurrency-aba-ownership",
+      "keywords": ["generation", "aba", "ticket", "ownership"],
+      "description": "A toggled generation reuses an earlier owner's identity, letting a stale release free a resource owned by another caller.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {LeasePool} from \"./src/leases.js\"; const p = new LeasePool(); const old = p.acquire(\"a\"); p.release(old); const middle = p.acquire(\"a\"); p.release(middle); p.acquire(\"a\"); console.log(\"stale-release=\" + p.release(old), \"available=\" + (p.acquire(\"a\") !== null));'",
+        "expected": "stale-release=false available=false",
+        "actual": "stale-release=true available=true"
+      },
+      "why_missed": "S9(a): acquire/release/acquire/release/acquire must precede the stale completion; the usual contention and one ownership handoff checks never reuse the generation."
+    },
+    {
+      "id": "D2",
+      "file": "src/flights.js",
+      "line": 9,
+      "class": "concurrency-detached-cleanup",
+      "keywords": ["detached", "cleanup", "flight", "coalescing"],
+      "description": "A detached operation's completion deletes a replacement operation's entry, allowing concurrent duplicate work for that key.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {FlightRegistry} from \"./src/flights.js\"; const r = new FlightRegistry(); let finishOld, finishFresh; const old = r.run(\"a\", () => new Promise(resolve => { finishOld = resolve; })); await Promise.resolve(); r.invalidate(\"a\"); const fresh = r.run(\"a\", () => new Promise(resolve => { finishFresh = resolve; })); await Promise.resolve(); finishOld(\"old\"); await old; const joined = r.run(\"a\", () => \"duplicate\"); console.log(\"joined=\" + (joined === fresh)); finishFresh(\"fresh\"); await Promise.all([fresh, joined]);'",
+        "expected": "joined=true",
+        "actual": "joined=false"
+      },
+      "why_missed": "S9(a): start/invalidate/start/complete/join is required while the replacement stays pending; ordinary coalescing, rejection cleanup and immediate invalidation results do not test ownership after detached completion."
+    }
+  ]
+}

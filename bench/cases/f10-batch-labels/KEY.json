@@ -1,0 +1,45 @@
+{
+  "id": "f10-batch-labels",
+  "language": "go",
+  "family": "performance",
+  "suite": "go test ./...",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "batch.go",
+      "line": 7,
+      "class": "per-record-allocation",
+      "keywords": [
+        "allocation",
+        "buffer",
+        "batch"
+      ],
+      "description": "VisitIDs allocates a new escaping buffer for every record rather than once per batch.",
+      "trigger": {
+        "input": "bash -c 'set -euo pipefail; d=$(mktemp -d); cp go.mod batch.go \"$d/\"; printf %s '\"'\"'package batch\nimport (\"fmt\"; \"testing\")\nvar held []byte\nfunc TestMeasure(t *testing.T) { ids:=make([]uint64,1200); a:=testing.AllocsPerRun(5,func(){ VisitIDs(ids,func(b []byte){ held=b; held=nil }) }); fmt.Printf(\"allocations=%.0f\\n\",a) }\n'\"'\"' > \"$d/measure_test.go\"; cd \"$d\"; timeout 60 go test -count=1 -run \"^TestMeasure$\" -v | awk '\"'\"'/^allocations=/{print}'\"'\"''",
+        "expected": "allocations=1",
+        "actual": "allocations=1200"
+      },
+      "why_missed": "Small correctness-only batches do not measure resource usage."
+    },
+    {
+      "id": "D2",
+      "file": "batch.go",
+      "line": 29,
+      "class": "unbounded-label-cache",
+      "keywords": [
+        "cache",
+        "retention",
+        "eviction"
+      ],
+      "description": "Label insertion retains every distinct key instead of enforcing the configured FIFO capacity.",
+      "trigger": {
+        "input": "bash -c 'set -euo pipefail; d=$(mktemp -d); cp go.mod batch.go \"$d/\"; printf %s '\"'\"'package batch\nimport (\"fmt\"; \"testing\")\nvar held []byte\nfunc TestMeasure(t *testing.T) { l:=NewLabels(32,func(id string) string{return id}); for i:=0;i<1200;i++ {l.Label(fmt.Sprint(i))}; fmt.Printf(\"retained=%d\\n\",l.Size()) }\n'\"'\"' > \"$d/measure_test.go\"; cd \"$d\"; timeout 60 go test -count=1 -run \"^TestMeasure$\" -v | awk '\"'\"'/^retained=/{print}'\"'\"''",
+        "expected": "retained=32",
+        "actual": "retained=1200"
+      },
+      "why_missed": "Repeated hits on a few keys never exercise capacity replacement."
+    }
+  ]
+}

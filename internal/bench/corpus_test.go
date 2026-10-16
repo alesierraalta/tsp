@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,6 +72,130 @@ func TestCorpusShipsFixedVersions(t *testing.T) {
 		for _, d := range key.Defects {
 			if st, err := os.Stat(filepath.Join(c, FixDir, "keep-"+d.ID)); err != nil || !st.IsDir() {
 				t.Errorf("%s: no fix/keep-%s", filepath.Base(c), d.ID)
+			}
+		}
+	}
+}
+
+// A defect's line is the statement fix/all corrects. A formatter that reflows the fixture after the key was
+// written moves that statement and leaves the key pointing at a blank line or a signature, so a finding that
+// cites the real line matches only by keyword. Checked for family-tagged cases, which are written to this rule.
+func TestCorpusKeyLinesSitOnTheFixedStatement(t *testing.T) {
+	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	for _, c := range cases {
+		key, err := LoadKey(c)
+		if err != nil || key.Family == "" {
+			continue
+		}
+		for _, d := range key.Defects {
+			fixture, err := os.ReadFile(filepath.Join(c, FixtureDir, d.File))
+			if err != nil {
+				t.Errorf("%s %s: %v", filepath.Base(c), d.ID, err)
+				continue
+			}
+			fixed, err := os.ReadFile(filepath.Join(c, FixDir, "all", d.File))
+			if err != nil {
+				t.Errorf("%s %s: fix/all does not correct %s", filepath.Base(c), d.ID, d.File)
+				continue
+			}
+			lines := strings.Split(string(fixture), "\n")
+			if d.Line > len(lines) {
+				t.Errorf("%s %s: line %d is past the end of %s", filepath.Base(c), d.ID, d.Line, d.File)
+				continue
+			}
+			cited := lines[d.Line-1]
+			// The fix may rewrite the statement, delete one of its repeats, or move it (an ordering defect keeps
+			// the statement and changes where it runs), so the test asks the diff: the cited line must sit on or
+			// next to a line fix/all changes. A reflowed key points several lines away from any change.
+			if strings.TrimSpace(cited) == "" || !nearChange(changedLines(lines, strings.Split(string(fixed), "\n")), d.Line-1) {
+				t.Errorf("%s %s: %s:%d %q is not a statement fix/all changes", filepath.Base(c), d.ID, d.File, d.Line, strings.TrimSpace(cited))
+			}
+		}
+	}
+}
+
+// changedLines marks the lines of a that a longest-common-subsequence diff against b does not keep, and the
+// line of a that an insertion from b lands before.
+func changedLines(a, b []string) []bool {
+	lcs := make([][]int, len(a)+1)
+	for i := range lcs {
+		lcs[i] = make([]int, len(b)+1)
+	}
+	for i := len(a) - 1; i >= 0; i-- {
+		for j := len(b) - 1; j >= 0; j-- {
+			if a[i] == b[j] {
+				lcs[i][j] = lcs[i+1][j+1] + 1
+			} else {
+				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
+			}
+		}
+	}
+	changed := make([]bool, len(a))
+	for i, j := 0, 0; i < len(a); {
+		switch {
+		case j < len(b) && a[i] == b[j]:
+			i, j = i+1, j+1
+		case j < len(b) && lcs[i][j+1] >= lcs[i+1][j]:
+			changed[i] = true
+			j++
+		default:
+			changed[i] = true
+			i++
+		}
+	}
+	return changed
+}
+
+// A fix that only inserts statements changes no fixture line, yet it corrects the place it is inserted: the
+// fixture line it lands before counts as changed, so a key line on the statement above it sits next to a change.
+func TestChangedLinesMarksTheLineAnInsertionLandsBefore(t *testing.T) {
+	fixture := []string{"a", "b", "c"}
+	fixed := []string{"a", "b", "inserted", "c"}
+	changed := changedLines(fixture, fixed)
+	if changed[0] || changed[1] || !changed[2] {
+		t.Fatalf("changedLines = %v, want only the line after the insertion (c) marked", changed)
+	}
+	if !nearChange(changed, 1) {
+		t.Fatalf("the statement right above the insertion must sit next to a change")
+	}
+}
+
+// nearChange reports whether line i, or a line next to it, is changed: a swap of two adjacent statements
+// leaves one of the pair in the common subsequence.
+func nearChange(changed []bool, i int) bool {
+	for k := i - 1; k <= i+1; k++ {
+		if k >= 0 && k < len(changed) && changed[k] {
+			return true
+		}
+	}
+	return false
+}
+
+// A fix variant of a Go case is an overlay: it holds only the files the fix changes, so on its own it often does
+// not compile (it uses types the fixture's other files declare). Without a module of its own it is a package of
+// this repository's module, and `go test ./...` and `go vet ./...` at the root fail on it. Each variant carries
+// its fixture's go.mod, byte for byte: that makes it a module of its own, and overlaying it changes nothing.
+func TestCorpusGoFixVariantsAreModulesOfTheirOwn(t *testing.T) {
+	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	for _, c := range cases {
+		want, err := os.ReadFile(filepath.Join(c, FixtureDir, "go.mod"))
+		if err != nil {
+			continue // not a Go case
+		}
+		variants, _ := filepath.Glob(filepath.Join(c, FixDir, "*"))
+		for _, v := range variants {
+			goFiles, _ := filepath.Glob(filepath.Join(v, "**", "*.go"))
+			top, _ := filepath.Glob(filepath.Join(v, "*.go"))
+			if len(goFiles)+len(top) == 0 {
+				continue
+			}
+			got, err := os.ReadFile(filepath.Join(v, "go.mod"))
+			if err != nil {
+				t.Errorf("%s: a Go fix variant without its own go.mod is a package of this module", v)
+				continue
+			}
+			if string(got) != string(want) {
+				t.Errorf("%s/go.mod differs from the fixture's: overlaying it would change the case", v)
 			}
 		}
 	}

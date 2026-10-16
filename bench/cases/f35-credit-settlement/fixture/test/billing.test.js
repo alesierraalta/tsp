@@ -1,0 +1,48 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { Session } from '../src/session.js';
+import { Catalog } from '../src/catalog.js';
+import { Basket } from '../src/basket.js';
+import { Ledger } from '../src/ledger.js';
+import { invoice, describeInvoice, productTotals } from '../src/invoice.js';
+import { summarize, statement, select, histogram } from '../src/report.js';
+import { convert, formatCredits, parseCredits, distribute, percentage } from '../src/exchange.js';
+import { integer, positive, nonnegative, checkedAdd, checkedMultiply, clamp } from '../src/quantity.js';
+test('checkout and account views', () => {
+ const s = new Session().register('compute', 25000, 'worker hours');
+ const extra = s.add('compute', 1); assert.equal(s.remove(extra), true);
+ assert.equal(s.products().length, 1); assert.equal(s.balance(), 0);
+ s.add('compute', 2); s.add('compute', 1);
+ assert.equal(s.preview('q').credits, 75);
+ const value = s.checkout('q');
+ assert.equal(s.basket.size, 0); assert.equal(s.summary().credits, 75);
+ assert.deepEqual(productTotals(value), [{code:'compute',units:3}]);
+ assert.match(describeInvoice(value), /Credits: 75/);
+ assert.equal(s.ledger.find('q').credits,75); assert.equal(s.ledger.find('x'),null);
+ assert.equal(s.ledger.has('q'),true); assert.equal(s.ledger.size,1);
+ assert.equal(statement(s.ledger),'q: 75'); assert.equal(select(s.ledger,x=>x.credits>50).length,1);
+ assert.deepEqual(histogram(s.ledger,50),[[50,1]]);
+ assert.throws(()=>s.ledger.post(value));
+});
+test('catalog and basket editing', () => {
+ const c=new Catalog().define('disk',10000); const b=new Basket();
+ const id=b.add('disk',3); assert.equal(c.quote('disk',2),20000);
+ assert.equal(c.has('disk'),true); assert.equal(c.entries().length,1);
+ const copy=c.lookup('disk'); copy.microcredits=0; assert.equal(c.quote('disk'),10000);
+ assert.equal(invoice(c,b).credits,30); assert.equal(b.remove(id),true); assert.equal(b.remove(id),false);
+ assert.throws(()=>c.lookup('missing')); assert.throws(()=>c.define('',1));
+ assert.throws(()=>b.add('disk',0)); assert.throws(()=>b.add('',1));
+ assert.throws(()=>c.quote('disk',Number.MAX_SAFE_INTEGER));
+});
+test('credit utilities',()=>{
+ assert.equal(convert(100,3,2),150); assert.equal(parseCredits('0020'),20);
+ assert.equal(formatCredits(1200),'1,200 cr'); assert.deepEqual(distribute(10,3),[4,3,3]);
+ assert.equal(percentage(1000,500),50); assert.equal(clamp(8,1,5),5);
+ assert.equal(checkedAdd(4,5),9); assert.equal(checkedMultiply(4,5),20);
+ for(const fn of [integer,positive,nonnegative]) assert.throws(()=>fn(0.5));
+ assert.throws(()=>positive(0)); assert.throws(()=>nonnegative(-1));
+ assert.throws(()=>clamp(1,4,2)); assert.throws(()=>parseCredits('1.5'));
+ assert.throws(()=>checkedAdd(Number.MAX_SAFE_INTEGER,1));
+ const l=new Ledger(); assert.deepEqual(summarize(l),{count:0,credits:0,minimum:0,maximum:0});
+ assert.throws(()=>histogram(l,0)); assert.throws(()=>l.post({reference:'',credits:1}));
+});

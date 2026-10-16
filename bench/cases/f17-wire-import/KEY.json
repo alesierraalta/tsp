@@ -1,0 +1,31 @@
+{
+  "id": "f17-wire-import",
+  "family": "input-domain",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "etl",
+  "defects": [
+    {
+      "id": "D1", "file": "src/wire.js", "line": 5,
+      "class": "row-count-truncation",
+      "keywords": ["count", "truncate", "rows", "bitwise"],
+      "description": "Packing narrows the row count to 16 bits, so unpacking loses valid rows in large input arrays.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {packRows,unpackRows} from \"./src/wire.js\"; const rows=Array.from({length:65536},(_,id)=>({id})); console.log(JSON.stringify(unpackRows(packRows(rows)))===JSON.stringify(rows));'",
+        "expected": "true", "actual": "false"
+      },
+      "why_missed": "S9(b): round-trip preservation fails only at 65536 rows or more; ordinary row counts execute the same statement correctly."
+    },
+    {
+      "id": "D2", "file": "src/wire.js", "line": 15,
+      "class": "utf8-chunk-corruption",
+      "keywords": ["utf8", "chunk", "decode", "unicode"],
+      "description": "Independently decoding byte chunks replaces a valid Unicode character split across chunks.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {readText} from \"./src/wire.js\"; const text=Array(3000).fill(\"x\").join(\"é\"); console.log(readText(Buffer.from(text))===text);'",
+        "expected": "true", "actual": "false"
+      },
+      "why_missed": "S9(b): complete text preservation is checked for 3000 labels; no valid UTF-8 input within the default 4096-byte chunk can expose this defect, and long ASCII inputs remain correct."
+    }
+  ]
+}

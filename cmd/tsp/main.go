@@ -69,6 +69,11 @@ commands:
            (init | check | gaps | upgrade | add-finding | add-evidence | admit)
   check    say what this repository still owes, from git and the plan alone: no hook payload,
            no transcript, no host. Exit 1 when there is something to do.
+  redcheck run the tests added or changed since HEAD against HEAD's code and say which new tests
+           fail there (defect witnesses) and which pass (they pin nothing). Exit 0 when at least one
+           new test fails on the unmodified code, 1 when none does or none was added, 2 when nothing
+           could be judged
+           ([--cwd <dir>] [--suite <test command>] [--timeout <duration>])
   status   report the local installation state and optional features
   update   check the Go module proxy for a newer release and install it through go install,
            printing the exact command when go is absent
@@ -187,6 +192,8 @@ func main() {
 		os.Exit(runPlan(os.Args[2:]))
 	case "check":
 		os.Exit(runCheck(os.Args[2:]))
+	case "redcheck":
+		os.Exit(runRedcheck(os.Args[2:]))
 	case "status":
 		os.Exit(runStatus(os.Args[2:]))
 	case "update":
@@ -923,6 +930,46 @@ func runCheck(args []string) int {
 	return res.Exit
 }
 
+// runRedcheck tells a testing agent which of its new tests pin nothing: they pass on the code HEAD holds.
+func runRedcheck(args []string) int {
+	fs := flag.NewFlagSet("redcheck", flag.ContinueOnError)
+	cwd := fs.String("cwd", ".", "directory inside the repository to check")
+	suite := fs.String("suite", "", "command that runs the changed tests (default: their Go packages, or node --test on them)")
+	timeout := fs.Duration("timeout", 5*time.Minute, "cap for each suite run")
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
+	}
+	rep, err := bench.RedCheck(*cwd, *suite, *timeout)
+	if err != nil {
+		fmt.Println("tsp redcheck:", err)
+		return 2
+	}
+	if len(rep.TestFiles) == 0 {
+		fmt.Println("tsp redcheck: no test file was added or changed since HEAD, so no defect is pinned.")
+		return 1
+	}
+	fmt.Println("tsp redcheck:", rep.Suite)
+	for _, name := range rep.Red {
+		fmt.Println("fails on the unmodified code:", name)
+	}
+	for _, name := range rep.PinsNothing {
+		fmt.Println("passes on the unmodified code:", name)
+	}
+	switch {
+	case len(rep.Red) == 0 && len(rep.PinsNothing) == 0:
+		fmt.Println("no new test was found in the changed files, so no defect is pinned.")
+		return 1
+	case len(rep.Red) == 0:
+		fmt.Println("no new test fails on the unmodified code, so none of them pins a defect: change the input or setup until a test fails for the reason the contract names, or report the defect as unconfirmed.")
+		return 1
+	case len(rep.PinsNothing) > 0:
+		fmt.Printf("%d new test(s) pass on the unmodified code: keep them only as checks of promises the code keeps; they are not evidence of a defect.\n", len(rep.PinsNothing))
+		return 0
+	}
+	fmt.Println("every new test fails on the unmodified code.")
+	return 0
+}
+
 // flagSet reports whether the operator passed the named flag, which is how an explicit empty value is
 // told apart from an absent one.
 func flagSet(fs *flag.FlagSet, name string) bool {
@@ -1509,7 +1556,9 @@ func runBenchRun(args []string) int {
 	runner := fs.String("runner", bench.RunnerPi, "agent runner: pi (default), codex (bare baseline only), or claude (last resort)")
 	model := fs.String("model", "", "model for the agent runs; empty uses the runner's default ("+
 		bench.DefaultModel(bench.RunnerPi)+" for pi, "+bench.DefaultModel(bench.RunnerClaude)+" for claude)")
+	escalateModel := fs.String("escalate-model", "", "rerun a case with this model, from a fresh workspace, when the first run left no new test failing on the unmodified code (tsp redcheck found no witness); cost and turns count both attempts; recorded in the provenance")
 	runs := fs.Int("runs", 1, "runs per case")
+	prompt := fs.String("prompt", "", "instruction every arm receives instead of the bench prompt (\""+bench.Prompt+"\"); recorded in the provenance")
 	maxTurns := fs.Int("max-turns", 70, "agent turn cap per run")
 	timeout := fs.Duration("timeout", 30*time.Minute, "agent wall-clock cap per run")
 	suiteTimeout := fs.Duration("suite-timeout", 10*time.Minute, "fixture suite cap")
@@ -1521,7 +1570,7 @@ func runBenchRun(args []string) int {
 	retries := fs.Int("retries", 1, "retries per case on infrastructure failures (exit status, error result)")
 	retryDelay := fs.Duration("retry-delay", 60*time.Second, "pause before a retry")
 	workers := fs.Int("concurrency", 1, "cases to run side by side; the wall clock shortens, the cost does not")
-	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the embedded skills (the default for --runner pi); \"none\" builds one with no skill at all, the bare-agent baseline (pi and codex; the only mode for codex)")
+	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the skill under test (test-strategy) (the default for --runner pi); \"none\" builds one with no skill at all, the bare-agent baseline (pi and codex; the only mode for codex)")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
 	}
@@ -1539,6 +1588,10 @@ func runBenchRun(args []string) int {
 	}
 	if *model == "" {
 		*model = bench.DefaultModel(*runner)
+	}
+	if *escalateModel != "" && *escalateModel == *model {
+		fmt.Fprintf(os.Stderr, "bench run: --escalate-model must differ from --model (%s): the rerun would pay twice for one model\n", *model)
+		return 2
 	}
 	if *out == "" {
 		*out = filepath.Join(*benchDir, "results", bench.Stamp(time.Now()))
@@ -1580,7 +1633,7 @@ func runBenchRun(args []string) int {
 			cfgDir = abs
 		}
 	case cfgDir == "bench":
-		// A throwaway configuration holding only the embedded skills, so the run measures them
+		// A throwaway configuration holding only the skill under test, so the run measures it
 		// and not the operator's global instructions, memory protocol, or MCP servers.
 		cfgDir = filepath.Join(*benchDir, ".agent-config")
 		if err := bench.WriteBenchConfig(cfgDir, defaultConfigDir()); err != nil {
@@ -1595,7 +1648,7 @@ func runBenchRun(args []string) int {
 		skillFile = filepath.Join(cfgDir, "skills", "test-strategy", "SKILL.md")
 	}
 	_, code := bench.Run(bench.Options{
-		CasesGlob: *cases, Model: *model, Runner: *runner, Runs: *runs, MaxTurns: *maxTurns,
+		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
 		Timeout:      *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,

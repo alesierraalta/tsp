@@ -1,0 +1,45 @@
+{
+  "id": "f24-policy-overlay",
+  "family": "contract",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "policy.go",
+      "line": 14,
+      "class": "present-zero-inheritance",
+      "keywords": [
+        "presence",
+        "zero",
+        "retries"
+      ],
+      "description": "An explicitly supplied zero retry count incorrectly inherits the base count.",
+      "trigger": {
+        "input": "d=$(mktemp -d /tmp/tpp-T15-policy-XXXXXXXX); printf '%s' 'package main\nimport (\"fmt\"; policy \"example.com/policy\")\nfunc main(){zero:=0; base:=policy.Config{Retries:3,Enabled:true}; next:=policy.Merge(base,policy.Patch{Retries:&zero}); fmt.Println(next.Retries)}\n' > \"$d/main.go\"; go run \"$d/main.go\"",
+        "expected": "0",
+        "actual": "3"
+      },
+      "why_missed": "A naive oracle equates the zero value with absence, or overlays onto a zero base, yielding identical results across variants (S9d)."
+    },
+    {
+      "id": "D2",
+      "file": "policy.go",
+      "line": 17,
+      "class": "present-false-inheritance",
+      "keywords": [
+        "presence",
+        "false",
+        "enabled"
+      ],
+      "description": "An explicitly supplied false enabled flag incorrectly inherits true.",
+      "trigger": {
+        "input": "d=$(mktemp -d /tmp/tpp-T15-policy-XXXXXXXX); printf '%s' 'package main\nimport (\"fmt\"; policy \"example.com/policy\")\nfunc main(){disabled:=false; base:=policy.Config{Retries:3,Enabled:true}; next:=policy.Merge(base,policy.Patch{Enabled:&disabled}); fmt.Println(next.Enabled)}\n' > \"$d/main.go\"; go run \"$d/main.go\"",
+        "expected": "false",
+        "actual": "true"
+      },
+      "why_missed": "An empty-base test of false passes every variant; a default-oriented oracle mistakes an explicit disabling value for an absent field (S9d)."
+    }
+  ]
+}

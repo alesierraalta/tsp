@@ -1,0 +1,47 @@
+{
+  "id": "f30-worker-coordination",
+  "language": "go",
+  "family": "concurrency",
+  "suite": "go test ./...",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "manager.go",
+      "line": 39,
+      "class": "stale-lease-completion",
+      "keywords": [
+        "generation",
+        "lease",
+        "fencing",
+        "owner"
+      ],
+      "description": "Finish substitutes the current lease generation for the supplied one, allowing an expired same-owner holder to release a replacement reservation.",
+      "trigger": {
+        "input": "printf %s '{\"Op\":\"start\",\"Name\":\"first\",\"Key\":\"a\",\"Owner\":\"worker\"}\n{\"Op\":\"advance\",\"Milliseconds\":1000}\n{\"Op\":\"start\",\"Name\":\"second\",\"Key\":\"a\",\"Owner\":\"worker\"}\n{\"Op\":\"finish\",\"Name\":\"first\"}\n{\"Op\":\"leases\",\"Key\":\"a\"}\n' | timeout 30s go run ./cmd/queue",
+        "expected": "rejected=true active=1 completed=0",
+        "actual": "rejected=false active=0 completed=1"
+      },
+      "why_missed": "S9(a): acquire, expire and reacquire with the same owner, then finish the old lease. LeaseBook rejects stale generations correctly in isolation; manager substitutes a current token. Ordinary finish and different-owner checks do not expose this."
+    },
+    {
+      "id": "D2",
+      "file": "service.go",
+      "line": 30,
+      "class": "cross-generation-flight-sharing",
+      "keywords": [
+        "invalidation",
+        "flight",
+        "generation",
+        "snapshot"
+      ],
+      "description": "Fetch groups in-flight reads by resource alone, allowing post-invalidation callers to subscribe to an obsolete backend snapshot.",
+      "trigger": {
+        "input": "printf %s '{\"Op\":\"set\",\"Value\":\"old\"}\n{\"Op\":\"hold\"}\n{\"Op\":\"fetch\",\"Name\":\"first\",\"Key\":\"a\"}\n{\"Op\":\"set\",\"Value\":\"new\"}\n{\"Op\":\"invalidate\",\"Key\":\"a\"}\n{\"Op\":\"fetch\",\"Name\":\"second\",\"Key\":\"a\"}\n{\"Op\":\"release\"}\n{\"Op\":\"values\"}\n' | timeout 30s go run ./cmd/queue",
+        "expected": "first=old second=new",
+        "actual": "first=old second=old"
+      },
+      "why_missed": "S9(a,d): begin a blocked read, invalidate, start a second read, then release the backend. The naive sharing oracle expects both subscribers to agree, but the version contract requires different snapshots. Cache fencing and opaque flight sharing are each correct alone."
+    }
+  ]
+}

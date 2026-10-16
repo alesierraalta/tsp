@@ -284,12 +284,12 @@ func testsOn(fixture, overlay, ws string, tests []string, suite string, timeout 
 		return nil, -1, "", err
 	}
 	defer os.RemoveAll(dir)
-	return perTest(dir, suite, timeout)
+	return perTest(dir, suite, timeout, tests...)
 }
 
 // stage builds fixture + overlay + the agent's test files in a fresh directory.
 func stage(fixture, overlay, ws string, tests []string) (string, error) {
-	dir, err := os.MkdirTemp("", "tpp-catch-")
+	dir, err := os.MkdirTemp(stageRoot(), "tpp-catch-")
 	if err != nil {
 		return "", err
 	}

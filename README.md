@@ -352,12 +352,16 @@ and `plan` fields are pseudonyms, not names.
 
 ## Skills
 
-The embedded skills live under `assets/skills/`. `test-strategy` is the organic entry point
-("haz test strategy"; aliases: "haz test stragety" and "haz el testing"): it infers the mode from repository state, persists a plan that never
-shrinks, sweeps the specialized skills for their own checks, and executes through
-`exploit-testing`, whose ladder climbs from contract classes and hostile inputs to real
-collaborators, real seams, injected faults, and concurrency. Every finding carries an executed
-evidence record; anything not executed is a hypothesis.
+The embedded skills live under `assets/skills/`. `test-strategy` is the entry point ("haz test
+strategy"; aliases: "haz test stragety" and "haz el testing"): it finds the defects the existing green
+suite misses and leaves one test per defect in the repository's own suite, red on today's code and
+green once the defect is fixed. It probes each promise across its input classes, writes family-wide
+promises (order, round trip, never panics) as property tests with generated inputs, and builds inputs
+that must pass a validator with the code's own encoder before perturbing them. It writes no plan file:
+the tests are the deliverable, and `tsp redcheck` says which new tests actually fail on the unmodified
+code. This lean version replaced the plan-driven skill after the benchmark showed most of that
+skill's cost was ceremony; `tsp plan`, `check` and the Stop gate remain for anyone who keeps a plan.
+The other skills are specialized and invoked by name.
 
 `breakcheck` is an explicitly invoked bounded adversarial campaign for one candidate between the Verifier and RDD; it reports evidence and a readiness disposition, not a score.
 
@@ -381,9 +385,8 @@ benchmark's JavaScript cases run instead of skipping, and it runs
 
 ## Pending
 
-- The eval harness (`assets/skills/test-strategy/evals/run_evals.py`, `selftest.py`) and the
-  calibration tools (`assets/skills/test-strategy/assets/seed-mutants.py`, `fingerprint.sh`) are
-  still Python and shell. They will become subcommands.
+- The plan baseline fingerprint (`assets/skills/test-strategy/assets/fingerprint.sh`) is still shell.
+  It will become a subcommand.
 - Replaying a ledger row's mutation before a finding is accepted, and `status --next-transition`,
   are the next binaries.
 
@@ -604,7 +607,8 @@ partial number is never read as a corpus result.
 The Pi runner (`--runner pi`, the default) measures the same cases with Pi itself:
 `pi -p "haz el testing" --mode json --model <provider>/<model>[:<thinking>] --no-session`, spawned in
 the workspace with `PI_CODING_AGENT_DIR` pointed at a throwaway agent directory. That directory holds
-the same embedded skills and a `settings.json` that loads no packages, so the operator's extensions,
+the embedded `test-strategy` skill alone and a `settings.json` that loads no packages, so the other
+embedded skills (which would ride every turn as catalog entries), the operator's extensions,
 memory protocol, and MCP servers stay out of the reading. `--model` is optional: Pi defaults to
 `opencode/muse-spark-1.3-contributor-free`, while the `claude` runner takes a bare name and defaults
 to `haiku`. Pi has no turn cap, so `--timeout` is its only wall-clock limit. `--runner` defaults to
@@ -652,6 +656,27 @@ tsp bench run --runner pi --agent-config bench --cases 'bench/cases/*'     # pi 
 
 The bare arms write no tsp plan, so their reported column is empty by construction: caught is the
 measure that compares across arms.
+
+Given only the bench prompt (`haz el testing`), a bare agent usually reruns the existing suite and
+stops, so the comparison measures what the skill adds over an agent that does not search. To compare
+search strategies instead, give every arm the same explicit instruction with `--prompt`; the text is
+recorded as `prompt` in the run's provenance, so readings taken with different prompts never pass
+for one measurement:
+
+```
+tsp bench run --runner codex --prompt 'find the defects and pin each with a failing test' --cases 'bench/cases/*'
+```
+
+To measure a cheap-first policy, `--escalate-model` names a second model. After each run the bench
+replays the agent's new tests on the unmodified code (the check `tsp redcheck` runs); when none of
+them fails there, the run pinned nothing, and the case runs again from a fresh workspace with the
+escalation model. The run is scored on that second attempt and its cost and turns count both. The
+aggregate counts `escalated` runs and the provenance records `escalate_model`. Naming the run's own
+model is refused.
+
+```
+tsp bench run --runner pi --model openai-codex/gpt-6-luna --escalate-model openai-codex/gpt-6-sol --cases 'bench/cases/*'
+```
 
 ## License
 
