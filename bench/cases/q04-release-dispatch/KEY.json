@@ -1,0 +1,34 @@
+{
+  "id": "q04-release-dispatch",
+  "family": "resilience-io",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "the release delivery behaviour",
+  "defects": [
+    {
+      "id": "D1", "file": "src/dispatch.js", "line": 11,
+      "class": "cross-environment-reference",
+      "keywords": ["environment", "cache", "artifact", "version", "scope"],
+      "description": "Artifact memoization uses the version alone, so warming a label in one environment makes another environment receive that artifact.",
+      "trigger": {
+        "input": "Catalog contains west/r1 digest w and east/r1 digest e. Publish west/r1 as a, then east/r1 as b on the same dispatcher and collect.",
+        "expected": "a has artifact w and b has artifact e",
+        "actual": "both deliveries have artifact w"
+      },
+      "why_missed": "The suite uses one environment and distinct version labels; it has no multi-environment catalog or cache-warming scenario."
+    },
+    {
+      "id": "D2", "file": "src/dispatch.js", "line": 24,
+      "class": "timeout-applied-to-wrong-scope",
+      "keywords": ["retention", "durable", "timeout", "expiry", "mode"],
+      "description": "Collection applies transient delivery retention to durable deliveries, silently removing outstanding work.",
+      "trigger": {
+        "input": "Use clock ()=>now and retention 10. Publish durable a and transient b at now=0; collect, advance now to 11, collect again.",
+        "expected": "first collection includes both; second includes only durable a",
+        "actual": "second collection is empty"
+      },
+      "why_missed": "All existing tests use the default clock and collect immediately; there is no clock helper or elapsed-time scenario."
+    }
+  ]
+}

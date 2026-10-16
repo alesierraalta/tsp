@@ -1,0 +1,38 @@
+{
+  "id": "q01-passenger-register",
+  "family": "state-logic",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "the passenger register behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/register.js",
+      "line": 13,
+      "class": "title-inferred-demographic",
+      "keywords": ["title", "category", "weight", "classification", "demographic"],
+      "description": "A title amendment recomputes standard weight using the title's inferred category ahead of the passenger's recorded category, changing an adult's planning weight to a child's.",
+      "trigger": {
+        "input": "Add a passenger with title Mr and category adult, then amend only title to Mstr and read the profile.",
+        "expected": "title Mstr, category adult, weight 84",
+        "actual": "title Mstr, category adult, weight 35"
+      },
+      "why_missed": "The suite registers profiles and amends itineraries; it never supplies a title amendment. Changing a registration literal does not invoke the amendment's recomputation path."
+    },
+    {
+      "id": "D2",
+      "file": "src/register.js",
+      "line": 33,
+      "class": "mixed-format-read-modify-write",
+      "keywords": ["positional", "format", "unpack", "amend", "preserve", "tuple"],
+      "description": "Amendment merges the stored representation instead of the decoded profile. Positional records become objects with numeric properties and lose their named fields on the next read.",
+      "trigger": {
+        "input": "Use a store containing a positional passenger record; add a second named record through the register, read both, amend only the first destination, then read both again.",
+        "expected": "The positional passenger retains name, title, category and weight with the new destination; the named passenger is unchanged.",
+        "actual": "The amended passenger has numeric properties instead of named profile fields; the second passenger is unchanged."
+      },
+      "why_missed": "The suite uses only the default empty store and API-created named records. No positional-record fixture or store helper is present."
+    }
+  ]
+}

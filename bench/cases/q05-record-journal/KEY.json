@@ -1,0 +1,34 @@
+{
+  "id": "q05-record-journal",
+  "family": "resilience-io",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "the record journal behaviour",
+  "defects": [
+    {
+      "id": "D1", "file": "src/journal.js", "line": 10,
+      "class": "unchecked-input-read-bound",
+      "keywords": ["fields", "bounds", "columns", "validation", "ingest"],
+      "description": "Reconfiguration changes the consumer layout without updating its validation width. Reading a missing configured position silently substitutes an empty string and overwrites stored data.",
+      "trigger": {
+        "input": "Ingest ['a','blue']; configure ['key','value','group']; ingest ['a','green'] and inspect the result and prior row.",
+        "expected": "second ingest is false and row a remains {key:'a',value:'blue'}",
+        "actual": "second ingest is true and row a becomes {key:'a',value:'green',group:''}"
+      },
+      "why_missed": "The existing suite uses only the default layout; there is no layout fixture, schema transition, or alternate-format helper."
+    },
+    {
+      "id": "D2", "file": "src/journal.js", "line": 23,
+      "class": "transaction-id-wraparound",
+      "keywords": ["transaction", "handle", "collision", "counter", "pending"],
+      "description": "The bounded allocator reuses an occupied identifier after cycling, replacing a pending transaction's value.",
+      "trigger": {
+        "input": "Restore state {next:65535,entries:new Map([[0,'original']])}; begin('first'), begin('second'), then commit handle 0 and the new handles.",
+        "expected": "all three handles are distinct and commit returns original, first, second for their respective owners",
+        "actual": "the second begin returns 0 and commit(0) returns second instead of original"
+      },
+      "why_missed": "The suite uses only a fresh default allocator and two transactions; no restored state or occupied identifier is carried across an identifier cycle."
+    }
+  ]
+}

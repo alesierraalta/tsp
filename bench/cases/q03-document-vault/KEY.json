@@ -1,0 +1,38 @@
+{
+  "id": "q03-document-vault",
+  "family": "boundary",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "the document vault behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/vault.js",
+      "line": 13,
+      "class": "digest-collision-deduplication",
+      "keywords": ["digest", "collision", "content", "fingerprint", "deduplication"],
+      "description": "The index treats equal fingerprints as identical content and returns the earlier document's identifier for a distinct document. The minimal correction makes the index key include content as well as its fingerprint.",
+      "trigger": {
+        "input": "Supply fingerprint=text=>String(text.length), put 'reed' then 'lake', then put 'reed' again and read both distinct documents.",
+        "expected": "Two distinct identifiers with their original content; the third put returns the first identifier.",
+        "actual": "All puts return the first identifier and reading the second identifier returns 'reed'."
+      },
+      "why_missed": "The suite only uses SHA-256. No fingerprint adapter or collision data exists; changing a string literal does not supply the required indexing scenario."
+    },
+    {
+      "id": "D2",
+      "file": "src/vault.js",
+      "line": 31,
+      "class": "error-payload-as-data",
+      "keywords": ["status", "diagnostic", "output", "evaluate", "numeric"],
+      "description": "Evaluation parses output without checking completion status. A diagnostic beginning with a number silently overwrites a previously valid score.",
+      "trigger": {
+        "input": "Supply an evaluator that first returns {status:0,output:'3'}, then {status:2,output:'12 records unavailable'}; put a document and evaluate it twice.",
+        "expected": "Second evaluation false; score stays 3.",
+        "actual": "Second evaluation true; score becomes 12."
+      },
+      "why_missed": "The suite uses only the successful built-in evaluator. It has no evaluator fake, completion-status response or repeated evaluation."
+    }
+  ]
+}
