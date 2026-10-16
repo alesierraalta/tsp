@@ -654,6 +654,11 @@ tsp bench run --runner pi --agent-config none --cases 'bench/cases/*'      # pi,
 tsp bench run --runner pi --agent-config bench --cases 'bench/cases/*'     # pi with the tsp skills
 ```
 
+`--agent-config bench-all` (Pi only) is the same isolated config with every embedded skill instead of
+`test-strategy` alone, so the skill's route step can load the sibling that owns a surface (RAG, LLM,
+queues, ...). The extra catalog entries ride every turn, so compare a `bench-all` arm only with another
+`bench-all` arm; the provenance records the mode.
+
 The bare arms write no tsp plan, so their reported column is empty by construction: caught is the
 measure that compares across arms.
 

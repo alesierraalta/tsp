@@ -2295,6 +2295,7 @@ func TestConfigModeForTheAgentConfigFlag(t *testing.T) {
 	}{
 		{"pi", "", bench.ConfigBench},
 		{"pi", "bench", bench.ConfigBench},
+		{"pi", "bench-all", bench.ConfigBenchAll},
 		{"claude", "bench", bench.ConfigBench},
 		{"claude", "/tmp/op-config", bench.ConfigCustom},
 		{"claude", "", bench.ConfigInherited},
@@ -2315,6 +2316,8 @@ func TestBenchRunRefusesAConfigTheRunnerCannotHonor(t *testing.T) {
 	for _, args := range [][]string{
 		{"--runner", "codex", "--agent-config", "bench"},
 		{"--runner", "claude", "--agent-config", "none"},
+		{"--runner", "claude", "--agent-config", "bench-all"},
+		{"--runner", "codex", "--agent-config", "bench-all"},
 	} {
 		out := t.TempDir()
 		if code := runBenchRun(append(args, "--dry-run", "--cases", filepath.Join(t.TempDir(), "none-*"), "--out", out)); code != 2 {

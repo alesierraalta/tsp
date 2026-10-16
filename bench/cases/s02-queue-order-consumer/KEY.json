@@ -1,0 +1,49 @@
+{
+  "id": "s02-queue-order-consumer",
+  "family": "state-logic",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/consumer.js",
+      "line": 10,
+      "class": "ack-before-apply",
+      "keywords": [
+        "redelivery",
+        "seen",
+        "duplicate",
+        "throw",
+        "lost"
+      ],
+      "description": "handle() records the message id before applying it, so when the store throws the redelivery is reported as a duplicate and the event is lost.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {OrderConsumer} from \"./src/consumer.js\"; import {OrderStore} from \"./src/store.js\"; const s=new OrderStore(); let fail=true; const orig=s.apply.bind(s); s.apply=(o,st)=>{ if(fail){fail=false; throw new Error(\"db down\");} orig(o,st); }; const c=new OrderConsumer(s); const m={id:\"m1\",orderId:\"o1\",version:\"1\",status:\"placed\"}; try{c.handle(m)}catch{} console.log(c.handle(m));'",
+        "expected": "applied",
+        "actual": "duplicate"
+      },
+      "why_missed": "The suite redelivers only messages that were applied; no test makes the store fail and then redelivers."
+    },
+    {
+      "id": "D2",
+      "file": "src/consumer.js",
+      "line": 12,
+      "class": "string-version-compare",
+      "keywords": [
+        "version",
+        "stale",
+        "order",
+        "string",
+        "compare"
+      ],
+      "description": "handle() compares revisions as strings, so revision \"9\" arriving after \"10\" is not stale and overwrites the newer state.",
+      "trigger": {
+        "input": "node --input-type=module -e 'import {OrderConsumer} from \"./src/consumer.js\"; import {OrderStore} from \"./src/store.js\"; const s=new OrderStore(); const c=new OrderConsumer(s); c.handle({id:\"m10\",orderId:\"o1\",version:\"10\",status:\"shipped\"}); console.log(c.handle({id:\"m9\",orderId:\"o1\",version:\"9\",status:\"paid\"}));'",
+        "expected": "stale",
+        "actual": "applied"
+      },
+      "why_missed": "The out-of-order test uses single-digit revisions, where string and numeric order agree."
+    }
+  ]
+}

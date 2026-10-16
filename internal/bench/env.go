@@ -51,7 +51,17 @@ func WriteBenchConfig(dir, credentialsFrom string) error {
 // therefore the operator's extensions, memory protocol, and MCP servers, from the agent dir the
 // run owns, and PI_CODING_AGENT_DIR is what points it there.
 func WriteBenchPiConfig(dir, configFrom string) error {
-	if err := writeEmbeddedSkills(dir); err != nil {
+	return writeIsolatedPiConfig(dir, configFrom, BenchSkill)
+}
+
+// WriteBenchAllPiConfig is WriteBenchPiConfig with every embedded skill, so a skill that routes a surface to a
+// sibling can load it. Everything else is isolated exactly as in the bench config.
+func WriteBenchAllPiConfig(dir, configFrom string) error {
+	return writeIsolatedPiConfig(dir, configFrom, AllSkills)
+}
+
+func writeIsolatedPiConfig(dir, configFrom, root string) error {
+	if err := writeSkillTree(dir, root); err != nil {
 		return err
 	}
 	abs, err := filepath.Abs(dir)
@@ -62,7 +72,7 @@ func WriteBenchPiConfig(dir, configFrom string) error {
 	if err := writePiConfig(dir, configFrom, []string{filepath.Join(abs, "skills")}); err != nil {
 		return err
 	}
-	return VerifyBenchSkills(dir)
+	return verifySkillTree(dir, root)
 }
 
 // writePiConfig writes the settings an isolated Pi run loads, copies the operator's login, and gives the
@@ -156,12 +166,19 @@ const BenchSkill = "test-strategy"
 
 // writeEmbeddedSkills materializes the embedded skill under test (BenchSkill) under dir/skills. Both runners write the
 // same bytes, so a case measures the same skill content whichever agent runs it.
-func writeEmbeddedSkills(dir string) error {
+func writeEmbeddedSkills(dir string) error { return writeSkillTree(dir, BenchSkill) }
+
+// AllSkills is the skill root that selects every embedded skill, for configs that let the skill under test load
+// the siblings it routes to.
+const AllSkills = "."
+
+// writeSkillTree materializes the embedded skills under root ("." for all of them) under dir/skills.
+func writeSkillTree(dir, root string) error {
 	skills := filepath.Join(dir, "skills")
 	if err := os.RemoveAll(skills); err != nil {
 		return err
 	}
-	return fs.WalkDir(assets.Skills(), BenchSkill, func(p string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(assets.Skills(), root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

@@ -3,11 +3,14 @@ package bench
 import (
 	"bytes"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/alesierraalta/tsp/internal/assets"
 )
 
 // A benchmark case must measure the testing skills, not whatever else the machine's global
@@ -253,5 +256,49 @@ func TestPiEnvPointsAtTheThrowawayConfigAndTheBinaryUnderTest(t *testing.T) {
 	}
 	if piEnv([]string{"PATH=/bin"}, "", "") != nil {
 		t.Fatal("without an agent dir the agent must inherit the environment unchanged")
+	}
+}
+
+// A bench-all config carries every embedded skill, byte for byte, so a skill that routes to a sibling can load
+// it; it is isolated exactly like the bench config. The single-skill check refuses it, so the two modes cannot
+// be mistaken for each other.
+func TestPiBenchAllConfigHoldsEveryEmbeddedSkill(t *testing.T) {
+	src := writePiSource(t)
+	cfg := filepath.Join(t.TempDir(), "pi")
+	if err := WriteBenchAllPiConfig(cfg, src); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range assets.SkillNames() {
+		want, err := fs.ReadFile(assets.Skills(), name+"/SKILL.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(cfg, "skills", name, "SKILL.md"))
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("%s: the bench-all config must hold the embedded skill: %v", name, err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(cfg, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if packages, ok := settings["packages"].([]any); !ok || len(packages) != 0 {
+		t.Fatalf("packages must be empty: %v", settings["packages"])
+	}
+	if err := VerifyBenchAllSkills(cfg); err != nil {
+		t.Fatalf("VerifyBenchAllSkills on a fresh bench-all config: %v", err)
+	}
+	if err := VerifyBenchSkills(cfg); err == nil {
+		t.Fatal("the single-skill check must refuse a config that carries every skill")
+	}
+	if err := os.WriteFile(filepath.Join(cfg, "skills", "rag-audit-evaluator", "SKILL.md"), []byte("changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyBenchAllSkills(cfg); err == nil {
+		t.Fatal("VerifyBenchAllSkills must refuse a changed sibling")
 	}
 }

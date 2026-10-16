@@ -1536,6 +1536,8 @@ func configModeFor(runner, agentConfig string) string {
 	switch {
 	case agentConfig == "bench":
 		return bench.ConfigBench
+	case agentConfig == bench.ConfigBenchAll:
+		return bench.ConfigBenchAll
 	case agentConfig == "none", runner == bench.RunnerCodex:
 		// Codex runs only bare: the embedded skills target the hosts tsp installs into, not codex.
 		return bench.ConfigNone
@@ -1570,7 +1572,7 @@ func runBenchRun(args []string) int {
 	retries := fs.Int("retries", 1, "retries per case on infrastructure failures (exit status, error result)")
 	retryDelay := fs.Duration("retry-delay", 60*time.Second, "pause before a retry")
 	workers := fs.Int("concurrency", 1, "cases to run side by side; the wall clock shortens, the cost does not")
-	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the skill under test (test-strategy) (the default for --runner pi); \"none\" builds one with no skill at all, the bare-agent baseline (pi and codex; the only mode for codex)")
+	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the skill under test (test-strategy) (the default for --runner pi); \"bench-all\" builds the same with every embedded skill, so the skill under test can load the siblings it routes to (pi only); \"none\" builds one with no skill at all, the bare-agent baseline (pi and codex; the only mode for codex)")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
 	}
@@ -1584,6 +1586,10 @@ func runBenchRun(args []string) int {
 	}
 	if *runner == bench.RunnerClaude && *agentConfig == "none" {
 		fmt.Fprintf(os.Stderr, "bench run: --agent-config none needs --runner pi or codex\n")
+		return 2
+	}
+	if *agentConfig == bench.ConfigBenchAll && *runner != bench.RunnerPi {
+		fmt.Fprintf(os.Stderr, "bench run: --agent-config bench-all needs --runner pi\n")
 		return 2
 	}
 	if *model == "" {
@@ -1613,14 +1619,19 @@ func runBenchRun(args []string) int {
 			cfgDir = abs
 		}
 		skillFile = ""
-	case *runner == bench.RunnerPi && (cfgDir == "" || cfgDir == "bench"):
+	case *runner == bench.RunnerPi && (cfgDir == "" || cfgDir == "bench" || cfgDir == bench.ConfigBenchAll):
 		// A Pi run always gets a throwaway config: the runner exists so a reading is not shaped by
 		// the operator's packages, extensions, memory protocol, or MCP servers, and so no credential
 		// is shared by link. It is built under the results directory, which the run owns and git
 		// ignores, rather than beside the Claude one in bench/.
-		cfgDir = filepath.Join(*out, ".pi-agent-config")
 		from := bench.DefaultPiConfigDir()
-		if err := bench.WriteBenchPiConfig(cfgDir, from); err != nil {
+		write := bench.WriteBenchPiConfig
+		if cfgDir == bench.ConfigBenchAll {
+			// Every embedded skill, so the skill under test can load the siblings it routes a surface to.
+			write = bench.WriteBenchAllPiConfig
+		}
+		cfgDir = filepath.Join(*out, ".pi-agent-config")
+		if err := write(cfgDir, from); err != nil {
 			fmt.Fprintln(os.Stderr, "bench config:", err)
 			return 1
 		}
