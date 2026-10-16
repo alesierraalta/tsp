@@ -23,8 +23,6 @@ func (s *Store) Referenced() map[string]bool {
 	return refs
 }
 func (s *Store) Reap(now time.Time, retention time.Duration) []string {
-	refs := s.Referenced()
-	_ = refs
 	kept := make([]Image, 0, len(s.Images))
 	removed := []string{}
 	for _, image := range s.Images {

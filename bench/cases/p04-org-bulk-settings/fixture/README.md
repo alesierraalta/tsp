@@ -1,1 +1,1 @@
-Settings applies organization-wide flags and retires workers while preserving safe healthy capacity.
+Settings applies flags to every organization in its store. Worker retirement requires an explicit healthy-capacity policy.
