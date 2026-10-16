@@ -139,3 +139,37 @@ func TestTestStrategySkillRequiresATestFileForEveryReportedFinding(t *testing.T)
 		t.Error("test-strategy still carries the pinning-claim gate written for a gap the measurement did not show")
 	}
 }
+
+// test-strategy routes a surface it cannot judge alone to the sibling that owns it: a repository with a RAG
+// pipeline, an LLM, infrastructure or a database gets that sibling's probes. Every sibling it names is embedded,
+// so a route never points at a skill sync does not install.
+const routeStep = "**Route special surfaces.**"
+
+func TestTestStrategyRoutesSpecialSurfacesToEmbeddedSiblings(t *testing.T) {
+	data, err := fs.ReadFile(Skills(), "test-strategy/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	owners := []string{"rag-audit-evaluator", "llm-eval-design", "llm-redteam", "agent-eval", "iac-safe-auditor",
+		"database-persistence-testing", "messaging-eventdriven-testing", "contract-compat-testing",
+		"crash-and-process-testing", "resilience-fault-injection", "appsec-adversarial-auditor"}
+	for _, o := range owners {
+		if !strings.Contains(body, "`"+o+"`") {
+			t.Errorf("test-strategy does not route to `%s`", o)
+		}
+	}
+	embedded := map[string]bool{}
+	for _, n := range SkillNames() {
+		embedded[n] = true
+	}
+	step, _, ok := strings.Cut(body[strings.Index(body, routeStep)+1:], "\n\n")
+	if !strings.Contains(body, routeStep) || !ok {
+		t.Fatalf("test-strategy has no %q step", routeStep)
+	}
+	for _, m := range regexp.MustCompile("`([a-z]+(?:-[a-z]+)+)`").FindAllStringSubmatch(step, -1) {
+		if !embedded[m[1]] {
+			t.Errorf("the route step names `%s`, which is not an embedded skill", m[1])
+		}
+	}
+}
