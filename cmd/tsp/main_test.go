@@ -2668,6 +2668,33 @@ func TestSetupHookRequirementFollowsTheSelectedHost(t *testing.T) {
 // `tpp bind` is the operator side of the stored binding: the same validations the gate reads, one
 // private hashed file per (root, session) outside the repository, and --unset removes only that
 // session's own key. Errors are bounded — nothing prints the session identity back.
+func TestBenchHistoryMasksPlanlessStoredRows(t *testing.T) {
+	dir := t.TempDir()
+	raw := "| cases | reported | no plan | caught |\n| 9 | 0 | 9 | 17 |\n"
+	if err := os.WriteFile(filepath.Join(dir, "history.md"), []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	code := runBenchHistory([]string{"--bench-dir", dir})
+	w.Close()
+	os.Stdout = orig
+	out, _ := io.ReadAll(r)
+	r.Close()
+	want := "| cases | reported | no plan | caught |\n| 9 | - | - | 17 |\nnote: - means plan-only metrics are unavailable when no plan was recorded; caught remains meaningful.\n"
+	if code != 0 || string(out) != want {
+		t.Fatalf("code=%d output=%q want=%q", code, out, want)
+	}
+	kept, _ := os.ReadFile(filepath.Join(dir, "history.md"))
+	if string(kept) != raw {
+		t.Fatal("stored history changed")
+	}
+}
+
 func TestBindCLIStoresAndUnsetsPerSessionBindings(t *testing.T) {
 	repo := t.TempDir()
 	if out, err := exec.Command("git", "init", repo).CombinedOutput(); err != nil {

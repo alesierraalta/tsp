@@ -110,7 +110,22 @@ func AppendHistory(benchDir string, e HistoryEntry) error {
 		}
 		kind = "rescore of " + e.SourceRun
 	}
-	return appendFile(md, []byte(historyRow(e, ts, kind)))
+	row := historyRow(e, ts, kind)
+	runs := e.Runs
+	if runs < 1 {
+		runs = 1
+	}
+	if e.NoPlan > 0 && e.NoPlan+e.Failed+e.Invalid == e.Cases*runs {
+		row = strings.TrimPrefix(RenderHistory(historyHeader+row), historyHeader)
+		existing, err := os.ReadFile(md)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(existing), planlessNote) {
+			row = strings.ReplaceAll(row, planlessNote+"\n", "")
+		}
+	}
+	return appendFile(md, []byte(row))
 }
 
 // ensureHistoryHeader writes the current header when the file is new or still carries an older one.

@@ -107,6 +107,8 @@ bench score --case <dir> --workspace <ws>
 bench score --case <dir> --plan <file> [--adjudication <path>|none]
 bench history [--bench-dir <dir>]
 bench compare <before-results> <after-results>
+          (plan-less readings show - for plan-only metrics; caught remains meaningful.
+           compare reports a 95% Wilson/Newcombe caught-difference noise interval)
 bench rescore [--bench-dir <dir>] <results>
 bench adjudicate --run <results>/<case>/<run> [--plan <path>] --row <n> --verdict <defect|false_positive|out_of_scope>
           [--defect <id>] --by <who> --reason <why> [--replace] [--ts <RFC3339>]
@@ -2106,7 +2108,7 @@ func runBenchHistory(args []string) int {
 		fmt.Println("no benchmark history yet")
 		return 0
 	}
-	fmt.Print(string(data))
+	fmt.Print(bench.RenderHistory(string(data)))
 	return 0
 }
 

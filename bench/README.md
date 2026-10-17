@@ -7,6 +7,23 @@ reasonable developer would have written. The corpus exists to measure whether a 
 finds what the happy path hides, and to compare one version of the flow against another on the
 same ground.
 
+## Reading plan-less runs and comparisons
+
+For readings with no recorded plan, plan-only metrics (reported/found, recall, precision,
+false positives, activation and plan adjudication counts) are unavailable, not zero.
+New history rows and `tsp bench history` display `-`; existing Markdown rows and JSONL
+records remain untouched. Run summaries and comparisons omit unavailable totals.
+`caught` and `recall_caught` still measure the redcheck witness independently of a plan.
+Mixed readings retain their legacy plan totals; they do not imply complete plan coverage.
+
+`bench compare` prints whether the caught recall difference includes zero in a two-sided
+95% Wilson/Newcombe interval (after minus before). Wilson score bounds use z=1.959963984540054;
+the difference bounds combine the relevant arm errors in quadrature (Newcombe's unpaired
+method, without continuity correction). For example, 16/18 versus 15/18 is within noise.
+This descriptive test treats defect-runs as independent; repetitions and defects in the
+same case may be correlated, so this is not proof of equivalence or a skill-version win.
+No defect-run denominator produces an explicit unavailable verdict.
+
 ## Layout
 
 ```

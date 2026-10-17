@@ -832,6 +832,9 @@ func writeJSON(path string, v any) error {
 
 // Summary renders the aggregate as the markdown table written to summary.md.
 func Summary(agg Aggregate) string {
+	if !hasPlans(agg) {
+		return planlessSummary(agg)
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s", agg.TS, agg.Model, len(agg.Cases), aggregateTotals(agg))
 	if agg.Corpus != "" {

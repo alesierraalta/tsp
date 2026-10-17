@@ -181,19 +181,31 @@ func (c Comparison) Markdown() string {
 	if beforeProvenance.SuiteTools != afterProvenance.SuiteTools {
 		fmt.Fprintf(&w, "note: suite runtimes differed (%s → %s); weigh this when interpreting the comparison.\n", beforeProvenance.SuiteTools, afterProvenance.SuiteTools)
 	}
-	fmt.Fprintf(&w, "reported (defect-runs): %d/%d → %d/%d · reported (unique defects): %d/%d → %d/%d · pinned (defect-runs): %d → %d · caught (defect-runs): %d/%d → %d/%d · caught (unique defects): %d/%d → %d/%d · precision: %s → %s · pending count: %d → %d · inconclusive: %d runs → %d runs · false positives: %d finding rows → %d finding rows · light runs: %d → %d · micro runs: %d → %d · turns: %d → %d · cost (USD): $%.3f → $%.3f\n\n",
-		c.Before.Found, c.Before.Defects, c.After.Found, c.After.Defects,
-		c.Before.UniqueFound, c.Before.UniqueDefects, c.After.UniqueFound, c.After.UniqueDefects,
-		c.Before.ClaimedPinned, c.After.ClaimedPinned,
-		c.Before.Caught, c.Before.Defects, c.After.Caught, c.After.Defects,
-		c.Before.UniqueCaught, c.Before.UniqueDefects, c.After.UniqueCaught, c.After.UniqueDefects,
-		precisionSummary(c.Before.Precision, c.Before.AdjudicatedTrue, c.Before.AdjudicatedFalse, c.Before.PendingAdjudication),
-		precisionSummary(c.After.Precision, c.After.AdjudicatedTrue, c.After.AdjudicatedFalse, c.After.PendingAdjudication),
-		c.Before.PendingAdjudication, c.After.PendingAdjudication,
-		c.Before.Inconclusive, c.After.Inconclusive, c.Before.FalsePositives, c.After.FalsePositives,
-		c.Before.LightActivated, c.After.LightActivated, c.Before.MicroActivated, c.After.MicroActivated,
-		totalTurns(c.Before), totalTurns(c.After), c.Before.CostUSD, c.After.CostUSD)
+	if hasPlans(c.Before) && hasPlans(c.After) {
+		fmt.Fprintf(&w, "reported (defect-runs): %d/%d → %d/%d · reported (unique defects): %d/%d → %d/%d · pinned (defect-runs): %d → %d · caught (defect-runs): %d/%d → %d/%d · caught (unique defects): %d/%d → %d/%d · precision: %s → %s · pending count: %d → %d · inconclusive: %d runs → %d runs · false positives: %d finding rows → %d finding rows · light runs: %d → %d · micro runs: %d → %d · turns: %d → %d · cost (USD): $%.3f → $%.3f\n\n",
+			c.Before.Found, c.Before.Defects, c.After.Found, c.After.Defects,
+			c.Before.UniqueFound, c.Before.UniqueDefects, c.After.UniqueFound, c.After.UniqueDefects,
+			c.Before.ClaimedPinned, c.After.ClaimedPinned,
+			c.Before.Caught, c.Before.Defects, c.After.Caught, c.After.Defects,
+			c.Before.UniqueCaught, c.Before.UniqueDefects, c.After.UniqueCaught, c.After.UniqueDefects,
+			precisionSummary(c.Before.Precision, c.Before.AdjudicatedTrue, c.Before.AdjudicatedFalse, c.Before.PendingAdjudication),
+			precisionSummary(c.After.Precision, c.After.AdjudicatedTrue, c.After.AdjudicatedFalse, c.After.PendingAdjudication),
+			c.Before.PendingAdjudication, c.After.PendingAdjudication,
+			c.Before.Inconclusive, c.After.Inconclusive, c.Before.FalsePositives, c.After.FalsePositives,
+			c.Before.LightActivated, c.After.LightActivated, c.Before.MicroActivated, c.After.MicroActivated,
+			totalTurns(c.Before), totalTurns(c.After), c.Before.CostUSD, c.After.CostUSD)
+	} else {
+		fmt.Fprintf(&w, "before: %s\nafter: %s\n%s\n", planlessTotals(c.Before), planlessTotals(c.After), planlessNote)
+	}
+	fmt.Fprintln(&w, c.CaughtDifference())
 	w.WriteString("| case | reported before | reported after | pinned before | pinned after | caught before | caught after | note |\n|---|---|---|---|---|---|---|---|\n")
+	beforePlanCell, afterPlanCell := cell, cell
+	if !hasPlans(c.Before) {
+		beforePlanCell = planCell
+	}
+	if !hasPlans(c.After) {
+		afterPlanCell = planCell
+	}
 	for _, r := range c.Rows {
 		var notes []string
 		if r.OnlyAfterValid {
@@ -204,8 +216,8 @@ func (c Comparison) Markdown() string {
 		}
 		notes = append(notes, r.After.Catch.Notes...)
 		fmt.Fprintf(&w, "| %s | %s | %s | %s | %s | %s | %s | %s |\n", r.Case,
-			cell(r.Before, r.Before.Found), cell(r.After, r.After.Found),
-			cell(r.Before, r.Before.ClaimedPinned), cell(r.After, r.After.ClaimedPinned),
+			beforePlanCell(r.Before, r.Before.Found), afterPlanCell(r.After, r.After.Found),
+			beforePlanCell(r.Before, r.Before.ClaimedPinned), afterPlanCell(r.After, r.After.ClaimedPinned),
 			cell(r.Before, r.Before.Caught), cell(r.After, r.After.Caught), strings.Join(notes, "; "))
 	}
 	return w.String()
@@ -226,6 +238,13 @@ func writeProvenanceHeader(w *strings.Builder, before, after Provenance) {
 		before.Model, after.Model, before.Runner, after.Runner, before.SkillVersion, after.SkillVersion,
 		before.Scorer, after.Scorer, before.Corpus, after.Corpus, before.Runs, after.Runs, before.Cases, after.Cases,
 		before.AgentConfig, after.AgentConfig, before.Environment, after.Environment)
+}
+
+func planCell(r Result, n int) string {
+	if !r.PlanFound && !r.Failed && !r.Invalid {
+		return "-"
+	}
+	return cell(r, n)
 }
 
 func cell(r Result, n int) string {
