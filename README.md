@@ -452,7 +452,7 @@ The decisions live in Go; only the transport is per host. That split is what let
 serve more than one agent, and it is why `check` exists:
 
 ```
-tsp check          # exit 1 and say what this repository owes, from git and the plan alone
+tsp check          # exit 1 and say what this repository owes: plan gaps, or without a plan a new test failing on HEAD
 ```
 
 It reads no hook payload, no transcript and no host configuration, so anything that can run a

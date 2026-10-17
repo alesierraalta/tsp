@@ -67,8 +67,9 @@ commands:
   plan     write the skeleton, check the contract, name what breadth is still owed, record a
            Findings or Evidence ledger row from flags, and admit every Evidence row
            (init | check | gaps | upgrade | add-finding | add-evidence | admit)
-  check    say what this repository still owes, from git and the plan alone: no hook payload,
-           no transcript, no host. Exit 1 when there is something to do.
+  check    say what this repository still owes, from git, the tests and a plan if one exists: no
+           hook payload, no transcript, no host. Without a plan, changed source needs a new test that
+           fails on HEAD's code (see redcheck) or a .no-testing-gate. Exit 1 when there is something to do.
   redcheck run the tests added or changed since HEAD against HEAD's code and say which new tests
            fail there (defect witnesses) and which pass (they pin nothing). Exit 0 when at least one
            new test fails on the unmodified code, 1 when none does or none was added, 2 when nothing

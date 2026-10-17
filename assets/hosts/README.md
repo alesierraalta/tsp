@@ -40,7 +40,7 @@ included.
 separate, unverified surface (its row below is contract-read, not run here).
 
 A host with neither still gets everything except "what did THIS session do": `tsp check`
-reads git and the persisted plan and needs no host at all, which is also what makes it usable
+reads git, the tests, and the plan when one exists, and needs no host at all, which is also what makes it usable
 from a Makefile, a pre-push script, or CI.
 
 ## Verified
