@@ -137,7 +137,7 @@ export const OFFER_NO = "No";
 export const TSP_PROMPT = "haz el TSP";
 
 const SOURCE_EXT = /\.(go|ts|tsx|js|jsx|mjs|cjs|py|rs|java|kt|rb|php|cs|c|cc|cpp|h|hpp|swift|scala|sh)$/;
-const TEST_PATH = /(^|\/)(tests?|__tests__|testdata)\/|_test\.(go|py)$|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$/;
+const TEST_PATH = /(^|\/)(tests?|__tests__|testdata|e2e|spec)\/|_test\.(go|py)$|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$/;
 
 /** True for a source file the agent may have changed behaviour in; tests, docs and config are not. */
 export function isSourcePath(path: string): boolean {

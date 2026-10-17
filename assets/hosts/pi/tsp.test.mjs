@@ -254,3 +254,7 @@ test("pytest and Go test files never count as source to offer TSP for", () => {
   for (const p of ["lib/x_test.py", "lib/test_x.py", "pkg/x_test.go", "src/a.test.ts"]) assert.equal(isSourcePath(p), false, p);
   for (const p of ["lib/attest.py", "cmd/latest.go"]) assert.equal(isSourcePath(p), true, p);
 });
+
+test("files under the test directories the Stop gate names never trigger the TSP offer", () => {
+  for (const p of ["e2e/login.ts", "spec/user_spec.rb", "app/spec/models/user.rb"]) assert.equal(isSourcePath(p), false, p);
+});
