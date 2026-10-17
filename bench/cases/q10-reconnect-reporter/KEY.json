@@ -1,0 +1,47 @@
+{
+  "id": "q10-reconnect-reporter",
+  "family": "resilience-io",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "the reporter behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/reporter.js",
+      "line": 12,
+      "class": "failed-attempt-resource-leak",
+      "keywords": [
+        "failed",
+        "attempt",
+        "resource",
+        "leak"
+      ],
+      "description": "Two handles remain retained.",
+      "trigger": {
+        "input": "Send two failed reports through a counting pool.",
+        "expected": "At most one handle remains retained.",
+        "actual": "Two handles remain retained."
+      },
+      "why_missed": "The suite has no injected failing dependency or composed queue transition; literal substitutions cannot introduce those operations."
+    },
+    {
+      "id": "D2",
+      "file": "src/reporter.js",
+      "line": 25,
+      "class": "unbounded-reconnect-queue",
+      "keywords": [
+        "unbounded",
+        "reconnect",
+        "queue"
+      ],
+      "description": "Pending identifiers are a,b,a.",
+      "trigger": {
+        "input": "Pause, reconnect a, pause, reconnect b, pause, reconnect a with limit 2; drain.",
+        "expected": "Pending identifiers are b,a.",
+        "actual": "Pending identifiers are a,b,a."
+      },
+      "why_missed": "The suite has no injected failing dependency or composed queue transition; literal substitutions cannot introduce those operations."
+    }
+  ]
+}

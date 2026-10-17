@@ -1,0 +1,48 @@
+{
+  "id": "p07-image-reaper",
+  "family": "state-logic",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "request": "the image reaping behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "reaper.go",
+      "line": 29,
+      "class": "age-only-live-resource-cleanup",
+      "keywords": [
+        "age",
+        "only",
+        "live",
+        "resource",
+        "cleanup"
+      ],
+      "description": "Age-based collection deletes images still referenced by live leases.",
+      "trigger": {
+        "input": "Old image x with a list-valued lease; Reap",
+        "expected": "x preserved",
+        "actual": "x deleted"
+      },
+      "why_missed": "Only young images have leases in the suite."
+    },
+    {
+      "id": "D2",
+      "file": "reaper.go",
+      "line": 18,
+      "class": "mixed-schema-rows",
+      "keywords": [
+        "mixed",
+        "schema",
+        "rows"
+      ],
+      "description": "Reference scanning silently drops scalar persisted lease rows.",
+      "trigger": {
+        "input": "Referenced with scalar x and list y",
+        "expected": "x and y present",
+        "actual": "only y present"
+      },
+      "why_missed": "All suite leases use list fields."
+    }
+  ]
+}

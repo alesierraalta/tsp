@@ -1,0 +1,38 @@
+{
+  "id": "p02-billing-retry-job",
+  "family": "resilience-io",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "the recharge job behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/billing.js",
+      "line": 10,
+      "class": "non-atomic-effect-checkpoint",
+      "keywords": ["idempotency", "retry", "charge", "checkpoint", "duplicate"],
+      "description": "The payment is performed before the ledger checkpoint without passing the job's stable idempotency key. A declined ledger commit followed by a retry duplicates the external payment while crediting the account only once.",
+      "trigger": {
+        "input": "MemoryLedger accepts only its second commit; run job {id:'a',account:'red',amount:12} twice through the same payment adapter, recreating BillingJob between runs.",
+        "expected": "statuses retry,complete; one external charge and account balance 12",
+        "actual": "statuses retry,complete; two external charges and account balance 12"
+      },
+      "why_missed": "The suite tests completed-job replay and a single declined commit independently, never retrying a job after a successful external payment and declined internal checkpoint."
+    },
+    {
+      "id": "D2",
+      "file": "src/billing.js",
+      "line": 9,
+      "class": "unit-mismatch",
+      "keywords": ["units", "minor", "major", "amount", "conversion"],
+      "description": "The major-unit job amount is rounded directly and passed to the minor-unit payment API without scaling by 100, silently undercharging while recording the full account credit.",
+      "trigger": {
+        "input": "Run job {id:'b',account:'blue',amount:12.34} against accepting MemoryLedger and inspect payments.charges[0].minorUnits.",
+        "expected": "1234 minor units charged; balance 12.34",
+        "actual": "12 minor units charged; balance 12.34"
+      },
+      "why_missed": "Happy-path assertions check internal balances, receipt association, account selection and charge counts, but not the amount sent across the payment adapter's unit boundary."
+    }
+  ]
+}

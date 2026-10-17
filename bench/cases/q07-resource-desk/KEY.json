@@ -1,0 +1,7 @@
+{
+  "id":"q07-resource-desk","family":"resilience-io","language":"node","suite":"node --test","surface":"library","request":"the resource desk behaviour",
+  "defects":[
+    {"id":"D1","file":"src/desk.js","line":22,"class":"double-release-after-delay","keywords":["release","schedule","close","handle"],"description":"Scheduled disposal bypasses the handle's exactly-once guard and capacity restoration.","trigger":{"input":"Capture scheduled callbacks and release calls; acquire, close the handle, then execute its callback.","expected":"One release call total.","actual":"Two release calls."},"why_missed":"The suite has no scheduler or release adapter, so callbacks are never executed."},
+    {"id":"D2","file":"src/desk.js","line":10,"class":"global-quota-no-isolation","keywords":["quota","tenant","capacity","acquire"],"description":"All tenants share one accounting key, so one tenant consumes another's capacity.","trigger":{"input":"Acquire two handles for alpha at quota=2, then acquire a handle for beta.","expected":"Beta receives a handle.","actual":"Beta receives null."},"why_missed":"Each existing desk instance exercises only one tenant; no simultaneous tenants share a desk."}
+  ]
+}

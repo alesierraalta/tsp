@@ -1,0 +1,38 @@
+{
+  "id": "q02-routing-catalog",
+  "family": "resilience-io",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "the routing catalog behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/catalog.js",
+      "line": 21,
+      "class": "dependency-failure-published-as-data",
+      "keywords": ["lookup", "authoritative", "snapshot", "publish", "failure"],
+      "description": "Rebuild ignores lookup authority and publishes a partial snapshot when one dependency returns unsuccessful empty records, silently discarding routes from the previous complete snapshot.",
+      "trigger": {
+        "input": "Supply a lookup, publish a complete east/west snapshot, select west, then rebuild with east updated and west returning {ok:false,records:[]}; read routes.",
+        "expected": "Rebuild false; the previous west route remains available and the persisted complete snapshot is unchanged.",
+        "actual": "Rebuild true; the west routes disappear and the partial east-only snapshot replaces the stored snapshot."
+      },
+      "why_missed": "The suite only uses the successful default lookup. It contains no dependency adapter, unsuccessful response or second rebuild."
+    },
+    {
+      "id": "D2",
+      "file": "src/catalog.js",
+      "line": 6,
+      "class": "restart-resets-selected-state",
+      "keywords": ["restart", "selected", "store", "restore", "backend"],
+      "description": "A new catalog reloads the snapshot but ignores the persisted selection, routing through the first backend rather than the backend selected by its predecessor.",
+      "trigger": {
+        "input": "Use a shared Map, rebuild, select west, then construct another Catalog with that Map and read its routes without rebuilding.",
+        "expected": "The new instance routes through west.",
+        "actual": "The new instance routes through east despite selected=west in the store."
+      },
+      "why_missed": "The suite changes selection within one instance using the default private store. No persistent-store fixture or reconstruction scenario exists."
+    }
+  ]
+}
