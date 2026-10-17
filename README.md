@@ -255,7 +255,7 @@ duplicates nothing of Gentle's: ODD, Engram memory, and the review lifecycle rem
 | `tsp repair` | Claude-only: re-syncs the managed skills and re-wires Claude's Stop hook; the Pi extension is untouched. |
 
 Load the extension (`pi --extension <path>/tsp.ts`, or let Pi load it from
-`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks "¿Quieres hacer TSP?" in the chat; "Sí" sends "haz el TSP", which invokes `test-strategy` (details in `assets/hosts/README.md`). The Pi Stop hook is a separate,
+`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks "¿Quieres hacer TSP?" in the chat; "Sí" sends "haz el TSP", which invokes `test-strategy`, and "No" is remembered for those files (details in `assets/hosts/README.md`). Test files never trigger it (`*.test.*`, `*.spec.*`, `x_test.go`, `test_x.py`, `x_test.py`, and anything under `tests/`, `__tests__/`, `testdata/`, `e2e/` or `spec/`), nor does a TSP run, an aborted run, a session without UI, or a repository with `.no-testing-gate`. Edits made through a shell command are not seen. This was watched in a live Pi 1.3.0 session. `/tsp check` keeps a quoted argument whole, so `/tsp check --suite "npm test"` reaches the CLI as one value. The Pi Stop hook is a separate,
 **not verified** surface: its payload contract was read from the pi-hooks package and nobody has
 watched it fire here, so merging `assets/hosts/pi/settings.stop-hook.json` into Pi's settings is
 ready to test, not working.
@@ -454,7 +454,14 @@ serve more than one agent, and it is why `check` exists:
 
 ```
 tsp check          # exit 1 and say what this repository owes: plan gaps, or without a plan a new test failing on HEAD
+tsp check --suite "npm test"   # the command that runs the changed tests, when it cannot be inferred
 ```
+
+Without a plan, changed production source is settled by a new test that fails on HEAD's code (the
+witness `tsp redcheck` finds) or by `.no-testing-gate` at the repository root. How to run the changed
+tests is inferred for Go (`go test` on their packages), Python (`python3 -m pytest` on the changed
+`.py` tests) and Node (`node --test`); anything else needs `--suite`. When the tests cannot be run one
+by one, check fails instead of guessing.
 
 It reads no hook payload, no transcript and no host configuration, so anything that can run a
 command can use it: another agent, a Makefile, a pre-push script, CI. What a host integration adds
@@ -465,7 +472,7 @@ on top is knowing what THIS session did, which the repository cannot tell you.
 | Claude Code | verified: `sync` wires the Stop hook, `gate` reads its payload and answers in its schema, `doctor` runs the wired command and requires exit zero |
 | Anything that runs a command | verified: `check`, `plan init`, `plan check`, `plan gaps` need no host at all |
 | Gemini CLI | not implemented: its `settings.json` takes command hooks under different event names, and its payload and output schemas are not verified here |
-| Pi | opt-in extension: `tsp sync --hosts pi` installs it and Pi exposes a native `/tsp` command with `/tpp` compatibility alias (`check`, `feedback --summary`, `doctor`); its dispatch is tested in CI (`assets/hosts/pi/tsp.test.mjs`). The native Pi Stop hook is **not verified** — payload contract read from the pi-hooks package, never watched firing |
+| Pi | opt-in extension: `tsp sync --hosts pi` installs it and Pi exposes a native `/tsp` command with `/tpp` compatibility alias (`check`, `feedback --summary`, `doctor`); its dispatch and the TSP offer are tested in CI (`assets/hosts/pi/tsp.test.mjs`), and the offer was watched in a live Pi 1.3.0 session. The native Pi Stop hook is **not verified** — payload contract read from the pi-hooks package, never watched firing |
 | Codex, OpenCode | not implemented: each has its own extension surface, and guessing a payload schema would ship a hook that silently never fires |
 
 Nothing above is a promise about a host that is not listed as verified. A hook that looks wired and
@@ -556,7 +563,14 @@ tsp bench score --case bench/cases/<id> --workspace <ws>     # re-score after gr
 tsp bench history                                            # every run, never rewritten
 tsp bench rescore bench/results/<run>                        # re-read a finished run with today's rules
 tsp bench compare bench/results/<before> bench/results/<after>   # per-case reported and caught, side by side
+tsp bench compare --skill-versions <before> <after>          # two skill versions on an otherwise identical instrument
 ```
+
+`bench compare` ends with a verdict on the caught difference: a 95% Wilson/Newcombe interval, and
+whether it includes zero ("within noise"). For example, 16/18 vs 15/18 at three runs per case is within
+noise (-0.295 to +0.187). Since test-strategy 0.7 writes no plan, readings without one show the plan-only
+metrics (reported, recall, no plan, light, micro, false positives, precision) as `-`, and caught is the
+measure to read; the stored history rows keep their numbers.
 
 `bench run` scaffolds `<out>/<case>/<run>/ws` (default `bench/results/<timestamp>/`), commits the
 fixture, checks its suite is green (otherwise the case is invalid and skipped), spawns
