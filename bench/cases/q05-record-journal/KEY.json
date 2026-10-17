@@ -19,7 +19,7 @@
       "why_missed": "The existing suite uses only the default layout; there is no layout fixture, schema transition, or alternate-format helper."
     },
     {
-      "id": "D2", "file": "src/journal.js", "line": 23,
+      "id": "D2", "file": "src/journal.js", "line": 22,
       "class": "transaction-id-wraparound",
       "keywords": ["transaction", "handle", "collision", "counter", "pending"],
       "description": "The bounded allocator reuses an occupied identifier after cycling, replacing a pending transaction's value.",

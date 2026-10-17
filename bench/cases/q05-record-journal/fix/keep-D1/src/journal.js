@@ -12,8 +12,7 @@ export class Journal {
 
   ingest(fields) {
     if (fields.length < this.width) return false;
-    const row = {};
-    for (let i = 0; i < this.columns.length; i++) row[this.columns[i]] = fields[i] ?? '';
+    const row = Object.fromEntries(this.columns.map((name, i) => [name, fields[i] ?? '']));
     this.rows.set(fields[0], row);
     return true;
   }

@@ -31,7 +31,8 @@ export class Register {
     const value = this.store.get(id);
     if (value === undefined) return false;
     const next = { ...value, ...patch };
-    if (Object.hasOwn(patch, 'title')) next.weight = measure([next.title, next.category]);
+    if (Object.hasOwn(patch, 'category')) next.weight = weights[next.category];
+    else if (Object.hasOwn(patch, 'title')) next.weight = measure([next.title, next.category]);
     this.store.set(id, next);
     return true;
   }
