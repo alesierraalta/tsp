@@ -10,6 +10,6 @@ only confirmed failure removes a member, while a timeout preserves membership.
 
 `stage(items)` appends an array of work values, preserving order and duplicates.
 `promote()` moves all staged work to the ready queue. `tick()` returns and removes
-all ready work in order, without treating promoted backlog as a dependency failure.
+all ready work in order.
 Empty operations return empty arrays where applicable. Identifiers and work values
 are opaque, including empty strings and reserved property names. No real I/O occurs.

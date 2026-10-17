@@ -19,9 +19,9 @@ class Scheduler {
     this.store.set('members', [...this.members]);
     return [...this.members];
   }
-  stage(items) { this.waiting.push(...items); }
+  stage(items) { for (const item of items) this.waiting.push(item); }
   promote() {
-    this.ready.push(...this.waiting);
+    for (const item of this.waiting) this.ready.push(item);
     this.waiting = [];
   }
   tick() {
