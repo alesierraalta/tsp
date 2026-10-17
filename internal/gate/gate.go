@@ -118,6 +118,12 @@ func IsProductionSource(path string) bool {
 	if strings.HasSuffix(lower, ".d.ts") || strings.Contains(lower, ".test.") || strings.Contains(lower, ".spec.") {
 		return false
 	}
+	// Go and pytest name tests by file, not by directory: x_test.go, test_x.py, x_test.py.
+	base := filepath.Base(lower)
+	if strings.HasSuffix(base, "_test.go") || strings.HasSuffix(base, "_test.py") ||
+		(strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py")) {
+		return false
+	}
 	segments := strings.Split(lower, "/")
 	for _, dir := range segments[:len(segments)-1] {
 		if excludedDirs[dir] {

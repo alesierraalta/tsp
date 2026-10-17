@@ -157,9 +157,10 @@ func TestParsePorcelain(t *testing.T) {
 }
 
 func TestIsProductionSource(t *testing.T) {
-	positives := []string{"src/a.ts", "lib/x.py", "cmd/main.go", "src/contest/y.ts", "src/with space.ts", "app.mjs"}
+	positives := []string{"src/a.ts", "lib/x.py", "cmd/main.go", "src/contest/y.ts", "src/with space.ts", "app.mjs", "lib/attest.py", "cmd/latest.go"}
 	negatives := []string{"tests/a.test.ts", "src/a.spec.js", "src/__tests__/x.ts", "e2e/x.ts", "fixtures/f.ts", "types.d.ts",
-		"README.md", ".claude/hooks/x.mjs", "evals/cases/x.js", "node_modules/p/i.js", "vendor/v.go", "dist/b.js", "src/.venv/lib.py"}
+		"README.md", ".claude/hooks/x.mjs", "evals/cases/x.js", "node_modules/p/i.js", "vendor/v.go", "dist/b.js", "src/.venv/lib.py",
+		"internal/x/x_test.go", "x_test.go", "lib/test_x.py", "lib/x_test.py"}
 	for _, p := range positives {
 		t.Run("source "+p, func(t *testing.T) {
 			if !IsProductionSource(p) {
