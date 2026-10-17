@@ -1,0 +1,47 @@
+{
+  "id": "q09-member-scheduler",
+  "family": "resilience-io",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "the scheduler behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/scheduler.js",
+      "line": 16,
+      "class": "health-timeout-self-eviction",
+      "keywords": [
+        "health",
+        "timeout",
+        "self",
+        "eviction"
+      ],
+      "description": "The remaining member is evicted.",
+      "trigger": {
+        "input": "Remove one member, then inspect with the remaining healthy peer returning timeout.",
+        "expected": "The remaining member is preserved.",
+        "actual": "The remaining member is evicted."
+      },
+      "why_missed": "The suite has no injected failing dependency or composed queue transition; literal substitutions cannot introduce those operations."
+    },
+    {
+      "id": "D2",
+      "file": "src/scheduler.js",
+      "line": 28,
+      "class": "backpressure-misclassifies-recovery",
+      "keywords": [
+        "backpressure",
+        "misclassifies",
+        "recovery"
+      ],
+      "description": "No items drain.",
+      "trigger": {
+        "input": "Stage two items, promote them, then tick with no new staged work.",
+        "expected": "Both items drain in order.",
+        "actual": "No items drain."
+      },
+      "why_missed": "The suite has no injected failing dependency or composed queue transition; literal substitutions cannot introduce those operations."
+    }
+  ]
+}

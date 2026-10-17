@@ -1,0 +1,12 @@
+{
+  "id": "q06-event-channel",
+  "family": "resilience-io",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "the event channel behaviour",
+  "defects": [
+    {"id":"D1","file":"src/channel.js","line":14,"class":"retry-amplification","keywords":["attempt","budget","flush","client"],"description":"Flush resets the submission's consumed attempt count, permitting unlimited dependency calls across unsuccessful flushes.","trigger":{"input":"Inject an always-unsuccessful counted client with attempts=2; enqueue once and flush three times.","expected":"Two client calls total.","actual":"Three client calls."},"why_missed":"No failing client adapter exists in the suite; default submissions succeed immediately."},
+    {"id":"D2","file":"src/channel.js","line":22,"class":"unbounded-history-read","keywords":["refresh","sequence","store","read"],"description":"Refresh rereads all history instead of advancing its read position.","trigger":{"input":"Supply a store filtering sequence > after; refresh records 1 and 2, append record 3, then refresh again.","expected":"Second read starts after 2 and returns only 3.","actual":"Second read starts after 0 and rereads 1 and 2."},"why_missed":"The suite has no store adapter or retained history; the default store is always empty."}
+  ]
+}
