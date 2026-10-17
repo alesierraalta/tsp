@@ -919,7 +919,7 @@ func runCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
 	path := fs.String("path", "", "plan file relative to the repository root")
-	suite := fs.String("suite", "", "command that runs the changed tests when there is no plan (default: their Go packages, or node --test on them)")
+	suite := fs.String("suite", "", "command that runs the changed tests when there is no plan (default: their Go packages, pytest on changed .py tests, or node --test on them)")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
 	}
@@ -938,7 +938,7 @@ func runCheck(args []string) int {
 func runRedcheck(args []string) int {
 	fs := flag.NewFlagSet("redcheck", flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
-	suite := fs.String("suite", "", "command that runs the changed tests (default: their Go packages, or node --test on them)")
+	suite := fs.String("suite", "", "command that runs the changed tests (default: their Go packages, pytest on changed .py tests, or node --test on them)")
 	timeout := fs.Duration("timeout", 5*time.Minute, "cap for each suite run")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code

@@ -359,8 +359,9 @@ green once the defect is fixed. It probes each promise across its input classes,
 promises (order, round trip, never panics) as property tests with generated inputs, and builds inputs
 that must pass a validator with the code's own encoder before perturbing them. It writes no plan file:
 the tests are the deliverable, and `tsp redcheck` says which new tests actually fail on the unmodified
-code. This lean version replaced the plan-driven skill after the benchmark showed most of that
-skill's cost was ceremony; `tsp plan`, `check` and the Stop gate remain for anyone who keeps a plan.
+code (Go, `node --test` and pytest are read test by test). This lean version replaced the plan-driven skill
+after the benchmark showed most of that skill's cost was ceremony; `tsp check` without a plan asks for
+one such failing test, and `tsp plan` and the Stop gate remain for anyone who keeps a plan.
 The other skills are specialized and invoked by name.
 
 `breakcheck` is an explicitly invoked bounded adversarial campaign for one candidate between the Verifier and RDD; it reports evidence and a readiness disposition, not a score.

@@ -150,3 +150,38 @@ func TestRedCheckRefusesADirectoryOutsideARepository(t *testing.T) {
 		t.Fatal("RedCheck outside a repository returned no error")
 	}
 }
+
+// pytest is read test by test like go test and node --test: a new test that fails on HEAD's code is a
+// witness, one that passes there pins nothing, and the suite is inferred from the changed .py tests.
+func TestRedCheckReadsPytestTestByTest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs pytest")
+	}
+	if err := exec.Command("python3", "-m", "pytest", "--version").Run(); err != nil {
+		t.Skip("pytest not installed")
+	}
+	dir := t.TempDir()
+	writeFile(t, dir, "app/__init__.py", "")
+	writeFile(t, dir, "app/order.py", "def order():\n    return 'cab'\n")
+	writeFile(t, dir, "tests/test_order.py", "from app.order import order\n\ndef test_len():\n    assert len(order()) == 3\n")
+	for _, args := range [][]string{
+		{"init", "-q"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"},
+		{"add", "-A"}, {"commit", "-qm", "base"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	writeFile(t, dir, "tests/test_order.py", "from app.order import order\n\ndef test_len():\n    assert len(order()) == 3\n\n"+
+		"def test_sorted():\n    assert order() == 'abc'\n\ndef test_letters():\n    assert set(order()) == set('abc')\n")
+	rep, err := RedCheck(dir, "", 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"tests/test_order.py::test_sorted"}; !reflect.DeepEqual(rep.Red, want) {
+		t.Fatalf("red = %v, want %v (pins nothing: %v)", rep.Red, want, rep.PinsNothing)
+	}
+	if want := []string{"tests/test_order.py::test_letters"}; !reflect.DeepEqual(rep.PinsNothing, want) {
+		t.Fatalf("pins nothing = %v, want %v", rep.PinsNothing, want)
+	}
+}
