@@ -147,5 +147,39 @@
     "transaction-id-wraparound"
    ]
   }
+ },
+ "batch3": {
+  "rule": "Decided before building q06-q10 (L36).",
+  "train": [
+   "q06",
+   "q08",
+   "q10"
+  ],
+  "held_out": [
+   "q07",
+   "q09"
+  ],
+  "cases": {
+   "q06": [
+    "retry-amplification",
+    "unbounded-history-read"
+   ],
+   "q07": [
+    "double-release-after-delay",
+    "global-quota-no-isolation"
+   ],
+   "q08": [
+    "n-plus-one-io",
+    "unbounded-failure-log"
+   ],
+   "q09": [
+    "health-timeout-self-eviction",
+    "backpressure-misclassifies-recovery"
+   ],
+   "q10": [
+    "failed-attempt-resource-leak",
+    "unbounded-reconnect-queue"
+   ]
+  }
  }
 }
