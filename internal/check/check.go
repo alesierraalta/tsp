@@ -21,6 +21,8 @@ type Deps struct {
 	Git      func(dir string, args ...string) (string, error)
 	ReadFile func(path string) (string, error)
 	PlanPath string
+	// Suite is the command that runs the changed tests; empty lets the red check infer it.
+	Suite string
 	// RedCheck runs the tests changed since HEAD against HEAD's code.
 	RedCheck func(root string) (Witness, error)
 }
@@ -55,7 +57,8 @@ func Run(cwd string, d Deps) Result {
 		d.ReadFile = readFile
 	}
 	if d.RedCheck == nil {
-		d.RedCheck = redCheck
+		suite := d.Suite
+		d.RedCheck = func(root string) (Witness, error) { return redCheck(root, suite) }
 	}
 	rootOut, err := d.Git(cwd, "rev-parse", "--show-toplevel")
 	root := strings.TrimSpace(rootOut)
@@ -148,8 +151,8 @@ func witnessVerdict(root string, d Deps) Result {
 	return Result{Text: fmt.Sprintf("%d new test(s) fail on HEAD's code: %s", len(w.Red), strings.Join(w.Red, ", "))}
 }
 
-func redCheck(root string) (Witness, error) {
-	rep, err := bench.RedCheck(root, "", 5*time.Minute)
+func redCheck(root, suite string) (Witness, error) {
+	rep, err := bench.RedCheck(root, suite, 5*time.Minute)
 	return Witness{TestFiles: rep.TestFiles, Red: rep.Red, PinsNothing: rep.PinsNothing}, err
 }
 

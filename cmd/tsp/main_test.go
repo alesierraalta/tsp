@@ -2918,3 +2918,49 @@ func TestResolveSandboxImageDoesNotReadTheDeclarationOffTheSandboxPath(t *testin
 		t.Fatalf("image = %q, want the flag's own default %q", got, sandboxImageDefault)
 	}
 }
+
+// Without a plan, check runs the changed tests against HEAD. When it cannot infer how to run them
+// it tells the operator to pass --suite, so check has to accept the flag it names.
+func TestCheckAcceptsTheSuiteItAsksFor(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(rel, body string) {
+		t.Helper()
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "-q")
+	write("app/m.py", "def f():\n    return 1\n")
+	write("tests/test_m.py", "def test_ok():\n    assert True\n")
+	git("add", ".")
+	git("commit", "-qm", "init")
+	write("app/m.py", "def f():\n    return 2\n")
+	write("tests/test_m.py", "def test_ok():\n    assert True\n\ndef test_new():\n    assert True\n")
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	code := runCheck([]string{"--cwd", dir, "--suite", "false"})
+	w.Close()
+	os.Stdout = orig
+	out, _ := io.ReadAll(r)
+	r.Close()
+	if code != 1 || !strings.Contains(string(out), `with "false"`) {
+		t.Fatalf("check must run the suite it was given: code=%d output=%q", code, out)
+	}
+}
