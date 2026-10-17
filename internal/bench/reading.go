@@ -28,6 +28,9 @@ func RenderHistory(text string) string {
 		}
 		values := map[string]int{}
 		for j, h := range headers {
+			if name := strings.TrimSpace(h); (name == "no plan" || name == "no_plan") && strings.TrimSpace(cells[j]) == "-" {
+				masked = true // stored already masked by AppendHistory
+			}
 			n, _ := strconv.Atoi(strings.TrimSpace(cells[j]))
 			values[strings.TrimSpace(h)] = n
 		}

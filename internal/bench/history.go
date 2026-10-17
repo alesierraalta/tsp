@@ -116,14 +116,10 @@ func AppendHistory(benchDir string, e HistoryEntry) error {
 		runs = 1
 	}
 	if e.NoPlan > 0 && e.NoPlan+e.Failed+e.Invalid == e.Cases*runs {
+		// The note stays out of the file: a line that is not a row would end the table. bench history
+		// prints it when it renders a masked row.
 		row = strings.TrimPrefix(RenderHistory(historyHeader+row), historyHeader)
-		existing, err := os.ReadFile(md)
-		if err != nil {
-			return err
-		}
-		if strings.Contains(string(existing), planlessNote) {
-			row = strings.ReplaceAll(row, planlessNote+"\n", "")
-		}
+		row = strings.ReplaceAll(row, planlessNote+"\n", "")
 	}
 	return appendFile(md, []byte(row))
 }

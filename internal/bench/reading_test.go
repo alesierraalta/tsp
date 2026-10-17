@@ -1,6 +1,8 @@
 package bench
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -51,5 +53,31 @@ func TestPlanlessSummary(t *testing.T) {
 	want := "| x | - | - | 1/2 | - | - | - | 0.000 | 0 | 0.0 | NO PLAN | - |"
 	if !strings.Contains(Summary(a), want+"\n") {
 		t.Fatalf("missing %q in %s", want, Summary(a))
+	}
+}
+
+// history.md is one markdown table: a line that is not a row ends the table, and every row
+// appended after it renders as loose text.
+func TestPlanlessAppendKeepsHistoryOneTable(t *testing.T) {
+	dir := t.TempDir()
+	for _, e := range []HistoryEntry{
+		{Out: "a", Cases: 2, Defects: 4, Caught: 3, NoPlan: 2, Runs: 1},
+		{Out: "b", Cases: 2, Defects: 4, Caught: 3, NoPlan: 2, Runs: 1},
+		{Out: "c", Cases: 2, Defects: 4, Caught: 3, Runs: 1},
+	} {
+		if err := AppendHistory(dir, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "history.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	table := body[strings.Index(body, "| ts |"):]
+	for i, line := range strings.Split(strings.TrimRight(table, "\n"), "\n") {
+		if !strings.HasPrefix(line, "|") {
+			t.Fatalf("table line %d is not a row, so the rows after it fall out of the table: %q", i+1, line)
+		}
 	}
 }
