@@ -106,7 +106,8 @@ bench run [--cases <glob>] [--runner pi|claude] [--model <m>] [--runs N] [--max-
 bench score --case <dir> --workspace <ws>
 bench score --case <dir> --plan <file> [--adjudication <path>|none]
 bench history [--bench-dir <dir>]
-bench compare <before-results> <after-results>
+bench compare [--skill-versions] <before-results> <after-results>
+          (--skill-versions compares two skill versions on an otherwise identical instrument)
           (plan-less readings show - for plan-only metrics; caught remains meaningful.
            compare reports a 95% Wilson/Newcombe caught-difference noise interval)
 bench rescore [--bench-dir <dir>] <results>
@@ -2085,11 +2086,20 @@ func runBenchRescore(args []string) int {
 }
 
 func runBenchCompare(args []string) int {
-	if len(args) != 2 {
-		fmt.Fprintln(os.Stderr, "bench compare needs two result directories: <before> <after>")
+	var opts bench.CompareOptions
+	var dirs []string
+	for _, a := range args {
+		if a == "--skill-versions" {
+			opts.SkillVersions = true
+			continue
+		}
+		dirs = append(dirs, a)
+	}
+	if len(dirs) != 2 {
+		fmt.Fprintln(os.Stderr, "bench compare needs two result directories: [--skill-versions] <before> <after>")
 		return 2
 	}
-	cmp, err := bench.Compare(args[0], args[1])
+	cmp, err := bench.CompareWith(dirs[0], dirs[1], opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "compare:", err)
 		return 1

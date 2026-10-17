@@ -13,6 +13,14 @@ import (
 type Comparison struct {
 	Before, After Aggregate
 	Rows          []CompareRow
+	// SkillVersions is set when the operator asked to compare two skill versions on one instrument.
+	SkillVersions bool
+}
+
+// CompareOptions widens what a comparison accepts.
+type CompareOptions struct {
+	// SkillVersions accepts two different skill versions; every other provenance field still has to match.
+	SkillVersions bool
 }
 
 // CompareRow is one case in both runs.
@@ -24,7 +32,12 @@ type CompareRow struct {
 
 // Compare reads aggregate.json from two result directories of the same corpus.
 func Compare(beforeDir, afterDir string) (Comparison, error) {
-	var cmp Comparison
+	return CompareWith(beforeDir, afterDir, CompareOptions{})
+}
+
+// CompareWith is Compare with the options the operator chose.
+func CompareWith(beforeDir, afterDir string, opts CompareOptions) (Comparison, error) {
+	cmp := Comparison{SkillVersions: opts.SkillVersions}
 	var err error
 	if cmp.Before, err = readAggregate(beforeDir); err != nil {
 		return cmp, err
@@ -32,7 +45,7 @@ func Compare(beforeDir, afterDir string) (Comparison, error) {
 	if cmp.After, err = readAggregate(afterDir); err != nil {
 		return cmp, err
 	}
-	if err := refuseProvenanceMismatch(cmp.Before, cmp.After); err != nil {
+	if err := refuseProvenanceMismatch(cmp.Before, cmp.After, opts); err != nil {
 		return cmp, err
 	}
 	if err := refuseCorpusMismatch(cmp.Before, cmp.After); err != nil {
@@ -58,8 +71,11 @@ func Compare(beforeDir, afterDir string) (Comparison, error) {
 	return cmp, nil
 }
 
-func refuseProvenanceMismatch(before, after Aggregate) error {
+func refuseProvenanceMismatch(before, after Aggregate, opts CompareOptions) error {
 	beforeProvenance, afterProvenance := aggregateProvenance(before), aggregateProvenance(after)
+	if opts.SkillVersions {
+		afterProvenance.SkillVersion = beforeProvenance.SkillVersion
+	}
 	checks := []func(Provenance, Provenance) error{
 		refuseMetricsVersion,
 		refuseModel,
@@ -93,7 +109,10 @@ func refuseRunner(before, after Provenance) error {
 }
 
 func refuseSkillVersion(before, after Provenance) error {
-	return refuseProvenanceString("skill version", before.SkillVersion, after.SkillVersion)
+	if err := refuseProvenanceString("skill version", before.SkillVersion, after.SkillVersion); err != nil {
+		return fmt.Errorf("%w; pass --skill-versions to compare two skill versions on the same instrument", err)
+	}
+	return nil
 }
 
 func refuseRuns(before, after Provenance) error {
@@ -196,6 +215,9 @@ func (c Comparison) Markdown() string {
 			totalTurns(c.Before), totalTurns(c.After), c.Before.CostUSD, c.After.CostUSD)
 	} else {
 		fmt.Fprintf(&w, "before: %s\nafter: %s\n%s\n", planlessTotals(c.Before), planlessTotals(c.After), planlessNote)
+	}
+	if c.SkillVersions && aggregateProvenance(c.Before).SkillVersion != aggregateProvenance(c.After).SkillVersion {
+		fmt.Fprintf(&w, "skill versions differ on purpose (%s → %s): every other provenance field matches.\n", aggregateProvenance(c.Before).SkillVersion, aggregateProvenance(c.After).SkillVersion)
 	}
 	fmt.Fprintln(&w, c.CaughtDifference())
 	w.WriteString("| case | reported before | reported after | pinned before | pinned after | caught before | caught after | note |\n|---|---|---|---|---|---|---|---|\n")

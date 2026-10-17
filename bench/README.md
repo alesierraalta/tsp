@@ -272,7 +272,9 @@ reading, not a baseline, and `bench compare` refuses two runs whose case sets di
 corpus digests differ, or whose per-case defect counts differ, so extending or editing the corpus
 starts a new series instead of a delta. It refuses them for the rest of the instrument too: a
 different model, runner, skill version, number of runs per case, agent-config mode, environment
-(os/arch) or metrics version is a field that moved, and the refusal names it. A difference in the
+(os/arch) or metrics version is a field that moved, and the refusal names it. A skill version change is the one
+field an operator can accept on purpose: `bench compare --skill-versions` compares two skill versions on
+an otherwise identical instrument and says so in its header. A difference in the
 suite runtimes (`node`, `go`) is reported in the comparison header without a refusal, because a
 refusal there would block every pair across a toolchain patch. The throwaway agent config is
 verified to hold exactly the embedded `test-strategy` skill: a config that quietly carries anything else fails the

@@ -268,3 +268,28 @@ func TestCompareAllowsLegacyAggregatesWithEqualCounts(t *testing.T) {
 		t.Fatalf("legacy aggregates with equal counts must compare: %v", err)
 	}
 }
+
+// A reading of two skill versions on one instrument is the comparison the bench exists for, so it is
+// allowed when asked for by name; every other provenance field still has to match.
+func TestCompareSkillVersionsWhenAskedByName(t *testing.T) {
+	before := comparisonProvenance()
+	after := comparisonProvenance()
+	before.SkillVersion, after.SkillVersion = "0.7.0", "0.7.1"
+	b := writeAggregate(t, filepath.Join(t.TempDir(), "before"), comparisonAggregate(before))
+	a := writeAggregate(t, filepath.Join(t.TempDir(), "after"), comparisonAggregate(after))
+	if _, err := Compare(b, a); err == nil || !strings.Contains(err.Error(), "--skill-versions") {
+		t.Fatalf("refusal must name the flag that allows it: %v", err)
+	}
+	cmp, err := CompareWith(b, a, CompareOptions{SkillVersions: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cmp.Markdown(), "skill versions differ on purpose (0.7.0 → 0.7.1)") {
+		t.Fatalf("markdown must say the skill changed:\n%s", cmp.Markdown())
+	}
+	after.Model = "other-model"
+	a2 := writeAggregate(t, filepath.Join(t.TempDir(), "after2"), comparisonAggregate(after))
+	if _, err := CompareWith(b, a2, CompareOptions{SkillVersions: true}); err == nil || !strings.Contains(err.Error(), "model") {
+		t.Fatalf("a different model must still be refused: %v", err)
+	}
+}

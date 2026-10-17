@@ -2964,3 +2964,26 @@ func TestCheckAcceptsTheSuiteItAsksFor(t *testing.T) {
 		t.Fatalf("check must run the suite it was given: code=%d output=%q", code, out)
 	}
 }
+
+func TestBenchCompareTakesSkillVersionsBeforeOrAfterTheDirectories(t *testing.T) {
+	dirs := make([]string, 2)
+	for i, v := range []string{"0.7.0", "0.7.1"} {
+		dirs[i] = filepath.Join(t.TempDir(), v)
+		if err := os.MkdirAll(dirs[i], 0o755); err != nil {
+			t.Fatal(err)
+		}
+		agg := bench.Aggregate{Corpus: "sha256:c", Provenance: bench.Provenance{MetricsVersion: bench.MetricsVersion, Model: "m", Runner: bench.RunnerPi, SkillVersion: v, Corpus: "sha256:c", Cases: 1, Runs: 1, AgentConfig: bench.ConfigBench, Environment: "linux/amd64"}, Cases: []bench.Result{{Case: "a", Total: 1}}}
+		raw, _ := json.Marshal(agg)
+		if err := os.WriteFile(filepath.Join(dirs[i], "aggregate.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"--skill-versions", dirs[0], dirs[1]}, {dirs[0], dirs[1], "--skill-versions"}} {
+		if code := runBenchCompare(args); code != 0 {
+			t.Fatalf("%v: exit %d", args, code)
+		}
+	}
+	if code := runBenchCompare([]string{dirs[0], dirs[1]}); code != 1 {
+		t.Fatalf("without the flag two skill versions must be refused, exit %d", code)
+	}
+}
