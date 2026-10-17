@@ -3,6 +3,8 @@ package check
 import (
 	"errors"
 	"io/fs"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -454,3 +456,75 @@ const twoRunPlan = "## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\
 	"## Ranked targets\n\n| Target | Verdict | Status | Run |\n|---|---|---|---|\n" +
 	"| 1. auth | probe | done | run-a |\n" +
 	"| 2. billing | probe | pending | run-b |\n"
+
+// waiverRepo is a real git repository with one changed production file and no plan.
+func waiverRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "app.go"), []byte("package app\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", ".")
+	run("commit", "-qm", "base")
+	if err := os.WriteFile(filepath.Join(dir, "app.go"), []byte("package app\n\n// renamed nothing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// A change that warrants no test is waived by a person with a reason, for that change only: the
+// waiver is a versioned file, and editing the code again brings the witness requirement back.
+func TestNoTestNeededWaivesThisChangeOnly(t *testing.T) {
+	dir := waiverRepo(t)
+	judged := 0
+	deps := func(waive string) Deps {
+		return Deps{Waive: waive, RedCheck: func(string) (Witness, error) { judged++; return Witness{}, nil }}
+	}
+
+	rec := Run(dir, deps("comment-only change"))
+	if rec.Exit != 0 || !strings.Contains(rec.Text, "recorded in "+WaiverName+": comment-only change") {
+		t.Fatalf("recording: exit %d\n%s", rec.Exit, rec.Text)
+	}
+	if _, err := os.Stat(filepath.Join(dir, WaiverName)); err != nil {
+		t.Fatalf("the waiver must be a file in the repository: %v", err)
+	}
+
+	again := Run(dir, deps(""))
+	if again.Exit != 0 || !strings.Contains(again.Text, "needs no new test (waived: comment-only change)") || judged != 0 {
+		t.Fatalf("waived change: exit %d, red check ran %d time(s)\n%s", again.Exit, judged, again.Text)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "app.go"), []byte("package app\n\nfunc F() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed := Run(dir, deps(""))
+	if changed.Exit != 1 || strings.Contains(changed.Text, "waived") || judged != 1 {
+		t.Fatalf("a waiver must not cover code written after it: exit %d, red check ran %d time(s)\n%s", changed.Exit, judged, changed.Text)
+	}
+}
+
+func TestNoTestNeededIsRefusedWhenAPlanExists(t *testing.T) {
+	dir := waiverRepo(t)
+	if err := os.MkdirAll(filepath.Join(dir, "docs/testing"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, plan.DefaultPath), []byte(settled), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := Run(dir, Deps{Waive: "comment-only change"})
+	if res.Exit != 2 || !strings.Contains(res.Text, "--no-test-needed") {
+		t.Fatalf("exit %d\n%s", res.Exit, res.Text)
+	}
+	if _, err := os.Stat(filepath.Join(dir, WaiverName)); err == nil {
+		t.Fatal("a refused waiver must write nothing")
+	}
+}
