@@ -67,8 +67,9 @@ commands:
   plan     write the skeleton, check the contract, name what breadth is still owed, record a
            Findings or Evidence ledger row from flags, and admit every Evidence row
            (init | check | gaps | upgrade | add-finding | add-evidence | admit)
-  check    say what this repository still owes, from git and the plan alone: no hook payload,
-           no transcript, no host. Exit 1 when there is something to do.
+  check    say what this repository still owes, from git, the tests and a plan if one exists: no
+           hook payload, no transcript, no host. Without a plan, changed source needs a new test that
+           fails on HEAD's code (see redcheck; --suite names how to run it) or a .no-testing-gate. Exit 1 when there is something to do.
   redcheck run the tests added or changed since HEAD against HEAD's code and say which new tests
            fail there (defect witnesses) and which pass (they pin nothing). Exit 0 when at least one
            new test fails on the unmodified code, 1 when none does or none was added, 2 when nothing
@@ -105,7 +106,10 @@ bench run [--cases <glob>] [--runner pi|claude] [--model <m>] [--runs N] [--max-
 bench score --case <dir> --workspace <ws>
 bench score --case <dir> --plan <file> [--adjudication <path>|none]
 bench history [--bench-dir <dir>]
-bench compare <before-results> <after-results>
+bench compare [--skill-versions] <before-results> <after-results>
+          (--skill-versions compares two skill versions on an otherwise identical instrument)
+          (plan-less readings show - for plan-only metrics; caught remains meaningful.
+           compare reports a 95% Wilson/Newcombe caught-difference noise interval)
 bench rescore [--bench-dir <dir>] <results>
 bench adjudicate --run <results>/<case>/<run> [--plan <path>] --row <n> --verdict <defect|false_positive|out_of_scope>
           [--defect <id>] --by <who> --reason <why> [--replace] [--ts <RFC3339>]
@@ -916,6 +920,7 @@ func runCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
 	path := fs.String("path", "", "plan file relative to the repository root")
+	suite := fs.String("suite", "", "command that runs the changed tests when there is no plan (default: their Go packages, pytest on changed .py tests, or node --test on them)")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
 	}
@@ -925,7 +930,7 @@ func runCheck(args []string) int {
 			return 2
 		}
 	}
-	res := check.Run(*cwd, check.Deps{PlanPath: *path})
+	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite})
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
 }
@@ -934,7 +939,7 @@ func runCheck(args []string) int {
 func runRedcheck(args []string) int {
 	fs := flag.NewFlagSet("redcheck", flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
-	suite := fs.String("suite", "", "command that runs the changed tests (default: their Go packages, or node --test on them)")
+	suite := fs.String("suite", "", "command that runs the changed tests (default: their Go packages, pytest on changed .py tests, or node --test on them)")
 	timeout := fs.Duration("timeout", 5*time.Minute, "cap for each suite run")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
@@ -2081,11 +2086,20 @@ func runBenchRescore(args []string) int {
 }
 
 func runBenchCompare(args []string) int {
-	if len(args) != 2 {
-		fmt.Fprintln(os.Stderr, "bench compare needs two result directories: <before> <after>")
+	var opts bench.CompareOptions
+	var dirs []string
+	for _, a := range args {
+		if a == "--skill-versions" {
+			opts.SkillVersions = true
+			continue
+		}
+		dirs = append(dirs, a)
+	}
+	if len(dirs) != 2 {
+		fmt.Fprintln(os.Stderr, "bench compare needs two result directories: [--skill-versions] <before> <after>")
 		return 2
 	}
-	cmp, err := bench.Compare(args[0], args[1])
+	cmp, err := bench.CompareWith(dirs[0], dirs[1], opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "compare:", err)
 		return 1
@@ -2105,7 +2119,7 @@ func runBenchHistory(args []string) int {
 		fmt.Println("no benchmark history yet")
 		return 0
 	}
-	fmt.Print(string(data))
+	fmt.Print(bench.RenderHistory(string(data)))
 	return 0
 }
 

@@ -44,10 +44,12 @@ func TestParseGoJSON(t *testing.T) {
 
 func TestPerTestCommand(t *testing.T) {
 	cases := map[string][]string{
-		"node --test":         {"node", "--test", "--test-reporter=tap"},
-		"go test ./...":       {"go", "test", "-json", "./..."},
-		"go test -race ./...": {"go", "test", "-json", "-race", "./..."},
-		"sh run-tests.sh":     {"sh", "run-tests.sh"},
+		"node --test":             {"node", "--test", "--test-reporter=tap"},
+		"go test ./...":           {"go", "test", "-json", "./..."},
+		"go test -race ./...":     {"go", "test", "-json", "-race", "./..."},
+		"sh run-tests.sh":         {"sh", "run-tests.sh"},
+		"python3 -m pytest tests": {"python3", "-m", "pytest", "-rA", "-p", "no:cacheprovider", "tests"},
+		"pytest -q":               {"pytest", "-rA", "-p", "no:cacheprovider", "-q"},
 	}
 	for suite, want := range cases {
 		got, _, err := perTestCommand(suite)

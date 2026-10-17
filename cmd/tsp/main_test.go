@@ -2668,6 +2668,33 @@ func TestSetupHookRequirementFollowsTheSelectedHost(t *testing.T) {
 // `tpp bind` is the operator side of the stored binding: the same validations the gate reads, one
 // private hashed file per (root, session) outside the repository, and --unset removes only that
 // session's own key. Errors are bounded — nothing prints the session identity back.
+func TestBenchHistoryMasksPlanlessStoredRows(t *testing.T) {
+	dir := t.TempDir()
+	raw := "| cases | reported | no plan | caught |\n| 9 | 0 | 9 | 17 |\n"
+	if err := os.WriteFile(filepath.Join(dir, "history.md"), []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	code := runBenchHistory([]string{"--bench-dir", dir})
+	w.Close()
+	os.Stdout = orig
+	out, _ := io.ReadAll(r)
+	r.Close()
+	want := "| cases | reported | no plan | caught |\n| 9 | - | - | 17 |\nnote: - means plan-only metrics are unavailable when no plan was recorded; caught remains meaningful.\n"
+	if code != 0 || string(out) != want {
+		t.Fatalf("code=%d output=%q want=%q", code, out, want)
+	}
+	kept, _ := os.ReadFile(filepath.Join(dir, "history.md"))
+	if string(kept) != raw {
+		t.Fatal("stored history changed")
+	}
+}
+
 func TestBindCLIStoresAndUnsetsPerSessionBindings(t *testing.T) {
 	repo := t.TempDir()
 	if out, err := exec.Command("git", "init", repo).CombinedOutput(); err != nil {
@@ -2889,5 +2916,74 @@ func TestResolveSandboxImageDoesNotReadTheDeclarationOffTheSandboxPath(t *testin
 	}
 	if got != sandboxImageDefault {
 		t.Fatalf("image = %q, want the flag's own default %q", got, sandboxImageDefault)
+	}
+}
+
+// Without a plan, check runs the changed tests against HEAD. When it cannot infer how to run them
+// it tells the operator to pass --suite, so check has to accept the flag it names.
+func TestCheckAcceptsTheSuiteItAsksFor(t *testing.T) {
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(rel, body string) {
+		t.Helper()
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "-q")
+	write("app/m.py", "def f():\n    return 1\n")
+	write("tests/test_m.py", "def test_ok():\n    assert True\n")
+	git("add", ".")
+	git("commit", "-qm", "init")
+	write("app/m.py", "def f():\n    return 2\n")
+	write("tests/test_m.py", "def test_ok():\n    assert True\n\ndef test_new():\n    assert True\n")
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	code := runCheck([]string{"--cwd", dir, "--suite", "false"})
+	w.Close()
+	os.Stdout = orig
+	out, _ := io.ReadAll(r)
+	r.Close()
+	if code != 1 || !strings.Contains(string(out), `with "false"`) {
+		t.Fatalf("check must run the suite it was given: code=%d output=%q", code, out)
+	}
+}
+
+func TestBenchCompareTakesSkillVersionsBeforeOrAfterTheDirectories(t *testing.T) {
+	dirs := make([]string, 2)
+	for i, v := range []string{"0.7.0", "0.7.1"} {
+		dirs[i] = filepath.Join(t.TempDir(), v)
+		if err := os.MkdirAll(dirs[i], 0o755); err != nil {
+			t.Fatal(err)
+		}
+		agg := bench.Aggregate{Corpus: "sha256:c", Provenance: bench.Provenance{MetricsVersion: bench.MetricsVersion, Model: "m", Runner: bench.RunnerPi, SkillVersion: v, Corpus: "sha256:c", Cases: 1, Runs: 1, AgentConfig: bench.ConfigBench, Environment: "linux/amd64"}, Cases: []bench.Result{{Case: "a", Total: 1}}}
+		raw, _ := json.Marshal(agg)
+		if err := os.WriteFile(filepath.Join(dirs[i], "aggregate.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"--skill-versions", dirs[0], dirs[1]}, {dirs[0], dirs[1], "--skill-versions"}} {
+		if code := runBenchCompare(args); code != 0 {
+			t.Fatalf("%v: exit %d", args, code)
+		}
+	}
+	if code := runBenchCompare([]string{dirs[0], dirs[1]}); code != 1 {
+		t.Fatalf("without the flag two skill versions must be refused, exit %d", code)
 	}
 }

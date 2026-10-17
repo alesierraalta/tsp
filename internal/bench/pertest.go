@@ -16,7 +16,7 @@ import (
 )
 
 // perTestCommand rewrites a suite command so it reports one line per test: node's TAP reporter
-// and go's -json stream. Other runners keep their command and are read as one whole-suite result.
+// go's -json stream, and pytest's -rA summary. Other runners keep their command and are read as one whole-suite result.
 // The suite is one field stored as one string, so it is split by the shared rule the hook command uses; a
 // suite the splitter cannot read is reported instead of rewritten, for the same reason the whole-suite path
 // refuses it: the words read so far are the head of a command nobody wrote.
@@ -33,6 +33,10 @@ func perTestCommand(suite string) (argv []string, parser func(string) map[string
 		return append(fields[:2:2], append([]string{"--test-reporter=tap"}, fields[2:]...)...), parseTAP, nil
 	case fields[0] == "go" && len(fields) > 1 && fields[1] == "test":
 		return append(fields[:2:2], append([]string{"-json"}, fields[2:]...)...), parseGoJSON, nil
+	case fields[0] == "pytest":
+		return append(fields[:1:1], append(pytestFlags(), fields[1:]...)...), parsePytest, nil
+	case strings.HasPrefix(fields[0], "python") && len(fields) > 2 && fields[1] == "-m" && fields[2] == "pytest":
+		return append(fields[:3:3], append(pytestFlags(), fields[3:]...)...), parsePytest, nil
 	}
 	return fields, nil, nil
 }
@@ -201,6 +205,23 @@ func parseTAP(out string) map[string]bool {
 		}
 		res[name] = ok
 		pending = append(pending, frame{indent, name})
+	}
+	return res
+}
+
+// pytestFlags ask pytest for one summary line per test (-rA) and keep its cache out of the tree it runs in.
+func pytestFlags() []string { return []string{"-rA", "-p", "no:cacheprovider"} }
+
+var pytestLine = regexp.MustCompile(`^(PASSED|FAILED) (\S+::\S+)`)
+
+// parsePytest reads the -rA short summary; a test is named path::test. ERROR lines are left out: a setup or
+// collection error is not a test outcome, and a failed build must never read as a red witness.
+func parsePytest(out string) map[string]bool {
+	res := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		if m := pytestLine.FindStringSubmatch(line); m != nil {
+			res[m[2]] = m[1] == "PASSED"
+		}
 	}
 	return res
 }

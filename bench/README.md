@@ -7,6 +7,23 @@ reasonable developer would have written. The corpus exists to measure whether a 
 finds what the happy path hides, and to compare one version of the flow against another on the
 same ground.
 
+## Reading plan-less runs and comparisons
+
+For readings with no recorded plan, plan-only metrics (reported/found, recall, precision,
+false positives, activation and plan adjudication counts) are unavailable, not zero.
+New history rows and `tsp bench history` display `-`; existing Markdown rows and JSONL
+records remain untouched. Run summaries and comparisons omit unavailable totals.
+`caught` and `recall_caught` still measure the redcheck witness independently of a plan.
+Mixed readings retain their legacy plan totals; they do not imply complete plan coverage.
+
+`bench compare` prints whether the caught recall difference includes zero in a two-sided
+95% Wilson/Newcombe interval (after minus before). Wilson score bounds use z=1.959963984540054;
+the difference bounds combine the relevant arm errors in quadrature (Newcombe's unpaired
+method, without continuity correction). For example, 16/18 versus 15/18 is within noise.
+This descriptive test treats defect-runs as independent; repetitions and defects in the
+same case may be correlated, so this is not proof of equivalence or a skill-version win.
+No defect-run denominator produces an explicit unavailable verdict.
+
 ## Layout
 
 ```
@@ -255,7 +272,9 @@ reading, not a baseline, and `bench compare` refuses two runs whose case sets di
 corpus digests differ, or whose per-case defect counts differ, so extending or editing the corpus
 starts a new series instead of a delta. It refuses them for the rest of the instrument too: a
 different model, runner, skill version, number of runs per case, agent-config mode, environment
-(os/arch) or metrics version is a field that moved, and the refusal names it. A difference in the
+(os/arch) or metrics version is a field that moved, and the refusal names it. A skill version change is the one
+field an operator can accept on purpose: `bench compare --skill-versions` compares two skill versions on
+an otherwise identical instrument and says so in its header. A difference in the
 suite runtimes (`node`, `go`) is reported in the comparison header without a refusal, because a
 refusal there would block every pair across a toolchain patch. The throwaway agent config is
 verified to hold exactly the embedded `test-strategy` skill: a config that quietly carries anything else fails the

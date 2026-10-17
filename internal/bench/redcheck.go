@@ -123,7 +123,8 @@ func parentTest(name string) string {
 	return name[:start+j]
 }
 
-// inferRedCheckSuite picks the command that runs the changed tests: their Go packages, or the Node files.
+// inferRedCheckSuite picks the command that runs the changed tests: their Go packages, the Python files under
+// pytest, or the Node files.
 func inferRedCheckSuite(root string, files []string) (string, error) {
 	if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
 		seen := map[string]bool{}
@@ -145,6 +146,15 @@ func inferRedCheckSuite(root string, files []string) (string, error) {
 			sort.Strings(pkgs)
 			return "go test -count=1 " + strings.Join(pkgs, " "), nil
 		}
+	}
+	var py []string
+	for _, f := range files {
+		if strings.HasSuffix(f, ".py") {
+			py = append(py, f)
+		}
+	}
+	if len(py) > 0 {
+		return "python3 -m pytest " + strings.Join(py, " "), nil
 	}
 	if _, err := os.Stat(filepath.Join(root, "package.json")); err == nil {
 		return "node --test " + strings.Join(files, " "), nil

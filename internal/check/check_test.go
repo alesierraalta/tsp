@@ -20,6 +20,10 @@ type fakeRepo struct {
 	config   string
 	planErr  bool
 	ignored  bool
+	optOut   bool
+	witness  Witness
+	judgeErr error
+	judged   int
 }
 
 func (f *fakeRepo) deps() Deps {
@@ -40,7 +44,17 @@ func (f *fakeRepo) deps() Deps {
 			}
 			return f.status, nil
 		},
+		RedCheck: func(root string) (Witness, error) {
+			f.judged++
+			return f.witness, f.judgeErr
+		},
 		ReadFile: func(path string) (string, error) {
+			if path == f.root+"/"+optOutName {
+				if f.optOut {
+					return "", nil
+				}
+				return "", fs.ErrNotExist
+			}
 			if path == f.root+"/"+plan.ConfigName {
 				if f.config == "" {
 					return "", fs.ErrNotExist
@@ -103,9 +117,9 @@ func TestCheckReadsTheRepositoryAlone(t *testing.T) {
 		wantOut  string
 	}{
 		{
-			name:     "changed source and no plan",
+			name:     "changed source, no plan and no test",
 			repo:     &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), planErr: true},
-			wantExit: 1, wantOut: "no test plan",
+			wantExit: 1, wantOut: "no test was added or changed",
 		},
 		{
 			name:     "changed source and a plan that owes breadth",
@@ -136,6 +150,59 @@ func TestCheckReadsTheRepositoryAlone(t *testing.T) {
 			}
 			if !strings.Contains(res.Text, tc.wantOut) {
 				t.Fatalf("text missing %q:\n%s", tc.wantOut, res.Text)
+			}
+		})
+	}
+}
+
+// test-strategy 0.7 writes no plan: the tests are the deliverable. Without a plan, check asks for the
+// one thing the tree can corroborate, a new test that fails on HEAD's code, or the repository's opt-out.
+func TestCheckWithoutAPlanAsksForAWitness(t *testing.T) {
+	src := porcelain(" M src/app.js", " M tests/app.test.js")
+	cases := []struct {
+		name       string
+		repo       *fakeRepo
+		wantExit   int
+		wantOut    string
+		wantJudged int
+	}{
+		{
+			name:     "a new test fails on HEAD",
+			repo:     &fakeRepo{root: "/r", status: src, planErr: true, witness: Witness{TestFiles: []string{"tests/app.test.js"}, Red: []string{"rejects empty"}, PinsNothing: []string{"keeps order"}}},
+			wantExit: 0, wantOut: "1 new test(s) fail on HEAD's code: rejects empty", wantJudged: 1,
+		},
+		{
+			name:     "every new test passes on HEAD",
+			repo:     &fakeRepo{root: "/r", status: src, planErr: true, witness: Witness{TestFiles: []string{"tests/app.test.js"}, PinsNothing: []string{"keeps order"}}},
+			wantExit: 1, wantOut: "no new test fails on HEAD's code", wantJudged: 1,
+		},
+		{
+			name:     "the new tests cannot be judged",
+			repo:     &fakeRepo{root: "/r", status: src, planErr: true, judgeErr: errors.New("cannot infer how to run the changed tests: pass --suite")},
+			wantExit: 1, wantOut: "the new tests could not be judged: cannot infer", wantJudged: 1,
+		},
+		{
+			name:     "the repository opted out",
+			repo:     &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), planErr: true, optOut: true},
+			wantExit: 0, wantOut: ".no-testing-gate", wantJudged: 0,
+		},
+		{
+			name:     "a plan keeps its legacy reading",
+			repo:     &fakeRepo{root: "/r", status: src, plan: settled},
+			wantExit: 0, wantOut: "owes nothing", wantJudged: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := Run(".", tc.repo.deps())
+			if res.Exit != tc.wantExit || !strings.Contains(res.Text, tc.wantOut) {
+				t.Fatalf("exit = %d, want %d; text missing %q:\n%s", res.Exit, tc.wantExit, tc.wantOut, res.Text)
+			}
+			if strings.Contains(res.Text, "no test plan") {
+				t.Fatalf("check still asks for a plan the skill no longer writes:\n%s", res.Text)
+			}
+			if tc.repo.judged != tc.wantJudged {
+				t.Fatalf("red check ran %d time(s), want %d", tc.repo.judged, tc.wantJudged)
 			}
 		})
 	}

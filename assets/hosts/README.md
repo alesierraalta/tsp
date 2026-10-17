@@ -40,7 +40,7 @@ included.
 separate, unverified surface (its row below is contract-read, not run here).
 
 A host with neither still gets everything except "what did THIS session do": `tsp check`
-reads git and the persisted plan and needs no host at all, which is also what makes it usable
+reads git, the tests, and the plan when one exists, and needs no host at all, which is also what makes it usable
 from a Makefile, a pre-push script, or CI.
 
 ## Verified
@@ -49,7 +49,7 @@ from a Makefile, a pre-push script, or CI.
 |---|---|---|
 | Claude Code | Stop command hook | yes: wired, run, exit code checked by `tsp doctor` |
 | Anything with a shell | `tsp check` | yes |
-| Pi | native `/tsp` command and `/tpp` compatibility alias via the extension (`sync --hosts pi` → `~/.pi/agent/extensions/tpp/index.ts`); Stop command hook, Claude-compatible payload | `/tsp` and `/tpp` dispatch and the TSP offer covered by `pi/tsp.test.mjs` (run in CI), the offer not yet watched in a live Pi session; Stop hook contract read from the pi-hooks package; not run here |
+| Pi | native `/tsp` command and `/tpp` compatibility alias via the extension (`sync --hosts pi` → `~/.pi/agent/extensions/tpp/index.ts`); Stop command hook, Claude-compatible payload | `/tsp` and `/tpp` dispatch and the TSP offer covered by `pi/tsp.test.mjs` (run in CI), the offer watched in a live Pi 1.3.0 session on 2026-10-17 (offer after an edit, "No" remembered per file, "Sí" runs test-strategy, no offer after the TSP run, after a shell-only edit, or with `.no-testing-gate`); Stop hook contract read from the pi-hooks package; not run here |
 | OpenCode | plugin event, disabled (adapter export only) | contract read from the OpenCode plugin docs; not run here |
 | Codex, Gemini CLI | not implemented | their payload and output schemas are not verified here |
 

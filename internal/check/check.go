@@ -1,6 +1,6 @@
 // Package check answers the testing questions from the repository alone: no hook payload, no
 // transcript, no host. Claude Code, another agent, a Makefile and CI can all run it, because the
-// only thing it needs is git and the persisted plan.
+// only thing it needs is git, the tests, and a plan when one was written.
 package check
 
 import (
@@ -9,7 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/alesierraalta/tsp/internal/bench"
 	"github.com/alesierraalta/tsp/internal/gate"
 	"github.com/alesierraalta/tsp/internal/plan"
 )
@@ -19,7 +21,21 @@ type Deps struct {
 	Git      func(dir string, args ...string) (string, error)
 	ReadFile func(path string) (string, error)
 	PlanPath string
+	// Suite is the command that runs the changed tests; empty lets the red check infer it.
+	Suite string
+	// RedCheck runs the tests changed since HEAD against HEAD's code.
+	RedCheck func(root string) (Witness, error)
 }
+
+// Witness is what the red check saw: the changed test files, the new tests that fail on HEAD's code
+// (they pin a defect), and those that pass there (they pin nothing).
+type Witness struct {
+	TestFiles   []string
+	Red         []string
+	PinsNothing []string
+}
+
+const optOutName = ".no-testing-gate"
 
 // Result is what the caller prints and exits with.
 type Result struct {
@@ -39,6 +55,10 @@ func Run(cwd string, d Deps) Result {
 	}
 	if d.ReadFile == nil {
 		d.ReadFile = readFile
+	}
+	if d.RedCheck == nil {
+		suite := d.Suite
+		d.RedCheck = func(root string) (Witness, error) { return redCheck(root, suite) }
 	}
 	rootOut, err := d.Git(cwd, "rev-parse", "--show-toplevel")
 	root := strings.TrimSpace(rootOut)
@@ -85,8 +105,10 @@ func Run(cwd string, d Deps) Result {
 		return Result{Text: warn + "no production source is changed: nothing to check"}
 	}
 	if planErr != nil {
-		return Result{Exit: 1, Files: files, Text: warn + changedLine(files) +
-			"\nthere is no test plan at " + planRelPath + ": run the testing discipline, or write down why this change does not warrant it"}
+		res := witnessVerdict(root, d)
+		res.Files = files
+		res.Text = warn + changedLine(files) + "\n" + res.Text
+		return res
 	}
 	// The verdict is scoped to the declared run when one is declared: GapsForRun counts only the
 	// rows that run owns, so another run's pending rows are never this run's debt and another run's
@@ -107,6 +129,31 @@ func Run(cwd string, d Deps) Result {
 		return Result{Files: files, Text: warn + changedLine(files) + "\n" + owes + ": every assigned layer was swept and every ranked target is done"}
 	}
 	return Result{Exit: 1, Files: files, Text: warn + changedLine(files) + "\n" + gaps.Report()}
+}
+
+// witnessVerdict is the reading without a plan: test-strategy 0.7 writes none, so the tests are what the
+// tree can corroborate. A change is settled when at least one new test fails on HEAD's code, or when the
+// repository opted out with .no-testing-gate. A suite that cannot be judged fails closed.
+func witnessVerdict(root string, d Deps) Result {
+	if _, err := d.ReadFile(filepath.Join(root, optOutName)); err == nil {
+		return Result{Text: optOutName + " is present: this repository opted out of the testing check"}
+	}
+	w, err := d.RedCheck(root)
+	if err != nil {
+		return Result{Exit: 1, Text: "the new tests could not be judged: " + err.Error()}
+	}
+	if len(w.TestFiles) == 0 {
+		return Result{Exit: 1, Text: "no test was added or changed with it: run the testing discipline (\"haz el TSP\"), or add " + optOutName + " when this repository does not warrant it"}
+	}
+	if len(w.Red) == 0 {
+		return Result{Exit: 1, Text: "no new test fails on HEAD's code, so none of them pins a defect: change the input or setup until a test fails for the reason the contract names, or run tsp redcheck to see each test"}
+	}
+	return Result{Text: fmt.Sprintf("%d new test(s) fail on HEAD's code: %s", len(w.Red), strings.Join(w.Red, ", "))}
+}
+
+func redCheck(root, suite string) (Witness, error) {
+	rep, err := bench.RedCheck(root, suite, 5*time.Minute)
+	return Witness{TestFiles: rep.TestFiles, Red: rep.Red, PinsNothing: rep.PinsNothing}, err
 }
 
 // ignoredPlanWarning names the one thing check cannot see by reading the file: a plan path git will

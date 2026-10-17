@@ -110,7 +110,18 @@ func AppendHistory(benchDir string, e HistoryEntry) error {
 		}
 		kind = "rescore of " + e.SourceRun
 	}
-	return appendFile(md, []byte(historyRow(e, ts, kind)))
+	row := historyRow(e, ts, kind)
+	runs := e.Runs
+	if runs < 1 {
+		runs = 1
+	}
+	if e.NoPlan > 0 && e.NoPlan+e.Failed+e.Invalid == e.Cases*runs {
+		// The note stays out of the file: a line that is not a row would end the table. bench history
+		// prints it when it renders a masked row.
+		row = strings.TrimPrefix(RenderHistory(historyHeader+row), historyHeader)
+		row = strings.ReplaceAll(row, planlessNote+"\n", "")
+	}
+	return appendFile(md, []byte(row))
 }
 
 // ensureHistoryHeader writes the current header when the file is new or still carries an older one.
