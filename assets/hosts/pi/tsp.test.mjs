@@ -13,6 +13,7 @@ import tppExtension, {
   buildArgv,
   childEnv,
   runTppCommand,
+  isSourcePath,
 } from "./tsp.ts";
 
 // The literals internal/mode pins on the Go side: the shared protocol, spelled out on both shores.
@@ -247,4 +248,9 @@ test("dismissing the question (no answer) sends nothing", async () => {
   await h.run("change a", [["edit", "a.go"]]);
   assert.equal(h.asked.length, 1);
   assert.deepEqual(h.sent, []);
+});
+
+test("pytest and Go test files never count as source to offer TSP for", () => {
+  for (const p of ["lib/x_test.py", "lib/test_x.py", "pkg/x_test.go", "src/a.test.ts"]) assert.equal(isSourcePath(p), false, p);
+  for (const p of ["lib/attest.py", "cmd/latest.go"]) assert.equal(isSourcePath(p), true, p);
 });
