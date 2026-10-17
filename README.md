@@ -455,10 +455,14 @@ serve more than one agent, and it is why `check` exists:
 ```
 tsp check          # exit 1 and say what this repository owes: plan gaps, or without a plan a new test failing on HEAD
 tsp check --suite "npm test"   # the command that runs the changed tests, when it cannot be inferred
+tsp check --no-test-needed "comment-only change"   # waive this change, with a reason a reviewer can read
 ```
 
 Without a plan, changed production source is settled by a new test that fails on HEAD's code (the
-witness `tsp redcheck` finds) or by `.no-testing-gate` at the repository root. How to run the changed
+witness `tsp redcheck` finds), by a waiver for this change, or by `.no-testing-gate` at the repository
+root. `tsp check --no-test-needed "<reason>"` records the waiver in `.tsp-waiver.json`: the reason and a
+fingerprint of the changed production files. Commit it with the change so the reviewer sees why there
+is no test; editing the code again voids it, and it is refused when a plan exists. How to run the changed
 tests is inferred for Go (`go test` on their packages), Python (`python3 -m pytest` on the changed
 `.py` tests) and Node (`node --test`); anything else needs `--suite`. When the tests cannot be run one
 by one, check fails instead of guessing.

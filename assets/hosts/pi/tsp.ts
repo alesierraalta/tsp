@@ -36,7 +36,7 @@ export function observesGentleSession(tools: readonly RegisteredTool[]): boolean
   return tools.some((t) => GENTLE_TOOLS.has(t.name) || (t.sourceInfo?.path ?? "").split(/[\\/]+/).some((s) => GENTLE_DIRS.has(s)));
 }
 
-const HELP = "Usage: /tsp check [--path <plan.md>] [--suite \"<test command>\"] · /tsp feedback --summary · /tsp doctor [--mode auto|gentle]";
+const HELP = "Usage: /tsp check [--path <plan.md>] [--suite \"<test command>\"] [--no-test-needed \"<reason>\"] · /tsp feedback --summary · /tsp doctor [--mode auto|gentle]";
 
 /** Splits arguments on whitespace, keeping a single- or double-quoted span as one word; null when a quote is left open. */
 function splitArgs(raw: string): string[] | null {

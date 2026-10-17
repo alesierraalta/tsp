@@ -2987,3 +2987,20 @@ func TestBenchCompareTakesSkillVersionsBeforeOrAfterTheDirectories(t *testing.T)
 		t.Fatalf("without the flag two skill versions must be refused, exit %d", code)
 	}
 }
+
+func TestCheckRefusesANoTestNeededWaiverWithoutAReason(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	code := runCheck([]string{"--cwd", t.TempDir(), "--no-test-needed", "  "})
+	w.Close()
+	os.Stderr = orig
+	out, _ := io.ReadAll(r)
+	r.Close()
+	if code != 2 || !strings.Contains(string(out), "--no-test-needed needs a reason") {
+		t.Fatalf("code=%d stderr=%q", code, out)
+	}
+}

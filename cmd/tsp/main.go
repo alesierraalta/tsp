@@ -69,7 +69,8 @@ commands:
            (init | check | gaps | upgrade | add-finding | add-evidence | admit)
   check    say what this repository still owes, from git, the tests and a plan if one exists: no
            hook payload, no transcript, no host. Without a plan, changed source needs a new test that
-           fails on HEAD's code (see redcheck; --suite names how to run it) or a .no-testing-gate. Exit 1 when there is something to do.
+           fails on HEAD's code (see redcheck; --suite names how to run it), a waiver
+           recorded with --no-test-needed "<reason>", or a .no-testing-gate. Exit 1 when there is something to do.
   redcheck run the tests added or changed since HEAD against HEAD's code and say which new tests
            fail there (defect witnesses) and which pass (they pin nothing). Exit 0 when at least one
            new test fails on the unmodified code, 1 when none does or none was added, 2 when nothing
@@ -921,8 +922,13 @@ func runCheck(args []string) int {
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
 	path := fs.String("path", "", "plan file relative to the repository root")
 	suite := fs.String("suite", "", "command that runs the changed tests when there is no plan (default: their Go packages, pytest on changed .py tests, or node --test on them)")
+	waive := fs.String("no-test-needed", "", "record in "+check.WaiverName+" that the current change needs no new test, with this reason; editing the code again voids it")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
+	}
+	if flagSet(fs, "no-test-needed") && strings.TrimSpace(*waive) == "" {
+		fmt.Fprintln(os.Stderr, "check: --no-test-needed needs a reason")
+		return 2
 	}
 	if flagSet(fs, "path") {
 		if err := plan.ValidatePlanPath("--path", *path); err != nil {
@@ -930,7 +936,7 @@ func runCheck(args []string) int {
 			return 2
 		}
 	}
-	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite})
+	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive)})
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
 }
