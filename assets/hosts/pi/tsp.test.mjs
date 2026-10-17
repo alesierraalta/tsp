@@ -258,3 +258,8 @@ test("pytest and Go test files never count as source to offer TSP for", () => {
 test("files under the test directories the Stop gate names never trigger the TSP offer", () => {
   for (const p of ["e2e/login.ts", "spec/user_spec.rb", "app/spec/models/user.rb"]) assert.equal(isSourcePath(p), false, p);
 });
+
+test("/tsp check keeps a quoted argument as one word", () => {
+  assert.deepEqual(parseTppCommand(`check --suite "npm test" --path 'docs/my plan.md'`), { kind: "check", rest: ["--suite", "npm test", "--path", "docs/my plan.md"] });
+  assert.equal(parseTppCommand(`check --suite "npm test`).kind, "help");
+});

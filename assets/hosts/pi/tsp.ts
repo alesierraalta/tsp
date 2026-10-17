@@ -36,11 +36,38 @@ export function observesGentleSession(tools: readonly RegisteredTool[]): boolean
   return tools.some((t) => GENTLE_TOOLS.has(t.name) || (t.sourceInfo?.path ?? "").split(/[\\/]+/).some((s) => GENTLE_DIRS.has(s)));
 }
 
-const HELP = "Usage: /tsp check [--path <plan.md>] · /tsp feedback --summary · /tsp doctor [--mode auto|gentle]";
+const HELP = "Usage: /tsp check [--path <plan.md>] [--suite \"<test command>\"] · /tsp feedback --summary · /tsp doctor [--mode auto|gentle]";
+
+/** Splits arguments on whitespace, keeping a single- or double-quoted span as one word; null when a quote is left open. */
+function splitArgs(raw: string): string[] | null {
+  const words: string[] = [];
+  let word = "", quote = "", inWord = false;
+  for (const ch of raw) {
+    if (quote) {
+      if (ch === quote) quote = "";
+      else word += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      inWord = true;
+    } else if (/\s/.test(ch)) {
+      if (inWord) words.push(word);
+      word = "";
+      inWord = false;
+    } else {
+      word += ch;
+      inWord = true;
+    }
+  }
+  if (quote) return null;
+  if (inWord) words.push(word);
+  return words;
+}
 
 /** Maps the raw arguments after /tsp or its /tpp compatibility alias. */
 export function parseTppCommand(rawArgs: string): TppDispatch {
-  const [head, ...rest] = rawArgs.trim().split(/\s+/).filter(Boolean);
+  const words = splitArgs(rawArgs);
+  if (words === null) return { kind: "help", reason: "unclosed quote" };
+  const [head, ...rest] = words;
   switch (head) {
     case undefined: return { kind: "help", reason: "no subcommand" };
     case "check": return { kind: "check", rest };
