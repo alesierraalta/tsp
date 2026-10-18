@@ -97,6 +97,7 @@ type Options struct {
 	MaxCostUSD   float64 // 0 means no ceiling
 	Out          string
 	BenchDir     string
+	CaseCache    string // where cases shipped by reference are built; empty uses DefaultCaseCache
 	SkillFile    string // for the history's skill_version
 	DryRun       bool
 	Keep         bool
@@ -275,8 +276,21 @@ func resolveCaseDirs(opts Options) ([]string, bool) {
 	}
 	caseDirs, err := listCases(strings.Join(patterns, ","))
 	if err != nil || len(caseDirs) == 0 {
-		fmt.Fprintf(opts.Log, "no cases match %q\n", opts.CasesGlob)
+		fmt.Fprintf(logOf(opts), "no cases match %q\n", opts.CasesGlob)
 		return nil, false
+	}
+	cache := opts.CaseCache
+	if cache == "" {
+		cache = DefaultCaseCache()
+	}
+	// A case that cannot be built stops the run: a corpus that silently shrinks is a different measurement.
+	for i, dir := range caseDirs {
+		built, err := MaterializeCase(dir, cache)
+		if err != nil {
+			fmt.Fprintf(logOf(opts), "case %s cannot be built: %v\n", filepath.Base(dir), err)
+			return nil, false
+		}
+		caseDirs[i] = built
 	}
 	return caseDirs, true
 }
