@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/valyala/fasthttp",
+  "commit": "fde5d95922be86c50e4f5622e744757dc20c68d9",
+  "patch": "fix.patch"
+}

@@ -1,0 +1,30 @@
+{
+  "id": "r10-compose-relay-removal",
+  "language": "go",
+  "suite": "go test ./pkg/compose",
+  "surface": "pkg/compose",
+  "family": "concurrency",
+  "source": "go-swe-bench-v0@6854503b",
+  "request": "Provider service relay cleanup must converge successfully to absence when another actor has already completed cleanup or the daemon is still completing it.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "pkg/compose/relay.go",
+      "line": 274,
+      "class": "concurrent-removal-idempotency",
+      "keywords": [
+        "relay",
+        "concurrent",
+        "removal",
+        "idempotent"
+      ],
+      "description": "Relay cleanup propagates a not-found error from a concurrent removal and attempts removal again when the daemon is already removing the relay.",
+      "trigger": {
+        "input": "cat > pkg/compose/zz_probe_test.go <<'EOF'\npackage compose\nimport (\n \"fmt\"\n \"testing\"\n \"github.com/containerd/errdefs\"\n \"github.com/moby/moby/api/types/container\"\n \"github.com/moby/moby/client\"\n \"go.uber.org/mock/gomock\"\n)\nfunc TestZZProbe(t *testing.T) {\n ctrl := gomock.NewController(t)\n defer ctrl.Finish()\n apiMock, cli := prepareMocks(ctrl)\n tested, err := NewComposeService(cli)\n if err != nil { t.Fatal(err) }\n svc := tested.(*composeService)\n apiMock.EXPECT().ContainerList(gomock.Any(), gomock.Any()).Return(client.ContainerListResult{\n  Items: []container.Summary{{ID:\"relay-1\", Names:[]string{\"/p-db-1\"}}},\n }, nil)\n apiMock.EXPECT().ContainerRemove(gomock.Any(), \"relay-1\", client.ContainerRemoveOptions{Force:true}).Return(client.ContainerRemoveResult{}, errdefs.ErrNotFound.WithMessage(\"already removed\"))\n err = svc.removeServiceRelay(t.Context(), \"p\", \"db\")\n fmt.Printf(\"probe: success=%t\\n\", err == nil)\n}\nEOF\ngo test -run TestZZProbe -v ./pkg/compose 2>&1 | grep probe:",
+        "actual": "probe: success=false",
+        "expected": "probe: success=true"
+      },
+      "why_missed": "The existing suite does not exercise disappearance between the discovery snapshot and the daemon removal response."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+diff --git a/core/stringx/strings.go b/core/stringx/strings.go
+index e1afe94..3915955 100644
+--- a/core/stringx/strings.go
++++ b/core/stringx/strings.go
+@@ -132,7 +132,7 @@ func Substr(str string, start, stop int) (string, error) {
+ 		return "", ErrInvalidStartPosition
+ 	}
+ 
+-	if stop < 0 || stop > length {
++	if stop < 0 || stop > length || start > stop {
+ 		return "", ErrInvalidStopPosition
+ 	}
+ 

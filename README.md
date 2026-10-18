@@ -559,7 +559,8 @@ worktree root, while the gate ledger seals the repository directory name.
 `tsp bench` measures whether the testing skill finds defects it was never told about. Each
 case under `bench/cases/<id>/` is a fixture project whose own suite is green plus a sealed
 `KEY.json` listing the planted defects (file, line, class, keywords, trigger). The key is never
-copied into a workspace.
+copied into a workspace. The real-bug cases (`r*`) ship by reference, an upstream repository, commit
+and fix patch, and are built into a local cache on first use (see `bench/README.md`).
 
 ```
 tsp bench run --cases 'bench/cases/*' --model sonnet --runs 1 --max-cost-usd 20

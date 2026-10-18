@@ -1,0 +1,30 @@
+{
+  "id": "r11-caddy-port-range",
+  "language": "go",
+  "suite": "go test .",
+  "surface": ".",
+  "family": "boundary",
+  "source": "go-swe-bench-v0@62a72977",
+  "request": "A network address port range may span at most 65535 ports, counting both endpoints: a range of exactly 65535 ports must be accepted and any wider range must be rejected with an error.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "listeners.go",
+      "line": 364,
+      "class": "inclusive-port-span",
+      "keywords": [
+        "port",
+        "range",
+        "span",
+        "inclusive"
+      ],
+      "description": "A range containing one more port than the limit is accepted because only the endpoint difference is counted.",
+      "trigger": {
+        "input": "cat > zz_probe_test.go <<'EOF'\npackage caddy\nimport (\"fmt\"; \"testing\")\nfunc TestZZProbe(t *testing.T) {\n_, err := ParseNetworkAddress(\"localhost:0-\" + fmt.Sprint(maxPortSpan))\nfmt.Printf(\"probe: rejected=%t\\n\", err != nil)\n}\nEOF\ngo test -run TestZZProbe -v . 2>&1 | grep probe:\n",
+        "actual": "probe: rejected=false",
+        "expected": "probe: rejected=true"
+      },
+      "why_missed": "Typical ranges are far below the limit; checking endpoints alone misses the inclusive count."
+    }
+  ]
+}

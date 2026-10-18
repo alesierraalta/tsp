@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/labstack/echo",
+  "commit": "90702e71a7cde342da70b1f97e8e6420c509f939",
+  "patch": "fix.patch"
+}

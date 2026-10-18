@@ -1,0 +1,30 @@
+{
+  "id": "r12-memos-webhook-unspecified",
+  "language": "go",
+  "suite": "go test ./internal/webhook",
+  "surface": "internal/webhook",
+  "family": "security",
+  "source": "go-swe-bench-v0@607dc284",
+  "request": "The default outbound webhook security policy must reject destinations that route to the local host, including unspecified IPv4 and IPv6 addresses, unless explicitly permitted by deployment policy.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "internal/webhook/validate.go",
+      "line": 17,
+      "class": "unspecified-address-ssrf",
+      "keywords": [
+        "webhook",
+        "ssrf",
+        "unspecified",
+        "destinations"
+      ],
+      "description": "The reserved network list omits unspecified-address destinations, permitting local-host access through the default SSRF guard.",
+      "trigger": {
+        "input": "cat > internal/webhook/zz_probe_test.go <<'EOF'\npackage webhook\nimport (\"fmt\"; \"testing\")\nfunc TestZZProbe(t *testing.T) {\nfmt.Printf(\"probe: rejected=%t,%t\\n\", ValidateURL(\"http://0.0.0.0/\") != nil, ValidateURL(\"http://[::]/\") != nil)\n}\nEOF\ngo test -run TestZZProbe -v ./internal/webhook 2>&1 | grep probe:\n",
+        "actual": "probe: rejected=false,false",
+        "expected": "probe: rejected=true,true"
+      },
+      "why_missed": "Loopback and private-network examples do not cover unspecified addresses that also route locally."
+    }
+  ]
+}

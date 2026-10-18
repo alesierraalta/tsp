@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +20,54 @@ func corpusDir(t *testing.T) string {
 	return dir
 }
 
+// vendoredCases are the shipped cases that carry their own fixture/ and fix/. A case shipped by reference
+// (SOURCE.json) is built from its upstream on demand, so the offline checks below cannot read it; its own
+// completeness is checked by TestCorpusSourceCasesAreComplete.
+func vendoredCases(t *testing.T) []string {
+	t.Helper()
+	all, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	var cases []string
+	for _, c := range all {
+		if _, err := os.Stat(filepath.Join(c, SourceFile)); err != nil {
+			cases = append(cases, c)
+		}
+	}
+	return cases
+}
+
+// A case shipped by reference names a fetchable repository, a full commit and a patch that exists, and its
+// key defects sit in files that patch changes: without that, no build could put the fix where the key says.
+func TestCorpusSourceCasesAreComplete(t *testing.T) {
+	all, _ := filepath.Glob(filepath.Join(corpusDir(t), "*", SourceFile))
+	for _, f := range all {
+		c := filepath.Dir(f)
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var src Source
+		if err := json.Unmarshal(raw, &src); err != nil || src.Repo == "" || !fullCommit.MatchString(src.Commit) || src.Patch == "" {
+			t.Errorf("%s: incomplete %s: %s", c, SourceFile, raw)
+			continue
+		}
+		patch, err := os.ReadFile(filepath.Join(c, src.Patch))
+		if err != nil {
+			t.Errorf("%s: %v", c, err)
+			continue
+		}
+		key, err := LoadKey(c)
+		if err != nil {
+			t.Errorf("%s: %v", c, err)
+			continue
+		}
+		for _, d := range key.Defects {
+			if !strings.Contains(string(patch), "+++ b/"+d.File+"\n") {
+				t.Errorf("%s: defect %s sits in %s, which %s does not change", c, d.ID, d.File, src.Patch)
+			}
+		}
+	}
+}
+
 // hiddenTriggerRe is a bench-internal hook a fixture must not carry: a TPP_ variable that switches a test on,
 // or a test named after the trigger that proves a planted defect.
 var hiddenTriggerRe = regexp.MustCompile(`TPP_[A-Z_]+|func Test\w*Trigger\b|test\(["'][^"']*trigger`)
@@ -27,7 +76,7 @@ var hiddenTriggerRe = regexp.MustCompile(`TPP_[A-Z_]+|func Test\w*Trigger\b|test
 // defect and hands over its proof: the agent can run it instead of finding the defect, and the reading
 // stops measuring discovery.
 func TestCorpusFixturesCarryNoHiddenTriggers(t *testing.T) {
-	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	cases := vendoredCases(t)
 	for _, c := range cases {
 		_ = filepath.Walk(filepath.Join(c, FixtureDir), func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() {
@@ -47,7 +96,7 @@ func TestCorpusFixturesCarryNoHiddenTriggers(t *testing.T) {
 
 // Every case ships the fixed versions the discriminating check needs.
 func TestCorpusShipsFixedVersions(t *testing.T) {
-	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	cases := vendoredCases(t)
 	if len(cases) == 0 {
 		t.Fatal("no cases")
 	}
@@ -81,7 +130,7 @@ func TestCorpusShipsFixedVersions(t *testing.T) {
 // written moves that statement and leaves the key pointing at a blank line or a signature, so a finding that
 // cites the real line matches only by keyword. Checked for family-tagged cases, which are written to this rule.
 func TestCorpusKeyLinesSitOnTheFixedStatement(t *testing.T) {
-	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	cases := vendoredCases(t)
 	for _, c := range cases {
 		key, err := LoadKey(c)
 		if err != nil || key.Family == "" {
@@ -176,7 +225,7 @@ func nearChange(changed []bool, i int) bool {
 // this repository's module, and `go test ./...` and `go vet ./...` at the root fail on it. Each variant carries
 // its fixture's go.mod, byte for byte: that makes it a module of its own, and overlaying it changes nothing.
 func TestCorpusGoFixVariantsAreModulesOfTheirOwn(t *testing.T) {
-	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	cases := vendoredCases(t)
 	for _, c := range cases {
 		want, err := os.ReadFile(filepath.Join(c, FixtureDir, "go.mod"))
 		if err != nil {
@@ -202,7 +251,7 @@ func TestCorpusGoFixVariantsAreModulesOfTheirOwn(t *testing.T) {
 }
 
 func TestCorpusShipsCleanControlsWithoutFixVersions(t *testing.T) {
-	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	cases := vendoredCases(t)
 	controls := 0
 	for _, c := range cases {
 		key, err := LoadKey(c)
@@ -228,7 +277,7 @@ func TestCorpusSuitesAreGreenOnEveryVariant(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs the corpus suites")
 	}
-	cases, _ := filepath.Glob(filepath.Join(corpusDir(t), "*"))
+	cases := vendoredCases(t)
 	for _, c := range cases {
 		key, err := LoadKey(c)
 		if err != nil {

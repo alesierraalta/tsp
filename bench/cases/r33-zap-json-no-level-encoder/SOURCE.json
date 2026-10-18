@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/uber-go/zap",
+  "commit": "a1155d9e0204a6fa8bd48177b4b028e26cf02eb7",
+  "patch": "fix.patch"
+}

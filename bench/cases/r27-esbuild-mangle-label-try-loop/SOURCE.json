@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/evanw/esbuild",
+  "commit": "f906a52a177cada1f147212a6b1d764f353275cb",
+  "patch": "fix.patch"
+}

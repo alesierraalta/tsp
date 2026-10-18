@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/asdf-vm/asdf",
+  "commit": "792ae1024d595d508c4eddfe0a31ec0303df0ea8",
+  "patch": "fix.patch"
+}

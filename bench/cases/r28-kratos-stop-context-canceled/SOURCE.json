@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/go-kratos/kratos",
+  "commit": "2c5e98d29486d2fa7d1041e0c5a53bb70fe9336b",
+  "patch": "fix.patch"
+}

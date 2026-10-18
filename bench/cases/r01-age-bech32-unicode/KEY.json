@@ -1,0 +1,31 @@
+{
+  "id": "r01-age-bech32-unicode",
+  "language": "go",
+  "suite": "go test . ./internal/bech32/",
+  "surface": "internal/bech32",
+  "family": "input-domain",
+  "source": "go-swe-bench-v0@366cc58c",
+  "request": "Bech32 decoding must reject every malformed input with a descriptive error and must never panic, for any input bytes: non-ASCII characters anywhere in the string and data parts too short to hold a checksum included. Valid strings must round-trip through Encode and Decode unchanged.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "internal/bech32/bech32.go",
+      "line": 157,
+      "class": "unicode-case-fold",
+      "keywords": [
+        "bech32",
+        "unicode",
+        "decode",
+        "checksum",
+        "panic"
+      ],
+      "description": "Decode lowercases the whole string with strings.ToLower before scanning the data part. Unicode case folding maps characters outside ASCII (for example U+212A KELVIN SIGN) onto bech32 charset characters, so a string that is invalid as given can fold into a short data part that later slicing assumes is at least checksum-length, panicking instead of returning an error.",
+      "trigger": {
+        "input": "cat > internal/bech32/zz_probe_test.go <<'EOF'\npackage bech32_test\n\nimport (\n\t\"fmt\"\n\t\"testing\"\n\n\t\"filippo.io/age/internal/bech32\"\n)\n\nfunc TestZZProbe(t *testing.T) {\n\tdefer func() {\n\t\tif r := recover(); r != nil {\n\t\t\tfmt.Println(\"probe: panic\")\n\t\t}\n\t}()\n\t_, _, err := bech32.Decode(\"AA3100AC\" + string(rune(0x212A)))\n\tif err != nil {\n\t\tfmt.Println(\"probe: error\")\n\t} else {\n\t\tfmt.Println(\"probe: ok\")\n\t}\n}\nEOF\ngo test -run TestZZProbe -v ./internal/bech32/ 2>&1 | grep probe:",
+        "expected": "probe: error",
+        "actual": "probe: panic"
+      },
+      "why_missed": "The shipped suite only feeds ASCII vectors to Decode; nothing exercises non-ASCII input, and the fold-to-short-data-part path never runs, so the panic site stays untested. A test asserting only lowercase/uppercase ASCII equivalence stays green."
+    }
+  ]
+}

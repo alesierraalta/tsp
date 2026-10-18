@@ -1,0 +1,31 @@
+{
+  "id": "r21-caddy-admin-host-case",
+  "language": "go",
+  "suite": "go test .",
+  "surface": ".",
+  "family": "security",
+  "source": "go-swe-bench-v0@f7d58438",
+  "request": "The admin endpoint's host allow-list check must compare hosts case-insensitively: an allowed origin and a request Host that differ only in letter case must be accepted.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "admin.go",
+      "line": 943,
+      "class": "host-allowlist-case",
+      "keywords": [
+        "admin",
+        "host",
+        "allow",
+        "list",
+        "comparison"
+      ],
+      "description": "Published bug fixed upstream: admin: fix host allow-list comparison to be case-insensitive (#7993)",
+      "trigger": {
+        "input": "printf %s 'Ly8gQ29weXJpZ2h0IDIwMTUgTWF0dGhldyBIb2x0IGFuZCBUaGUgQ2FkZHkgQXV0aG9ycwovLwovLyBMaWNlbnNlZCB1bmRlciB0aGUgQXBhY2hlIExpY2Vuc2UsIFZlcnNpb24gMi4wICh0aGUgIkxpY2Vuc2UiKTsKLy8geW91IG1heSBub3QgdXNlIHRoaXMgZmlsZSBleGNlcHQgaW4gY29tcGxpYW5jZSB3aXRoIHRoZSBMaWNlbnNlLgovLyBZb3UgbWF5IG9idGFpbiBhIGNvcHkgb2YgdGhlIExpY2Vuc2UgYXQKLy8KLy8gICAgIGh0dHA6Ly93d3cuYXBhY2hlLm9yZy9saWNlbnNlcy9MSUNFTlNFLTIuMAovLwovLyBVbmxlc3MgcmVxdWlyZWQgYnkgYXBwbGljYWJsZSBsYXcgb3IgYWdyZWVkIHRvIGluIHdyaXRpbmcsIHNvZnR3YXJlCi8vIGRpc3RyaWJ1dGVkIHVuZGVyIHRoZSBMaWNlbnNlIGlzIGRpc3RyaWJ1dGVkIG9uIGFuICJBUyBJUyIgQkFTSVMsCi8vIFdJVEhPVVQgV0FSUkFOVElFUyBPUiBDT05ESVRJT05TIE9GIEFOWSBLSU5ELCBlaXRoZXIgZXhwcmVzcyBvciBpbXBsaWVkLgovLyBTZWUgdGhlIExpY2Vuc2UgZm9yIHRoZSBzcGVjaWZpYyBsYW5ndWFnZSBnb3Zlcm5pbmcgcGVybWlzc2lvbnMgYW5kCi8vIGxpbWl0YXRpb25zIHVuZGVyIHRoZSBMaWNlbnNlLgoKcGFja2FnZSBjYWRkeQoKaW1wb3J0ICgKCSJuZXQvaHR0cC9odHRwdGVzdCIKCSJuZXQvdXJsIgoJInRlc3RpbmciCikKCi8vIFRlc3RBZG1pbkhhbmRsZXJDaGVja0hvc3RDYXNlSW5zZW5zaXRpdmUgaXMgdGhlIHJlZ3Jlc3Npb24gdGVzdCBmb3IgdGhlCi8vIEhvc3QgYWxsb3ctbGlzdCBjb21wYXJpc29uIGJlaW5nIGNhc2Utc2Vuc2l0aXZlLiBQZXIgUkZDIDM5ODYgwqczLjIuMiwKLy8gaG9zdCBuYW1lcyBhcmUgY2FzZS1pbnNlbnNpdGl2ZSwgYW5kIHVybC5QYXJzZSBkb2VzIG5vdCBub3JtYWxpemUgaG9zdAovLyBjYXNlLCBzbyB0aGUgY29tcGFyaXNvbiBtdXN0IGZvbGQgY2FzZS4gVGhpcyBtaXJyb3JzIHRoZSBmaXggYXBwbGllZCB0bwovLyBvcmlnaW5BbGxvd2VkLCB3aGVyZSBhbiBhbGxvd2VkICdodHRwOi8vRXhhbXBsZS5jb206ODA4MCcgcmVqZWN0ZWQgYQovLyBjbGllbnQgSG9zdCBvZiAnZXhhbXBsZS5jb206ODA4MCcuCmZ1bmMgVGVzdEFkbWluSGFuZGxlckNoZWNrSG9zdENhc2VJbnNlbnNpdGl2ZSh0ICp0ZXN0aW5nLlQpIHsKCW11c3RQYXJzZSA6PSBmdW5jKHJhdyBzdHJpbmcpICp1cmwuVVJMIHsKCQl1LCBlcnIgOj0gdXJsLlBhcnNlKHJhdykKCQlpZiBlcnIgIT0gbmlsIHsKCQkJdC5GYXRhbGYoImludmFsaWQgVVJMICVxOiAldiIsIHJhdywgZXJyKQoJCX0KCQlyZXR1cm4gdQoJfQoKCWNhc2VzIDo9IFtdc3RydWN0IHsKCQluYW1lICAgIHN0cmluZwoJCWFsbG93ZWQgKnVybC5VUkwKCQlob3N0ICAgIHN0cmluZwoJCXdhbnRFcnIgYm9vbAoJfXsKCQl7CgkJCW5hbWU6ICAgICJhbGxvdy1saXN0IHVwcGVyY2FzZSwgcmVxdWVzdCBIb3N0IGxvd2VyY2FzZSIsCgkJCWFsbG93ZWQ6IG11c3RQYXJzZSgiaHR0cDovL0V4YW1wbGUuY29tOjIwMTkiKSwKCQkJaG9zdDogICAgImV4YW1wbGUuY29tOjIwMTkiLAoJCQl3YW50RXJyOiBmYWxzZSwKCQl9LAoJCXsKCQkJbmFtZTogICAgImFsbG93LWxpc3QgbG93ZXJjYXNlLCByZXF1ZXN0IEhvc3QgdXBwZXJjYXNlIiwKCQkJYWxsb3dlZDogbXVzdFBhcnNlKCJodHRwOi8vZXhhbXBsZS5jb206MjAxOSIpLAoJCQlob3N0OiAgICAiRVhBTVBMRS5jb206MjAxOSIsCgkJCXdhbnRFcnI6IGZhbHNlLAoJCX0sCgkJewoJCQluYW1lOiAgICAiZGVmYXVsdCBsb2NhbGhvc3QgZW50cnksIHJlcXVlc3QgSG9zdCB1cHBlcmNhc2UiLAoJCQlhbGxvd2VkOiBtdXN0UGFyc2UoImh0dHA6Ly9sb2NhbGhvc3Q6MjAxOSIpLAoJCQlob3N0OiAgICAiTE9DQUxIT1NUOjIwMTkiLAoJCQl3YW50RXJyOiBmYWxzZSwKCQl9LAoJCXsKCQkJbmFtZTogICAgImRpZmZlcmVudCBob3N0IGlzIHN0aWxsIHJlamVjdGVkIiwKCQkJYWxsb3dlZDogbXVzdFBhcnNlKCJodHRwOi8vZXhhbXBsZS5jb206MjAxOSIpLAoJCQlob3N0OiAgICAiZXZpbC5leGFtcGxlLm9yZzoyMDE5IiwKCQkJd2FudEVycjogdHJ1ZSwKCQl9LAoJfQoKCWZvciBfLCB0YyA6PSByYW5nZSBjYXNlcyB7CgkJdC5SdW4odGMubmFtZSwgZnVuYyh0ICp0ZXN0aW5nLlQpIHsKCQkJaCA6PSBhZG1pbkhhbmRsZXJ7YWxsb3dlZE9yaWdpbnM6IFtdKnVybC5VUkx7dGMuYWxsb3dlZH19CgkJCXIgOj0gaHR0cHRlc3QuTmV3UmVxdWVzdCgiR0VUIiwgImh0dHA6Ly8iK3RjLmhvc3QrIi9jb25maWcvIiwgbmlsKQoJCQllcnIgOj0gaC5jaGVja0hvc3QocikKCQkJaWYgdGMud2FudEVyciAmJiBlcnIgPT0gbmlsIHsKCQkJCXQuRXJyb3JmKCJjaGVja0hvc3QoJXEpIHdpdGggYWxsb3dlZCAldiA9IG5pbCwgd2FudCBlcnJvciIsIHRjLmhvc3QsIHRjLmFsbG93ZWQpCgkJCX0KCQkJaWYgIXRjLndhbnRFcnIgJiYgZXJyICE9IG5pbCB7CgkJCQl0LkVycm9yZigiY2hlY2tIb3N0KCVxKSB3aXRoIGFsbG93ZWQgJXYgPSAldiwgd2FudCBuaWwiLCB0Yy5ob3N0LCB0Yy5hbGxvd2VkLCBlcnIpCgkJCX0KCQl9KQoJfQp9Cg==' | base64 -d > admin_checkhost_case_test.go\nif go test -count=1 -run '^(TestAdminHandlerCheckHostCaseInsensitive)$' . >/dev/null 2>&1; then echo probe: pass; else echo probe: fail; fi",
+        "expected": "probe: pass",
+        "actual": "probe: fail"
+      },
+      "why_missed": "The project's own suite at the parent commit never exercised this input; the fix commit added the test that does."
+    }
+  ]
+}

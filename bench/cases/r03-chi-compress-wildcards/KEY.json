@@ -1,0 +1,33 @@
+{
+  "id": "r03-chi-compress-wildcards",
+  "language": "go",
+  "suite": "go test ./middleware/ -skip '^TestWrapWriterHTTP2$'",
+  "surface": "middleware",
+  "family": "contract",
+  "source": "go-swe-bench-v0@38939062",
+  "request": "Content-type wildcard patterns passed to the compress middleware must all be of the form '<type>/*'. Any other pattern, including patterns that match every content type, must be rejected at construction time like the other unsupported wildcard patterns, not silently accepted. Valid patterns such as 'text/*' keep working.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "middleware/compress.go",
+      "line": 76,
+      "class": "catch-all-wildcard-accept",
+      "keywords": [
+        "wildcard",
+        "compress",
+        "catch-all",
+        "content-type"
+      ],
+      "description": "NewCompressor rejects wildcard patterns only when a '*' survives after trimming a trailing '/*'. A bare '/*' trims to the empty string, contains no '*', and is accepted as a wildcard matching every content type, silently compressing everything the caller meant to exclude.",
+      "traps": [
+        "'*/*' already panics in the fixture, so a probe that only tries '*/*' stays green on the fixture and never distinguishes the defect."
+      ],
+      "trigger": {
+        "input": "cat > middleware/zz_probe_test.go <<'EOF'\npackage middleware\n\nimport (\n\t\"fmt\"\n\t\"testing\"\n)\n\nfunc TestZZProbe(t *testing.T) {\n\tdefer func() {\n\t\tif r := recover(); r != nil {\n\t\t\tfmt.Println(\"probe: panic\")\n\t\t}\n\t}()\n\tc := NewCompressor(5, \"/*\")\n\t_ = c\n\tfmt.Println(\"probe: ok\")\n}\nEOF\ngo test -run TestZZProbe -v ./middleware/ 2>&1 | grep probe:\n",
+        "expected": "probe: panic",
+        "actual": "probe: ok"
+      },
+      "why_missed": "The shipped suite covers non-wildcard types and the panicking '*/*' pattern but never the bare '/*' catch-all, and no test observes which content types the compressor actually matches after construction."
+    }
+  ]
+}

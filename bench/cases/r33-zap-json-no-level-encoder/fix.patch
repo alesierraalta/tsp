@@ -1,0 +1,13 @@
+diff --git a/zapcore/json_encoder.go b/zapcore/json_encoder.go
+index 505c714..c5d751b 100644
+--- a/zapcore/json_encoder.go
++++ b/zapcore/json_encoder.go
+@@ -364,7 +364,7 @@ func (enc *jsonEncoder) EncodeEntry(ent Entry, fields []Field) (*buffer.Buffer,
+ 	final := enc.clone()
+ 	final.buf.AppendByte('{')
+ 
+-	if final.LevelKey != "" {
++	if final.LevelKey != "" && final.EncodeLevel != nil {
+ 		final.addKey(final.LevelKey)
+ 		cur := final.buf.Len()
+ 		final.EncodeLevel(ent.Level, final)

@@ -163,8 +163,11 @@ func inferRedCheckSuite(root string, files []string) (string, error) {
 }
 
 // extractHead writes the files HEAD records into dst, the code the agent's edits must not decide the verdict.
-func extractHead(root, dst string) error {
-	cmd := exec.Command("git", "-C", root, "archive", "--format=tar", "HEAD")
+func extractHead(root, dst string) error { return extractRev(root, "HEAD", dst) }
+
+// extractRev writes the tree rev records in the repository at root into dst, without its history.
+func extractRev(root, rev, dst string) error {
+	cmd := exec.Command("git", "-C", root, "archive", "--format=tar", rev)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err

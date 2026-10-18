@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/go-playground/validator",
+  "commit": "6b571d109bded7cdcde5ba9f226a923a8765b92a",
+  "patch": "fix.patch"
+}

@@ -1699,6 +1699,12 @@ func runBenchScore(args []string) int {
 		fmt.Fprintln(os.Stderr, "bench score needs --case and exactly one of --workspace or --plan")
 		return 2
 	}
+	built, err := bench.MaterializeCase(*caseDir, bench.DefaultCaseCache())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "score:", err)
+		return 1
+	}
+	*caseDir = built
 	key, err := bench.LoadKey(*caseDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "score:", err)
@@ -2073,7 +2079,7 @@ func runBenchRescore(args []string) int {
 		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 			return "", fmt.Errorf("no case directory %s", dir)
 		}
-		return dir, nil
+		return bench.MaterializeCase(dir, bench.DefaultCaseCache())
 	}
 	agg, err := bench.Rescore(results, lookup, *suiteTimeout)
 	if err != nil {

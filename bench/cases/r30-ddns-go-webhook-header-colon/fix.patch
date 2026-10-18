@@ -1,0 +1,13 @@
+diff --git a/config/webhook.go b/config/webhook.go
+index 23e2a04..b026a1a 100644
+--- a/config/webhook.go
++++ b/config/webhook.go
+@@ -159,7 +159,7 @@ func extractHeaders(s string) map[string]string {
+ 			continue
+ 		}
+ 
+-		parts := strings.Split(line, ":")
++		parts := strings.SplitN(line, ":", 2)
+ 		if len(parts) != 2 {
+ 			util.Log("Webhook Header不正确: %s", line)
+ 			continue

@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/gorilla/mux",
+  "commit": "e44017df2b8798f6bfff81fff1c0b319c1a54496",
+  "patch": "fix.patch"
+}
