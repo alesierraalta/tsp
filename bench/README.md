@@ -37,6 +37,29 @@ bench/cases/<id>/
 A clean negative control ships `KEY.json` and `fixture/` only: with nothing planted there is nothing
 to fix and no variant to overlay.
 
+### Real-bug cases (r*), shipped by reference
+
+```
+bench/cases/<id>/
+  KEY.json          the answer key, as above; `source` names the go-swe-bench-v0 record
+  SOURCE.json       {"repo": "https://github.com/<owner>/<repo>", "commit": "<parent sha>", "patch": "fix.patch"}
+  fix.patch         the upstream fix, applied with -p1
+```
+
+A real-bug case is a whole upstream project at the commit before its fix, so it is not copied into this
+repository (35 cases would add 247 MB of third-party code). `bench run`, `bench score` and `bench rescore`
+build it on first use into the user cache directory (`~/.cache/tsp/bench-cases` on Linux): `fixture/` is
+the commit's tree without history,
+`fix/all/` is that tree with `fix.patch` applied. Only that commit is fetched, later runs reuse the cache,
+and a case that cannot be built (no network, a patch that no longer applies) stops the run rather than
+silently shrinking the corpus. Real commits fix one defect each, so these cases ship no `fix/keep-*`.
+
+The built tree is the upstream tree exactly. 25 of the 35 cases match the copies earlier readings were
+taken on byte for byte; the other 10 had lost files while vendored (paths the upstream's own `.gitignore`
+or this repository's `bin/` rule excludes, empty submodule directories, symlinks copied as files, and a
+hand-edited `go.mod` without `go.sum` in r30). Readings of those 10 before the move were taken on the
+filtered trees.
+
 Node fixtures run with `node --test` (ESM, no dependencies). Go fixtures run with `go test ./...`
 (standard library only). Every suite is green with the defects present.
 
