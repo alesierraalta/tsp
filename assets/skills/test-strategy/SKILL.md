@@ -4,7 +4,7 @@ description: "Trigger: haz el TSP, haz TSP, TSP, haz test stragety, haz test str
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.7.1"
+  version: "0.7.3"
   requires_tsp: "0.6.6"
   requires_tpp: "0.5.1"
   scope: [common]
@@ -61,6 +61,8 @@ source code. Spend turns on probes and tests, not on documents.
    the second rollover or a late operation, not the first.
 3. **The oracle is the contract, never today's output.** If a probe's result differs from what the
    contract promises, that is a defect. If you only know what the code does now, it is not a test.
+   Existing tests show today's behaviour too: never copy their expected messages or values as the
+   oracle for a promise the contract states differently or not at all.
 4. **Pin every defect** in the repository's own test files: one test per defect, asserting the
    promised behaviour, so it fails now. Assert only what the contract states: when it does not name
    a field, type or message, check the weakest observable that proves the promise (it rejects; the
