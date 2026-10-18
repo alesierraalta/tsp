@@ -1,0 +1,185 @@
+{
+ "rule": "Decided before any case was built or measured. Skill text may be written only from train-case misses; held-out cases only measure.",
+ "train": [
+  "p01-route-plan-publisher",
+  "p03-rpc-multiplexer",
+  "p05-replicated-sequence",
+  "p07-image-reaper",
+  "p09-feature-file-builder"
+ ],
+ "held_out": [
+  "p02-billing-retry-job",
+  "p04-org-bulk-settings",
+  "p06-deadline-timers",
+  "p08-cert-issuer"
+ ],
+ "cases": {
+  "p01-route-plan-publisher": {
+   "language": "go",
+   "source_entries": [
+    75,
+    13
+   ],
+   "classes": [
+    "stale-writer-overwrites-newer",
+    "filter-matches-everything"
+   ]
+  },
+  "p02-billing-retry-job": {
+   "language": "node",
+   "source_entries": [
+    234,
+    199
+   ],
+   "classes": [
+    "non-atomic-effect-checkpoint",
+    "unit-mismatch"
+   ]
+  },
+  "p03-rpc-multiplexer": {
+   "language": "go",
+   "source_entries": [
+    204,
+    84
+   ],
+   "classes": [
+    "request-response-misalignment",
+    "reused-protocol-bit"
+   ]
+  },
+  "p04-org-bulk-settings": {
+   "language": "node",
+   "source_entries": [
+    184,
+    2
+   ],
+   "classes": [
+    "silent-limit-cap",
+    "missing-config-unsafe-default"
+   ]
+  },
+  "p05-replicated-sequence": {
+   "language": "go",
+   "source_entries": [
+    78,
+    83
+   ],
+   "classes": [
+    "stale-replica-promotion",
+    "reserved-counter-gap-on-recovery"
+   ]
+  },
+  "p06-deadline-timers": {
+   "language": "node",
+   "source_entries": [
+    89,
+    87
+   ],
+   "classes": [
+    "clock-offset-not-rebased",
+    "clock-not-monotonic"
+   ]
+  },
+  "p07-image-reaper": {
+   "language": "go",
+   "source_entries": [
+    54,
+    3
+   ],
+   "classes": [
+    "age-only-live-resource-cleanup",
+    "mixed-schema-rows"
+   ]
+  },
+  "p08-cert-issuer": {
+   "language": "go",
+   "source_entries": [
+    86,
+    95
+   ],
+   "classes": [
+    "calendar-edge-date",
+    "fixed-width-overflow"
+   ]
+  },
+  "p09-feature-file-builder": {
+   "language": "node",
+   "source_entries": [
+    11,
+    190
+   ],
+   "classes": [
+    "unchecked-generated-size",
+    "ignored-ordering"
+   ]
+  }
+ },
+ "batch2": {
+  "rule": "Decided before building q cases (L23).",
+  "train": [
+   "q01",
+   "q03",
+   "q05"
+  ],
+  "held_out": [
+   "q02",
+   "q04"
+  ],
+  "cases": {
+   "q01": [
+    "title-inferred-demographic",
+    "mixed-format-read-modify-write"
+   ],
+   "q02": [
+    "dependency-failure-published-as-data",
+    "restart-resets-selected-state"
+   ],
+   "q03": [
+    "digest-collision-deduplication",
+    "error-payload-as-data"
+   ],
+   "q04": [
+    "cross-environment-reference",
+    "timeout-applied-to-wrong-scope"
+   ],
+   "q05": [
+    "unchecked-input-read-bound",
+    "transaction-id-wraparound"
+   ]
+  }
+ },
+ "batch3": {
+  "rule": "Decided before building q06-q10 (L36).",
+  "train": [
+   "q06",
+   "q08",
+   "q10"
+  ],
+  "held_out": [
+   "q07",
+   "q09"
+  ],
+  "cases": {
+   "q06": [
+    "retry-amplification",
+    "unbounded-history-read"
+   ],
+   "q07": [
+    "double-release-after-delay",
+    "global-quota-no-isolation"
+   ],
+   "q08": [
+    "n-plus-one-io",
+    "unbounded-failure-log"
+   ],
+   "q09": [
+    "health-timeout-self-eviction",
+    "backpressure-misclassifies-recovery"
+   ],
+   "q10": [
+    "failed-attempt-resource-leak",
+    "unbounded-reconnect-queue"
+   ]
+  }
+ }
+}

@@ -1,0 +1,7 @@
+{
+  "id":"q08-record-collector","family":"resilience-io","language":"node","suite":"node --test","surface":"library","request":"the record collector behaviour",
+  "defects":[
+    {"id":"D1","file":"src/collector.js","line":12,"class":"n-plus-one-io","keywords":["lookup","batch","cache","calls"],"description":"After the cache has data, each uncached key receives a separate lookup rather than one batched operation.","trigger":{"input":"Inject a counted lookup, load alpha, then request alpha, beta and gamma together.","expected":"Two total lookup calls: alpha, then beta/gamma.","actual":"Three lookup calls."},"why_missed":"The suite uses only the default lookup with no call-counting dependency and no mixed cached/uncached request."},
+    {"id":"D2","file":"src/collector.js","line":28,"class":"unbounded-failure-log","keywords":["retention","log","collect","limit"],"description":"Cleanup bounds only newly appended failures, retaining all previous entries indefinitely.","trigger":{"input":"Inject an unsuccessful release and persistent log at limit=2; collect alpha/beta, then gamma.","expected":"Log contains beta/gamma.","actual":"Log contains alpha/beta/gamma."},"why_missed":"The suite has no failed-release adapter or persistent log, and performs one successful collection."}
+  ]
+}

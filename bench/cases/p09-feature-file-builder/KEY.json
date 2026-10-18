@@ -1,0 +1,45 @@
+{
+  "id": "p09-feature-file-builder",
+  "family": "contract",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "request": "the feature frame building behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/builder.js",
+      "line": 5,
+      "class": "unchecked-generated-size",
+      "keywords": [
+        "unchecked",
+        "generated",
+        "size"
+      ],
+      "description": "One unbounded generated frame exceeds the paired consumer capacity and silently loses features.",
+      "trigger": {
+        "input": "Build and consume five distinct features",
+        "expected": "all five present",
+        "actual": "only first four present"
+      },
+      "why_missed": "All existing files fit into one frame."
+    },
+    {
+      "id": "D2",
+      "file": "src/builder.js",
+      "line": 3,
+      "class": "ignored-ordering",
+      "keywords": [
+        "ignored",
+        "ordering"
+      ],
+      "description": "Storage order overrides requested sequence order and changes the winning assignment.",
+      "trigger": {
+        "input": "Rows (2,x,new),(1,x,old), ascending",
+        "expected": "x=new",
+        "actual": "x=old"
+      },
+      "why_missed": "Ascending rows arrive sorted; descending rows have distinct names."
+    }
+  ]
+}

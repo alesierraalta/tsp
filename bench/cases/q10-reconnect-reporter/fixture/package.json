@@ -1,0 +1,8 @@
+{
+  "name": "q10-reconnect-reporter",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}

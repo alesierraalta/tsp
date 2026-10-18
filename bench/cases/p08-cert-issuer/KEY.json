@@ -1,0 +1,46 @@
+{
+  "id": "p08-cert-issuer",
+  "family": "time",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "request": "the certificate issuing behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "issuer.go",
+      "line": 22,
+      "class": "calendar-edge-date",
+      "keywords": [
+        "calendar",
+        "edge",
+        "date"
+      ],
+      "description": "Year addition rolls a nonexistent anniversary forward instead of ending validity in the anniversary month.",
+      "trigger": {
+        "input": "Issue at 2024-02-29T12:00Z",
+        "expected": "2025-02-28T12:00Z",
+        "actual": "2025-03-01T12:00Z"
+      },
+      "why_missed": "Only an ordinary June date is tested."
+    },
+    {
+      "id": "D2",
+      "file": "issuer.go",
+      "line": 11,
+      "class": "fixed-width-overflow",
+      "keywords": [
+        "fixed",
+        "width",
+        "overflow"
+      ],
+      "description": "The issuance record's narrow Serial field silently changes allocated identities and breaks lookup.",
+      "trigger": {
+        "input": "Allocate returns 2147483648; Lookup allocated serial",
+        "expected": "serial preserved; lookup succeeds",
+        "actual": "serial becomes -2147483648; lookup misses"
+      },
+      "why_missed": "Suite serials are small consecutive integers."
+    }
+  ]
+}
