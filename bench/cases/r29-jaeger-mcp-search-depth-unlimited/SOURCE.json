@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/jaegertracing/jaeger",
+  "commit": "d0f8d6d0f4748a700ea53abe6420fd6fe5f668da",
+  "patch": "fix.patch"
+}

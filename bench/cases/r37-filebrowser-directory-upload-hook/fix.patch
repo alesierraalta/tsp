@@ -1,0 +1,15 @@
+diff --git a/http/resource.go b/http/resource.go
+index eda4e40..d8f5cad 100644
+--- a/http/resource.go
++++ b/http/resource.go
+@@ -130,7 +130,9 @@ func resourcePostHandler(fileCache FileCache) handleFunc {
+ 
+ 		// Directories creation on POST.
+ 		if strings.HasSuffix(r.URL.Path, "/") {
+-			err := d.user.Fs.MkdirAll(r.URL.Path, d.settings.DirMode)
++			err := d.RunHook(func() error {
++				return d.user.Fs.MkdirAll(r.URL.Path, d.settings.DirMode)
++			}, "upload", r.URL.Path, "", d.user)
+ 			return errToStatus(err), err
+ 		}
+ 

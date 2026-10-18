@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/charmbracelet/bubbletea",
+  "commit": "faf4dcf54a92bab2fe3bf6f4715adf44f2fc245d",
+  "patch": "fix.patch"
+}

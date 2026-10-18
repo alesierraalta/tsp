@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/gin-gonic/gin",
+  "commit": "293ad7edebb3ae30369288bd6416ca0d78474727",
+  "patch": "fix.patch"
+}

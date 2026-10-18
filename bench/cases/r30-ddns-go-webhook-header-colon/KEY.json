@@ -1,0 +1,31 @@
+{
+  "id": "r30-ddns-go-webhook-header-colon",
+  "language": "go",
+  "suite": "go test ./config",
+  "surface": "config",
+  "family": "input-domain",
+  "source": "go-swe-bench-v0@99c21a9e",
+  "request": "Webhook header parsing must produce a name-to-value mapping from newline-separated header entries, removing the spacing between each header's separator and its value while preserving colons within values.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "config/webhook.go",
+      "line": 162,
+      "class": "header-value-colon-split",
+      "keywords": [
+        "allow",
+        "colon",
+        "webhook",
+        "header",
+        "value"
+      ],
+      "description": "Published bug fixed upstream: fix: allow colon in webhook header value (#1666)",
+      "trigger": {
+        "input": "printf %s 'cGFja2FnZSBjb25maWcKCmltcG9ydCAoCgkicmVmbGVjdCIKCSJ0ZXN0aW5nIgopCgovLyBUZXN0RXh0cmFjdEhlYWRlcnMg5rWL6K+VIHBhcnNlSGVhZGVyQXJyCmZ1bmMgVGVzdEV4dHJhY3RIZWFkZXJzKHQgKnRlc3RpbmcuVCkgewoJaW5wdXQgOj0gYAphOiBmb28KYjogYmFyCmM6IGZvbzpiYXJgCglleHBlY3RlZCA6PSBtYXBbc3RyaW5nXXN0cmluZ3sKCQkiYSI6ICJmb28iLAoJCSJiIjogImJhciIsCgkJImMiOiAiZm9vOmJhciIsCgl9CgoJcGFyc2VkSGVhZGVycyA6PSBleHRyYWN0SGVhZGVycyhpbnB1dCkKCWlmICFyZWZsZWN0LkRlZXBFcXVhbChwYXJzZWRIZWFkZXJzLCBleHBlY3RlZCkgewoJCXQuRXJyb3JmKCJFeHBlY3RlZCAldiwgZ290ICV2IiwgZXhwZWN0ZWQsIHBhcnNlZEhlYWRlcnMpCgl9Cn0K' | base64 -d > config/webhook_test.go\nif go test -count=1 -run '^(TestExtractHeaders)$' ./config >/dev/null 2>&1; then echo probe: pass; else echo probe: fail; fi",
+        "expected": "probe: pass",
+        "actual": "probe: fail"
+      },
+      "why_missed": "The project's own suite at the parent commit never exercised this input; the fix commit added the test that does."
+    }
+  ]
+}

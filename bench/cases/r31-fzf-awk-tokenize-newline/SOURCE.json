@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/junegunn/fzf",
+  "commit": "f9830c5a3dac90ea9e10d5034097ef3bb8fc4298",
+  "patch": "fix.patch"
+}

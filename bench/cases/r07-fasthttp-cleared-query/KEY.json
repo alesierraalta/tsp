@@ -1,0 +1,30 @@
+{
+  "id": "r07-fasthttp-cleared-query",
+  "language": "go",
+  "suite": "go test .",
+  "surface": ".",
+  "family": "state-logic",
+  "source": "go-swe-bench-v0@1900e534",
+  "request": "URI serialization must reflect the current query arguments, including an empty set, without resurrecting earlier query data.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "uri.go",
+      "line": 765,
+      "class": "stale-query-fallback",
+      "keywords": [
+        "query",
+        "clearing",
+        "stale",
+        "args"
+      ],
+      "description": "The parsed-query branch falls through to the original query string when the current arguments are empty.",
+      "trigger": {
+        "input": "cat > zz_probe_test.go <<'EOF'\npackage fasthttp\nimport (\"fmt\"; \"testing\")\nfunc TestZZProbe(t *testing.T) {\n var u URI\n if err := u.Parse(nil, []byte(\"http://example.com/path?k=v\")); err != nil { t.Fatal(err) }\n u.QueryArgs().Del(\"k\")\n fmt.Printf(\"probe: %s\\n\", u.RequestURI())\n}\nEOF\ngo test -run TestZZProbe -v . 2>&1 | grep probe:",
+        "actual": "probe: /path?k=v",
+        "expected": "probe: /path"
+      },
+      "why_missed": "Existing tests do not serialize a URI after removing its final query argument."
+    }
+  ]
+}

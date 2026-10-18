@@ -1,0 +1,30 @@
+{
+  "id": "r05-validator-uuid-case",
+  "language": "go",
+  "suite": "go test .",
+  "surface": ".",
+  "family": "input-domain",
+  "source": "go-swe-bench-v0@0ccc97b5",
+  "request": "Generic UUID validation must accept syntactically valid hexadecimal UUID text regardless of letter case, including mixed case, while rejecting malformed text.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "regexes.go",
+      "line": 36,
+      "class": "uuid-uppercase-rejected",
+      "keywords": [
+        "uuid",
+        "case",
+        "insensitive",
+        "validation"
+      ],
+      "description": "The generic UUID regular expression permits only lowercase a-f, rejecting valid uppercase and mixed-case hexadecimal UUIDs.",
+      "trigger": {
+        "input": "cat > zz_probe_test.go <<'EOF'\npackage validator\nimport(\"fmt\";\"testing\")\nfunc TestZZProbe(t *testing.T) {\n v:=New()\n fmt.Printf(\"probe: lower=%t upper=%t mixed=%t malformed=%t\\n\",v.Var(\"f47ac10b-58cc-4372-a567-0e02b2c3d479\",\"uuid\")==nil,v.Var(\"F47AC10B-58CC-4372-A567-0E02B2C3D479\",\"uuid\")==nil,v.Var(\"f47Ac10B-58cC-4372-a567-0e02B2c3D479\",\"uuid\")==nil,v.Var(\"G47AC10B-58CC-4372-A567-0E02B2C3D479\",\"uuid\")==nil)\n}\nEOF\ngo test -run TestZZProbe -v . 2>&1 | grep probe:\n",
+        "actual": "probe: lower=true upper=false mixed=false malformed=false",
+        "expected": "probe: lower=true upper=true mixed=true malformed=false"
+      },
+      "why_missed": "Lowercase happy-path UUIDs and case-aware RFC4122-specific validators pass; they do not exercise the generic uuid validator with uppercase or mixed-case input."
+    }
+  ]
+}

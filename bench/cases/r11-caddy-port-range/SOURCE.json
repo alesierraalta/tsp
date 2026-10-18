@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/caddyserver/caddy",
+  "commit": "d0e93c23a1ca0e542916392c401a13d6870b8204",
+  "patch": "fix.patch"
+}

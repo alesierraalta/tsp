@@ -1,0 +1,30 @@
+{
+  "id": "r04-mux-query-routing",
+  "language": "go",
+  "suite": "go test .",
+  "surface": ".",
+  "family": "contract",
+  "source": "go-swe-bench-v0@2b030fc3",
+  "request": "In a subrouter that registers several routes, a request whose path matches a registered route but whose HTTP method that route does not allow must get 405 Method Not Allowed, even when other routes of the same subrouter do not match the path at all; a path that no route matches still gets 404.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "route.go",
+      "line": 76,
+      "class": "method-error-cleared",
+      "keywords": [
+        "query",
+        "params",
+        "invalid",
+        "handling"
+      ],
+      "description": "A successful sibling matcher clears the method mismatch already established by another nested route. Failed query matchers also discard the local method mismatch rather than marking the route not-found.",
+      "trigger": {
+        "input": "cat > zz_probe_test.go <<'EOF'\npackage mux\nimport(\"fmt\";\"testing\";\"net/http\";\"net/http/httptest\")\nfunc TestZZProbe(t *testing.T) {\n h:=func(w http.ResponseWriter,r *http.Request){w.WriteHeader(200)}\n r:=NewRouter(); s:=r.PathPrefix(\"/v1\").Subrouter()\n s.HandleFunc(\"/api\",h).Methods(\"GET\")\n s.HandleFunc(\"/api/{id}\",h).Methods(\"GET\")\n w:=httptest.NewRecorder(); r.ServeHTTP(w,httptest.NewRequest(\"PUT\",\"/v1/api\",nil))\n q:=NewRouter(); q.HandleFunc(\"/users/{id}\",h).Methods(\"POST\")\n q.HandleFunc(\"/users/{id}\",h).Methods(\"GET\").Queries(\"id\",\"{id:[0-9]+}\")\n z:=httptest.NewRecorder();q.ServeHTTP(z,httptest.NewRequest(\"GET\",\"/users/abc?id=-2\",nil))\n fmt.Printf(\"probe: method=%d query=%d\\n\",w.Code,z.Code)\n}\nEOF\ngo test -run TestZZProbe -v . 2>&1 | grep probe:\n",
+        "actual": "probe: method=404 query=404",
+        "expected": "probe: method=405 query=404"
+      },
+      "why_missed": "Existing routing tests cover individual method and query constraints but do not protect their error precedence across multiple sibling routes inside a subrouter."
+    }
+  ]
+}

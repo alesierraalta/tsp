@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/docker/compose",
+  "commit": "b5cf514b29d553392159b73038e851e7794e6c77",
+  "patch": "fix.patch"
+}

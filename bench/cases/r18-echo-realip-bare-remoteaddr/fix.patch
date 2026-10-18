@@ -1,0 +1,35 @@
+diff --git a/context.go b/context.go
+index 9a7429f..a8ee4b5 100644
+--- a/context.go
++++ b/context.go
+@@ -12,7 +12,6 @@ import (
+ 	"io/fs"
+ 	"log/slog"
+ 	"mime/multipart"
+-	"net"
+ 	"net/http"
+ 	"net/url"
+ 	"path"
+@@ -252,8 +251,8 @@ func (c *Context) RealIP() string {
+ 	}
+ 	// req.RemoteAddr is the IP address of the remote end of the connection, which may be a proxy. It is populated by the
+ 	// http.conn.readRequest() method and uses net.Conn.RemoteAddr().String() which we trust.
+-	ra, _, _ := net.SplitHostPort(c.request.RemoteAddr)
+-	return ra
++	// Use extractIP so bare IPs (no host:port) still resolve, matching ExtractIPDirect.
++	return extractIP(c.request)
+ }
+ 
+ // Path returns the registered path for the handler.
+diff --git a/ip.go b/ip.go
+index c864e06..848593b 100644
+--- a/ip.go
++++ b/ip.go
+@@ -304,6 +304,5 @@ func legacyIPExtractor(req *http.Request) string {
+ 		ip = strings.TrimSuffix(ip, "]")
+ 		return ip
+ 	}
+-	ra, _, _ := net.SplitHostPort(req.RemoteAddr)
+-	return ra
++	return extractIP(req)
+ }

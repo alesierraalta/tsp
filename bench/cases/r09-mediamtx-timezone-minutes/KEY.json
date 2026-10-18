@@ -1,0 +1,29 @@
+{
+  "id": "r09-mediamtx-timezone-minutes",
+  "language": "go",
+  "suite": "go test ./internal/recordstore",
+  "surface": "internal/recordstore",
+  "family": "time",
+  "source": "go-swe-bench-v0@384cc661",
+  "request": "Recording storage timestamps must preserve the correct absolute instant for every signed timezone offset, including offsets with nonzero minutes.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "internal/recordstore/path.go",
+      "line": 63,
+      "class": "timezone-offset-units",
+      "keywords": [
+        "timezone",
+        "minutes",
+        "offset"
+      ],
+      "description": "Timezone decoding multiplies minutes by 3600 and applies the sign only to hours, corrupting positive and negative fractional-hour offsets.",
+      "trigger": {
+        "input": "cat > internal/recordstore/zz_probe_test.go <<'EOF'\npackage recordstore\nimport (\"fmt\"; \"testing\"; \"time\")\nfunc TestZZProbe(t *testing.T) {\n _, positive := time.Date(2026,1,1,0,0,0,0,timeLocationDecode(\"+0530\")).Zone()\n _, negative := time.Date(2026,1,1,0,0,0,0,timeLocationDecode(\"-0330\")).Zone()\n fmt.Printf(\"probe: offsets=%d,%d\\n\", positive, negative)\n}\nEOF\ngo test -run TestZZProbe -v ./internal/recordstore 2>&1 | grep probe:",
+        "actual": "probe: offsets=126000,97200",
+        "expected": "probe: offsets=19800,-12600"
+      },
+      "why_missed": "Existing timestamp coverage does not check both signs of fractional-hour timezone offsets."
+    }
+  ]
+}

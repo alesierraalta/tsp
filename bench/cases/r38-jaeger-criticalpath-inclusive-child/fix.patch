@@ -1,0 +1,15 @@
+diff --git a/cmd/jaeger/internal/extension/jaegerquery/internal/mcptools/internal/criticalpath/find_lfc.go b/cmd/jaeger/internal/extension/jaegerquery/internal/mcptools/internal/criticalpath/find_lfc.go
+index cd0703b..accb981 100644
+--- a/cmd/jaeger/internal/extension/jaegerquery/internal/mcptools/internal/criticalpath/find_lfc.go
++++ b/cmd/jaeger/internal/extension/jaegerquery/internal/mcptools/internal/criticalpath/find_lfc.go
+@@ -27,8 +27,8 @@ func findLastFinishingChildSpan(
+ 		childEndTime := childSpan.StartTime + childSpan.Duration
+ 
+ 		if returningChildStartTime != nil {
+-			// Find child that finishes just before the returning child's start time
+-			if childEndTime < *returningChildStartTime {
++			// Find the child span that finished immediately before this span started.
++			if childSpan.StartTime < *returningChildStartTime && childEndTime <= *returningChildStartTime {
+ 				if childEndTime > maxEndTime {
+ 					maxEndTime = childEndTime
+ 					childSpanCopy := childSpan

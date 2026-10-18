@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/urfave/cli",
+  "commit": "8b23e7b1e99f37934e029ef6c8d31efc7e744ff1",
+  "patch": "fix.patch"
+}

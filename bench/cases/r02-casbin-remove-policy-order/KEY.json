@@ -1,0 +1,30 @@
+{
+  "id": "r02-casbin-remove-policy-order",
+  "language": "go",
+  "suite": "go test .",
+  "surface": "model",
+  "family": "state-logic",
+  "source": "go-swe-bench-v0@d3e9928a",
+  "request": "Removing a policy from a model must leave the remaining policies in their original relative order; order-sensitive enforcement (priority effectors) depends on that order. Removing a policy that is not present must be a no-op that leaves the model unchanged.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "model/policy.go",
+      "line": 272,
+      "class": "swap-last-reorder",
+      "keywords": [
+        "removepolicy",
+        "order",
+        "priority",
+        "policy"
+      ],
+      "description": "RemovePolicy deletes an entry by swapping the LAST policy into the removed slot instead of shifting the slice. The membership set stays correct, so rule-count and membership assertions pass, but the surviving policies change relative order; with the priority effector the first matching rule wins, so a swapped order flips decisions.",
+      "trigger": {
+        "input": "cat > zz_probe_test.go <<'EOF'\npackage casbin\n\nimport (\n\t\"fmt\"\n\t\"testing\"\n)\n\nfunc TestZZProbe(t *testing.T) {\n\te, err := NewEnforcer(\"examples/priority_model_explicit.conf\")\n\tif err != nil {\n\t\tt.Fatalf(\"NewEnforcer: %v\", err)\n\t}\n\tif _, err := e.AddPolicies([][]string{\n\t\t{\"1\", \"carol\", \"data9\", \"read\", \"allow\"},\n\t\t{\"2\", \"alice\", \"data1\", \"read\", \"deny\"},\n\t\t{\"3\", \"alice\", \"data1\", \"read\", \"allow\"},\n\t\t{\"4\", \"bob\", \"data2\", \"write\", \"allow\"},\n\t}); err != nil {\n\t\tt.Fatalf(\"AddPolicies: %v\", err)\n\t}\n\tif _, err := e.RemovePolicy(\"1\", \"carol\", \"data9\", \"read\", \"allow\"); err != nil {\n\t\tt.Fatalf(\"RemovePolicy: %v\", err)\n\t}\n\tpolicy, err := e.GetPolicy()\n\tif err != nil {\n\t\tt.Fatalf(\"GetPolicy: %v\", err)\n\t}\n\tvar priorities []string\n\tfor _, rule := range policy {\n\t\tpriorities = append(priorities, rule[0])\n\t}\n\tfmt.Println(\"probe:\", priorities)\n}\nEOF\ngo test -run TestZZProbe -v . 2>&1 | grep probe:",
+        "expected": "probe: [2 3 4]",
+        "actual": "probe: [4 2 3]"
+      },
+      "why_missed": "The shipped suite checks membership and decisions after removals but never asserts the order of the surviving policies, which is exactly what the swap-last implementation preserves-but-reorders. Removing the last element, the natural first probe, leaves order unchanged and stays green."
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/go-chi/chi",
+  "commit": "9b6ddcddb96aa14648702e7eaabef38e14e65157",
+  "patch": "fix.patch"
+}
