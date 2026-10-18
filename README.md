@@ -652,7 +652,10 @@ into a reading that claims to measure only the embedded ones. Isolated Pi runs a
 registers tools behind the measurement. The home-scoped `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
 `XDG_STATE_HOME`, and `XDG_CACHE_HOME` variables are dropped for the same reason: user-level config
 is found through `HOME`, so an inherited XDG path would undo the throwaway home. The Go build cache
-stays the operator's: it holds compiled packages, never instructions.
+is kept across runs because it holds compiled packages, never instructions, but `bench run` points
+`GOCACHE` at its own cache under `~/.cache/tsp/go-build` (unless you set `GOCACHE`): tools that clean
+the default cache mid-reading (`go clean -cache`, disk reclaim scripts) used to delete entries under a
+running suite, which failed fixtures before the agent started with `package ... is not in std`.
 
 Each run works on its own copy of that prepared config, kept beside its workspace and removed with
 it. A worker pool runs several cases at once, and one shared config would let them see each other's
