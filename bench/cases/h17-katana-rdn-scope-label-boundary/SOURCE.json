@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/projectdiscovery/katana",
+  "commit": "ab54d5b155c9b8541dd213f31d91ea4a28b40bb1",
+  "patch": "fix.patch"
+}

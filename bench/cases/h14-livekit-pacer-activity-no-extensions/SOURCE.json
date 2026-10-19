@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/livekit/livekit",
+  "commit": "61ec725c5240e6b12aac1d945413995606e58038",
+  "patch": "fix.patch"
+}

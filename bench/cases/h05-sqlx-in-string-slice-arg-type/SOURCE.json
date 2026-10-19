@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/jmoiron/sqlx",
+  "commit": "4cb7f7deb4568d8eb302e8d5fb37dfe20f00cdcc",
+  "patch": "fix.patch"
+}

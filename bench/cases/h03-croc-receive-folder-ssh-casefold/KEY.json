@@ -1,0 +1,28 @@
+{
+  "id": "h03-croc-receive-folder-ssh-casefold",
+  "language": "go",
+  "suite": "go test ./src/croc",
+  "surface": "src/croc",
+  "family": "security",
+  "source": "go-swe-bench-v0@0fe9d3d9",
+  "request": "A receive folder is refused only when one of its path components is exactly .ssh in any letter case (.ssh, .SSH, .Ssh, with / or \\ as separators). Any other folder whose name merely contains ssh, such as .ssh-backup, my.ssh or safe/ssh, is accepted and returned unchanged.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "src/croc/croc.go",
+      "line": 859,
+      "class": "over-broad-path-rejection",
+      "keywords": [
+        "add",
+        "folding"
+      ],
+      "description": "Published bug fixed upstream: fix: add folding",
+      "trigger": {
+        "input": "printf %s 'cGFja2FnZSBjcm9jCgppbXBvcnQgInRlc3RpbmciCgpmdW5jIFRlc3ROb3JtYWxpemVSZWNlaXZlRm9sZGVyUmVqZWN0c0Nhc2VGb2xkZWRTU0hDb21wb25lbnRzKHQgKnRlc3RpbmcuVCkgewoJdGVzdHMgOj0gW11zdHJpbmd7CgkJIi5zc2giLAoJCSIuU1NIIiwKCQkiLlNzaCIsCgkJIi5zU2giLAoJCSJzYWZlLy5TU0gvZmlsZXMiLAoJCWBzYWZlXC5Tc0hcZmlsZXNgLAoJfQoJZm9yIF8sIGZvbGRlciA6PSByYW5nZSB0ZXN0cyB7CgkJdC5SdW4oZm9sZGVyLCBmdW5jKHQgKnRlc3RpbmcuVCkgewoJCQlpZiBfLCBlcnIgOj0gbm9ybWFsaXplUmVjZWl2ZUZvbGRlcihmb2xkZXIpOyBlcnIgPT0gbmlsIHsKCQkJCXQuRmF0YWxmKCJub3JtYWxpemVSZWNlaXZlRm9sZGVyKCVxKSB1bmV4cGVjdGVkbHkgc3VjY2VlZGVkIiwgZm9sZGVyKQoJCQl9CgkJfSkKCX0KfQoKZnVuYyBUZXN0Tm9ybWFsaXplUmVjZWl2ZUZvbGRlckFsbG93c1NTSFN1YnN0cmluZ3ModCAqdGVzdGluZy5UKSB7Cgl0ZXN0cyA6PSBtYXBbc3RyaW5nXXN0cmluZ3sKCQkiLnNzaC1iYWNrdXAiOiAiLnNzaC1iYWNrdXAiLAoJCSJteS5zc2giOiAgICAgICJteS5zc2giLAoJCSJzYWZlL3NzaCI6ICAgICJzYWZlL3NzaCIsCgl9Cglmb3IgZm9sZGVyLCB3YW50IDo9IHJhbmdlIHRlc3RzIHsKCQl0LlJ1bihmb2xkZXIsIGZ1bmModCAqdGVzdGluZy5UKSB7CgkJCWdvdCwgZXJyIDo9IG5vcm1hbGl6ZVJlY2VpdmVGb2xkZXIoZm9sZGVyKQoJCQlpZiBlcnIgIT0gbmlsIHsKCQkJCXQuRmF0YWxmKCJub3JtYWxpemVSZWNlaXZlRm9sZGVyKCVxKSByZXR1cm5lZCBlcnJvcjogJXYiLCBmb2xkZXIsIGVycikKCQkJfQoJCQlpZiBnb3QgIT0gd2FudCB7CgkJCQl0LkZhdGFsZigibm9ybWFsaXplUmVjZWl2ZUZvbGRlciglcSkgPSAlcSwgd2FudCAlcSIsIGZvbGRlciwgZ290LCB3YW50KQoJCQl9CgkJfSkKCX0KfQo=' | base64 -d > src/croc/security_casefold_verify_test.go\nif go test -count=1 -run '^(TestNormalizeReceiveFolderAllowsSSHSubstrings|TestNormalizeReceiveFolderRejectsCaseFoldedSSHComponents)$' ./src/croc >/dev/null 2>&1; then echo probe: pass; else echo probe: fail; fi",
+        "expected": "probe: pass",
+        "actual": "probe: fail"
+      },
+      "why_missed": "The project's own suite at the parent commit never exercised this input; the fix commit added the test that does."
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "id": "h07-gorm-returning-empty-merge",
+  "language": "go",
+  "suite": "go test ./clause",
+  "surface": "clause",
+  "family": "state-logic",
+  "source": "go-swe-bench-v0@8503287c",
+  "request": "When several RETURNING clauses are added to one statement their columns accumulate in order, except that an empty RETURNING clause means all columns: once an empty one is part of the merge, the statement renders RETURNING *, whatever column lists come before or after it.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "clause/returning.go",
+      "line": 29,
+      "class": "clause-merge-semantics",
+      "keywords": [
+        "empty",
+        "returning",
+        "clause",
+        "merge",
+        "bug"
+      ],
+      "description": "Published bug fixed upstream: Fixed Empty Returning Clause Merge Bug (#7339)",
+      "trigger": {
+        "input": "printf %s 'cGFja2FnZSBjbGF1c2VfdGVzdAoKaW1wb3J0ICgKCSJmbXQiCgkidGVzdGluZyIKCgkiZ29ybS5pby9nb3JtL2NsYXVzZSIKKQoKZnVuYyBUZXN0UmV0dXJuaW5nKHQgKnRlc3RpbmcuVCkgewoJcmVzdWx0cyA6PSBbXXN0cnVjdCB7CgkJQ2xhdXNlcyBbXWNsYXVzZS5JbnRlcmZhY2UKCQlSZXN1bHQgIHN0cmluZwoJCVZhcnMgICAgW11pbnRlcmZhY2V7fQoJfXsKCQl7CgkJCVtdY2xhdXNlLkludGVyZmFjZXtjbGF1c2UuU2VsZWN0e30sIGNsYXVzZS5Gcm9te30sIGNsYXVzZS5SZXR1cm5pbmd7CgkJCQlbXWNsYXVzZS5Db2x1bW57Y2xhdXNlLlByaW1hcnlDb2x1bW59LAoJCQl9fSwKCQkJIlNFTEVDVCAqIEZST00gYHVzZXJzYCBSRVRVUk5JTkcgYHVzZXJzYC5gaWRgIiwgbmlsLAoJCX0sIHsKCQkJW11jbGF1c2UuSW50ZXJmYWNle2NsYXVzZS5TZWxlY3R7fSwgY2xhdXNlLkZyb217fSwgY2xhdXNlLlJldHVybmluZ3sKCQkJCVtdY2xhdXNlLkNvbHVtbntjbGF1c2UuUHJpbWFyeUNvbHVtbn0sCgkJCX0sIGNsYXVzZS5SZXR1cm5pbmd7CgkJCQlbXWNsYXVzZS5Db2x1bW57e05hbWU6ICJuYW1lIn0sIHtOYW1lOiAiYWdlIn19LAoJCQl9fSwKCQkJIlNFTEVDVCAqIEZST00gYHVzZXJzYCBSRVRVUk5JTkcgYHVzZXJzYC5gaWRgLGBuYW1lYCxgYWdlYCIsIG5pbCwKCQl9LAoJCXsKCQkJW11jbGF1c2UuSW50ZXJmYWNle2NsYXVzZS5TZWxlY3R7fSwgY2xhdXNlLkZyb217fSwgY2xhdXNlLlJldHVybmluZ3sKCQkJCVtdY2xhdXNlLkNvbHVtbntjbGF1c2UuUHJpbWFyeUNvbHVtbn0sCgkJCX0sIGNsYXVzZS5SZXR1cm5pbmd7fSwgY2xhdXNlLlJldHVybmluZ3sKCQkJCVtdY2xhdXNlLkNvbHVtbnt7TmFtZTogIm5hbWUifSwge05hbWU6ICJhZ2UifX0sCgkJCX19LAoJCQkiU0VMRUNUICogRlJPTSBgdXNlcnNgIFJFVFVSTklORyAqIiwgbmlsLAoJCX0sCgkJewoJCQlbXWNsYXVzZS5JbnRlcmZhY2V7Y2xhdXNlLlNlbGVjdHt9LCBjbGF1c2UuRnJvbXt9LCBjbGF1c2UuUmV0dXJuaW5newoJCQkJW11jbGF1c2UuQ29sdW1ue2NsYXVzZS5QcmltYXJ5Q29sdW1ufSwKCQkJfSwgY2xhdXNlLlJldHVybmluZ3sKCQkJCVtdY2xhdXNlLkNvbHVtbnt7TmFtZTogIm5hbWUifSwge05hbWU6ICJhZ2UifX0sCgkJCX0sIGNsYXVzZS5SZXR1cm5pbmd7fX0sCgkJCSJTRUxFQ1QgKiBGUk9NIGB1c2Vyc2AgUkVUVVJOSU5HICoiLCBuaWwsCgkJfSwKCX0KCglmb3IgaWR4LCByZXN1bHQgOj0gcmFuZ2UgcmVzdWx0cyB7CgkJdC5SdW4oZm10LlNwcmludGYoImNhc2UgIyV2IiwgaWR4KSwgZnVuYyh0ICp0ZXN0aW5nLlQpIHsKCQkJY2hlY2tCdWlsZENsYXVzZXModCwgcmVzdWx0LkNsYXVzZXMsIHJlc3VsdC5SZXN1bHQsIHJlc3VsdC5WYXJzKQoJCX0pCgl9Cn0K' | base64 -d > clause/returning_test.go\nif go test -count=1 -run '^(TestReturning)$' ./clause >/dev/null 2>&1; then echo probe: pass; else echo probe: fail; fi",
+        "expected": "probe: pass",
+        "actual": "probe: fail"
+      },
+      "why_missed": "The project's own suite at the parent commit never exercised this input; the fix commit added the test that does."
+    }
+  ]
+}

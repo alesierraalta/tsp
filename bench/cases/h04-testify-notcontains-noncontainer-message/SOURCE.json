@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/stretchr/testify",
+  "commit": "c5fc9d6b6b21ea89be8480c0dc35e2977ab988f6",
+  "patch": "fix.patch"
+}

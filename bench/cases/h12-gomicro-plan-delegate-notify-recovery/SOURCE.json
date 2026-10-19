@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/micro/go-micro",
+  "commit": "364fb33cc88ea3a5a2a691a6843596af5ada1486",
+  "patch": "fix.patch"
+}

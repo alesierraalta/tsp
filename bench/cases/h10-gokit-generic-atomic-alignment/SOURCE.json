@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/go-kit/kit",
+  "commit": "4133f7f86633b7343405522e51c9bea5b5bf7288",
+  "patch": "fix.patch"
+}

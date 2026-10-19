@@ -1,0 +1,17 @@
+diff --git a/src/croc/croc.go b/src/croc/croc.go
+index c100a9b..fe90615 100644
+--- a/src/croc/croc.go
++++ b/src/croc/croc.go
+@@ -856,8 +856,10 @@ func normalizeReceiveFolder(folder string) (string, error) {
+ 	if err != nil {
+ 		return "", fmt.Errorf("filename must be a local path: %w", err)
+ 	}
+-	if strings.Contains(cleanFolder, ".ssh") {
+-		return "", fmt.Errorf("invalid path detected: %q", folder)
++	for _, component := range strings.Split(cleanFolder, "/") {
++		if receivefs.CollisionKey(component) == ".ssh" {
++			return "", fmt.Errorf("invalid path detected: %q", folder)
++		}
+ 	}
+ 	return cleanFolder, nil
+ }

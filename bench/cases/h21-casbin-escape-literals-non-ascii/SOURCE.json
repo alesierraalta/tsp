@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/apache/casbin",
+  "commit": "08dab401f7e78a3af923239fff1fcef20ab78464",
+  "patch": "fix.patch"
+}

@@ -1,0 +1,31 @@
+{
+  "id": "h18-gitleaks-reader-eof-with-bytes",
+  "language": "go",
+  "suite": "go test ./detect",
+  "surface": "detect",
+  "family": "resilience-io",
+  "source": "go-swe-bench-v0@f361c5ef",
+  "request": "Scanning from an io.Reader finds every secret in the stream whatever chunking the reader uses, including a reader whose last Read returns the final bytes together with io.EOF (n > 0 and err == io.EOF): those bytes are scanned like any others.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "detect/reader.go",
+      "line": 18,
+      "class": "final-read-with-eof",
+      "keywords": [
+        "detect",
+        "handle",
+        "eof",
+        "bytes",
+        "1472"
+      ],
+      "description": "Published bug fixed upstream: fix(detect): handle EOF with bytes (#1472)",
+      "trigger": {
+        "input": "printf %s 'cGFja2FnZSBkZXRlY3QKCmltcG9ydCAoCgkiZ2l0aHViLmNvbS9zdHJldGNoci90ZXN0aWZ5L3JlcXVpcmUiCgkiaW8iCgkic3RyaW5ncyIKCSJ0ZXN0aW5nIgoKCSJnaXRodWIuY29tL3N0cmV0Y2hyL3Rlc3RpZnkvYXNzZXJ0IgopCgpjb25zdCBzZWNyZXQgPSAiQUtJQUlSWUxKVktNUEVYQU1QTEUiCgp0eXBlIG1vY2tSZWFkZXIgc3RydWN0IHsKCWRhdGEgW11ieXRlCn0KCmZ1bmMgKHIgKm1vY2tSZWFkZXIpIFJlYWQocCBbXWJ5dGUpIChuIGludCwgZXJyIGVycm9yKSB7CgkvLyBDb3B5IGRhdGEgdG8gdGhlIHByb3ZpZGVkIGJ1ZmZlci4KCW4gPSBjb3B5KHAsIHIuZGF0YSkKCgkvLyBSZXR1cm4gaW8uRU9GIGFsb25nIHdpdGggdGhlIGJ5dGVzLgoJcmV0dXJuIG4sIGlvLkVPRgp9CgovLyBUZXN0RGV0ZWN0UmVhZGVyIHRlc3RzIHRoZSBEZXRlY3RSZWFkZXIgZnVuY3Rpb24uCmZ1bmMgVGVzdERldGVjdFJlYWRlcih0ICp0ZXN0aW5nLlQpIHsKCXRlc3RzIDo9IFtdc3RydWN0IHsKCQluYW1lICAgICAgICAgIHN0cmluZwoJCXJlYWRlciAgICAgICAgaW8uUmVhZGVyCgkJYnVmU2l6ZSAgICAgICBpbnQKCQlmaW5kaW5nc0NvdW50IGludAoJfXsKCQl7CgkJCW5hbWU6ICAgICAgICAgICJUZXN0IGNhc2UgLSBSZWFkZXIgcmV0dXJucyBuID4gMCBieXRlcyBhbmQgbmlsIGVycm9yIiwKCQkJYnVmU2l6ZTogICAgICAgMTAsCgkJCWZpbmRpbmdzQ291bnQ6IDEsCgkJCXJlYWRlcjogICAgICAgIHN0cmluZ3MuTmV3UmVhZGVyKHNlY3JldCksCgkJfSwKCQl7CgkJCW5hbWU6ICAgICAgICAgICJUZXN0IGNhc2UgLSBSZWFkZXIgcmV0dXJucyBuID4gMCBieXRlcyBhbmQgaW8uRU9GIGVycm9yIiwKCQkJYnVmU2l6ZTogICAgICAgMTAsCgkJCWZpbmRpbmdzQ291bnQ6IDEsCgkJCXJlYWRlcjogJm1vY2tSZWFkZXJ7CgkJCQlkYXRhOiBbXWJ5dGUoc2VjcmV0KSwKCQkJfSwKCQl9LAoJfQoKCWZvciBfLCB0ZXN0IDo9IHJhbmdlIHRlc3RzIHsKCQl0LlJ1bih0ZXN0Lm5hbWUsIGZ1bmModCAqdGVzdGluZy5UKSB7CgkJCWRldGVjdG9yLCBlcnIgOj0gTmV3RGV0ZWN0b3JEZWZhdWx0Q29uZmlnKCkKCQkJcmVxdWlyZS5Ob0Vycm9yKHQsIGVycikKCgkJCWZpbmRpbmdzLCBlcnIgOj0gZGV0ZWN0b3IuRGV0ZWN0UmVhZGVyKHRlc3QucmVhZGVyLCB0ZXN0LmJ1ZlNpemUpCgkJCXJlcXVpcmUuTm9FcnJvcih0LCBlcnIpCgoJCQlhc3NlcnQuRXF1YWwodCwgdGVzdC5maW5kaW5nc0NvdW50LCBsZW4oZmluZGluZ3MpKQoJCX0pCgl9Cn0K' | base64 -d > detect/reader_test.go\nif go test -count=1 -run '^(TestDetectReader)$' ./detect >/dev/null 2>&1; then echo probe: pass; else echo probe: fail; fi",
+        "expected": "probe: pass",
+        "actual": "probe: fail"
+      },
+      "why_missed": "The project's own suite at the parent commit never exercised this input; the fix commit added the test that does."
+    }
+  ]
+}
