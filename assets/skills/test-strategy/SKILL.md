@@ -4,7 +4,7 @@ description: "Trigger: haz el TSP, haz TSP, TSP, haz test stragety, haz test str
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.7.3"
+  version: "0.7.4"
   requires_tsp: "0.6.6"
   requires_tpp: "0.5.1"
   scope: [common]
@@ -66,6 +66,9 @@ source code. Spend turns on probes and tests, not on documents.
 4. **Pin every defect** in the repository's own test files: one test per defect, asserting the
    promised behaviour, so it fails now. Assert only what the contract states: when it does not name
    a field, type or message, check the weakest observable that proves the promise (it rejects; the
-   error mentions the item), never a name you invented. The test must pass on any correct fix. Run the suite once at the end to see those tests red and
+   error mentions the item), never a name you invented. The test must pass on any correct fix.
+   Write it with the project's own types, helpers and imports, and run it once on today's code: it
+   must compile and fail for the reason the promise names, not on a build error or a miscounted
+   expected value. Run the suite once at the end to see those tests red and
    the rest green; never delete or weaken a test to make the suite green.
 5. **Finish** with a short list: each defect as `path:line` plus the test that pins it.
