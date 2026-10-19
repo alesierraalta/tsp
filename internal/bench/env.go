@@ -122,6 +122,8 @@ func writePiConfig(dir, configFrom string, skills []string) error {
 // is the baseline a skill is measured against.
 func WriteNoneConfig(dir, runner, configFrom string) error {
 	switch runner {
+	case RunnerAgy:
+		return writeAgyConfig(dir, configFrom, false)
 	case RunnerPi:
 		return writePiConfig(dir, configFrom, []string{})
 	case RunnerCodex:
@@ -133,7 +135,7 @@ func WriteNoneConfig(dir, runner, configFrom string) error {
 		}
 		return writeIsolatedHome(dir)
 	default:
-		return fmt.Errorf("runner %q has no bare configuration; use %s or %s", runner, RunnerPi, RunnerCodex)
+		return fmt.Errorf("runner %q has no bare configuration; use %s, %s or %s", runner, RunnerPi, RunnerCodex, RunnerAgy)
 	}
 }
 
@@ -276,7 +278,7 @@ func agentEnvWith(base []string, configKey, cfgDir, binDir string) []string {
 	prefix := configKey + "="
 	for _, e := range base {
 		switch {
-		case strings.HasPrefix(e, prefix):
+		case configKey != "" && strings.HasPrefix(e, prefix):
 			continue
 		case binDir != "" && strings.HasPrefix(e, "PATH="):
 			out = append(out, "PATH="+binDir+string(os.PathListSeparator)+strings.TrimPrefix(e, "PATH="))
@@ -284,10 +286,57 @@ func agentEnvWith(base []string, configKey, cfgDir, binDir string) []string {
 			out = append(out, e)
 		}
 	}
-	if cfgDir != "" {
+	if configKey != "" && cfgDir != "" {
 		out = append(out, prefix+cfgDir)
 	}
 	return out
+}
+
+// AgyAuthFile is the sole login file copied into an isolated Antigravity home.
+const AgyAuthFile = "antigravity-oauth-token"
+
+// DefaultAgyConfigDir is where Antigravity keeps its login.
+func DefaultAgyConfigDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".gemini", "antigravity-cli")
+}
+
+// AgySkillFile names the skill loaded from the isolated HOME.
+func AgySkillFile(cfgDir string) string {
+	return filepath.Join(cfgDir, IsolatedHomeDir, ".gemini", "config", "skills", BenchSkill, "SKILL.md")
+}
+
+// WriteBenchAgyConfig builds an isolated home with only the login and skill under test.
+func WriteBenchAgyConfig(dir, from string) error { return writeAgyConfig(dir, from, true) }
+
+func writeAgyConfig(dir, from string, skill bool) error {
+	if err := writeIsolatedHome(dir); err != nil {
+		return err
+	}
+	gemini := filepath.Join(dir, IsolatedHomeDir, ".gemini")
+	login := filepath.Join(gemini, "antigravity-cli")
+	if err := os.MkdirAll(login, 0o700); err != nil {
+		return err
+	}
+	// Never link the operator's working token: refresh failures must stay in this copy (F25).
+	if err := copyFile(filepath.Join(from, AgyAuthFile), filepath.Join(login, AgyAuthFile)); err != nil {
+		return err
+	}
+	if !skill {
+		return nil
+	}
+	config := filepath.Join(gemini, "config")
+	if err := writeSkillTree(config, BenchSkill); err != nil {
+		return err
+	}
+	return verifySkillTree(config, BenchSkill)
+}
+
+func agyEnv(base []string, cfgDir, binDir string) []string {
+	return isolateHome(agentEnvWith(base, "", cfgDir, binDir), cfgDir)
 }
 
 // DefaultCodexConfigDir is where Codex keeps its login when CODEX_HOME is unset.

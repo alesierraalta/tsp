@@ -666,9 +666,22 @@ with no skill at all (`--no-skills` for Pi). The Codex runner (`--runner codex`)
 tokens but no price, so a codex run records no cost and `--max-cost-usd` never stops it. Its turns
 count the actions the agent completed (commands, file changes, tool calls), the unit closest to the
 other runners' turns; a stream that ends without a completion event is an error, not an empty
-success. Comparing arms:
+success.
+
+The Antigravity CLI runner (`--runner agy`) supports both `bench` (the default) and `none`
+arms and defaults to `gemini-3.8-flash-low`. It runs headlessly with an isolated `HOME`,
+copying only `~/.gemini/antigravity-cli/antigravity-oauth-token` (never linking it).
+The bench arm adds the embedded skill at `home/.gemini/config/skills/test-strategy/`;
+the bare arm has no skills. Custom config directories and `bench-all` are refused.
+Antigravity can exit zero on authentication failure, so its streamed result status, not
+just the exit code, determines success. Completed tool steps count as turns. It reports
+no price and has no turn cap: neither `--max-cost-usd` nor `--max-turns` applies; use `--timeout`.
+
+Comparing arms:
 
 ```
+tsp bench run --runner agy --agent-config none --cases 'bench/cases/*'     # agy, nothing
+tsp bench run --runner agy --agent-config bench --cases 'bench/cases/*'    # agy with test-strategy
 tsp bench run --runner codex --cases 'bench/cases/*'                       # codex, nothing
 tsp bench run --runner pi --agent-config none --cases 'bench/cases/*'      # pi, nothing
 tsp bench run --runner pi --agent-config bench --cases 'bench/cases/*'     # pi with the tsp skills
