@@ -33,7 +33,10 @@ func agentPrompt(key Key, opts Options) string {
 		prompt = opts.Prompt
 	}
 	if request := key.RequestText(); request != "" {
-		return prompt + "\n\nTest request: " + request
+		prompt += "\n\nTest request: " + request
+	}
+	if opts.Followup != "" {
+		prompt += "\n\n" + opts.Followup
 	}
 	return prompt
 }
@@ -87,11 +90,17 @@ type Options struct {
 	// EscalateModel, when set, reruns a case with this model in a fresh workspace whenever the first run left
 	// no new test failing on the unmodified code (RedCheck found no witness). Empty never escalates.
 	EscalateModel string
-	Runner        string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, RunnerCodex, or RunnerAgy
-	Runs          int
+	// Rounds, above 1, runs the agent again in the same workspace until it has run this many times. Every later
+	// round is told the tests earlier rounds left failing on the unmodified code, so it looks for other defects.
+	// Below 2 is one pass.
+	Rounds int
+	Runner string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, RunnerCodex, or RunnerAgy
+	Runs   int
 	// Prompt replaces the bare instruction for every arm of a reading, so a bare agent can be asked to hunt
 	// defects instead of rerunning the suite; empty keeps the bench prompt.
-	Prompt       string
+	Prompt string
+	// Followup is appended to the prompt of a later round: what earlier rounds pinned. Empty for a first pass.
+	Followup     string
 	MaxTurns     int
 	Timeout      time.Duration
 	SuiteTimeout time.Duration
@@ -136,7 +145,11 @@ type Aggregate struct {
 	Invalid        int      `json:"invalid"`
 	Failed         int      `json:"failed"`    // agent did not run to completion; excluded from recall
 	Escalated      int      `json:"escalated"` // runs rerun with Options.EscalateModel because the first pinned nothing
-	NoPlan         int      `json:"no_plan"`   // valid runs whose selected plan file is absent; scored zero
+	// CaughtByRound and BrokenByRound sum, over valid runs, the defects caught and the tests red on the fully
+	// fixed code once round k ended; empty when the runs made one pass.
+	CaughtByRound []int `json:"caught_by_round,omitempty"`
+	BrokenByRound []int `json:"broken_by_round,omitempty"`
+	NoPlan        int   `json:"no_plan"` // valid runs whose selected plan file is absent; scored zero
 	// LightActivated counts the valid runs whose own plan declares a validated scoped run: the reading's
 	// answer to "did the mode run?", next to what it cost and what it caught.
 	LightActivated int `json:"light_activated"`
@@ -448,6 +461,7 @@ func finalizeAggregate(agg *Aggregate) {
 	agg.Invalid, agg.Failed, agg.NoPlan, agg.LightActivated, agg.MicroActivated = 0, 0, 0, 0, 0
 	agg.AdjudicatedTrue, agg.AdjudicatedFalse, agg.OutOfScope = 0, 0, 0
 	agg.PendingAdjudication = 0
+	agg.CaughtByRound, agg.BrokenByRound = nil, nil
 	complete := true
 	for _, r := range agg.Cases {
 		if r.Invalid {
@@ -458,6 +472,7 @@ func finalizeAggregate(agg *Aggregate) {
 			agg.Failed++
 			continue
 		}
+		addRounds(agg, r.Rounds)
 		agg.AdjudicatedTrue += r.AdjudicatedTrue
 		agg.AdjudicatedFalse += r.AdjudicatedFalse
 		agg.OutOfScope += r.OutOfScope
@@ -557,6 +572,7 @@ func historyEntry(agg Aggregate, caseDirs []string, opts Options) HistoryEntry {
 		Controls: agg.Controls, Precision: agg.Precision, PendingAdjudication: agg.PendingAdjudication,
 		OutOfScope: agg.OutOfScope, Inconclusive: agg.Inconclusive, UnstableCases: agg.UnstableCases,
 		AgentConfig: agg.Provenance.AgentConfig, Environment: agg.Provenance.Environment,
+		Rounds: passes(opts.Rounds),
 	}
 }
 
@@ -612,6 +628,7 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	}
 	started := time.Now()
 	ar, attempts := runAgent(ws, key, runOpts, opts, &res, 0)
+	roundSeconds := time.Since(started).Seconds()
 	if res.Failed {
 		res.Seconds = time.Since(started).Seconds()
 		// An agent that never ran is not a detection result; scoring it would read as recall 0.
@@ -637,11 +654,28 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 			return finish(res, opts, true)
 		}
 	}
+	for round := 2; round <= opts.Rounds; round++ {
+		// The round that just ended is recorded before the next one starts, so the next one can be told what it
+		// left failing on the unmodified code and work in the same workspace on what those tests do not cover.
+		witnesses := recordRound(&res, ws, Discriminate(caseDir, ws, key, opts.SuiteTimeout), roundSeconds, opts.SuiteTimeout)
+		roundOpts := runOpts
+		roundOpts.Followup = roundFollowup(witnesses)
+		roundStarted := time.Now()
+		if ar, attempts = runAgent(ws, key, roundOpts, opts, &res, attempts); res.Failed {
+			res.Seconds = time.Since(started).Seconds()
+			res.Notes = append(res.Notes, fmt.Sprintf("round %d: %s", round, res.FailReason))
+			return finish(res, opts, true)
+		}
+		roundSeconds = time.Since(roundStarted).Seconds()
+	}
 	res.Seconds = time.Since(started).Seconds()
 	res.FinalMessage = clipFinalMessage(ar.Result)
 	res = merge(res, ScoreWorkspace(ws, key))
 	res.Catch = Discriminate(caseDir, ws, key, opts.SuiteTimeout)
 	res.Caught = res.Catch.Count()
+	if opts.Rounds > 1 {
+		recordRound(&res, ws, res.Catch, roundSeconds, opts.SuiteTimeout)
+	}
 	res.Misses = Diagnose(res, key)
 	// Misses of either measure keep their workspace so they can be classified.
 	return finish(res, opts, res.Recall < 1 || (res.Catch.Checked && res.Caught < res.Total))
@@ -746,6 +780,7 @@ func writeTranscript(path string, stream []byte) {
 func merge(res, scored Result) Result {
 	scored.Case, scored.Run, scored.Workspace = res.Case, res.Run, res.Workspace
 	scored.CostUSD, scored.Turns, scored.Seconds, scored.Escalated = res.CostUSD, res.Turns, res.Seconds, res.Escalated
+	scored.Rounds = res.Rounds
 	scored.Suite, scored.Invalid, scored.InvalidReason = res.Suite, res.Invalid, res.InvalidReason
 	scored.Failed, scored.FailReason = res.Failed, res.FailReason
 	scored.FinalMessage = res.FinalMessage
@@ -855,7 +890,7 @@ func Summary(agg Aggregate) string {
 		return planlessSummary(agg)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s", agg.TS, agg.Model, len(agg.Cases), aggregateTotals(agg))
+	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s", agg.TS, agg.Model, len(agg.Cases), aggregateTotals(agg), roundsTotals(agg))
 	if agg.Corpus != "" {
 		fmt.Fprintf(&b, " · corpus: %s", agg.Corpus)
 	}

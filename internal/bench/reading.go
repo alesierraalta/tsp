@@ -89,7 +89,7 @@ func (c Comparison) CaughtDifference() string {
 
 func planlessSummary(a Aggregate) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s", a.TS, a.Model, len(a.Cases), planlessTotals(a))
+	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s", a.TS, a.Model, len(a.Cases), planlessTotals(a), roundsTotals(a))
 	if a.Corpus != "" {
 		fmt.Fprintf(&b, " · corpus: %s", a.Corpus)
 	}

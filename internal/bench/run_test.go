@@ -310,6 +310,20 @@ func TestAgentPromptCarriesTheRequestOnlyWhenThereIsOne(t *testing.T) {
 	}
 }
 
+// A later round's follow-up comes last, after the case's request, and an empty follow-up leaves the prompt byte
+// for byte, so a one-pass run is told exactly what it always was.
+func TestAgentPromptAppendsTheFollowupLast(t *testing.T) {
+	request := "src/slug.js"
+	plain := agentPrompt(Key{Request: &request}, Options{})
+	if got := agentPrompt(Key{Request: &request}, Options{Followup: ""}); got != plain {
+		t.Fatalf("an empty follow-up changed the prompt: %q, want %q", got, plain)
+	}
+	followup := "Earlier rounds left these tests failing"
+	if got := agentPrompt(Key{Request: &request}, Options{Followup: followup}); got != plain+"\n\n"+followup {
+		t.Fatalf("follow-up prompt = %q, want the plain prompt, a blank line and the follow-up", got)
+	}
+}
+
 // A reading may give every arm one explicit instruction instead of the bare prompt, so a bare agent that
 // only reruns the suite is compared with one that was asked to hunt defects too. The override replaces the
 // instruction, keeps the case's request, and is recorded in the provenance so readings with different

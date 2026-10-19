@@ -56,6 +56,7 @@ type Result struct {
 	CostUSD              float64        `json:"cost_usd"`
 	Turns                int            `json:"turns"`
 	Escalated            bool           `json:"escalated,omitempty"` // scored on a rerun with Options.EscalateModel; cost and turns count both
+	Rounds               []RoundResult  `json:"rounds,omitempty"`    // one entry per round when Options.Rounds is above 1
 	Seconds              float64        `json:"seconds"`
 	Invalid              bool           `json:"invalid"`
 	InvalidReason        string         `json:"invalid_reason,omitempty"`
