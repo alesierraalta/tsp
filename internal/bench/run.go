@@ -663,6 +663,7 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		roundStarted := time.Now()
 		if ar, attempts = runAgent(ws, key, roundOpts, opts, &res, attempts); res.Failed {
 			res.Seconds = time.Since(started).Seconds()
+			recordFailedRound(&res, time.Since(roundStarted).Seconds())
 			res.Notes = append(res.Notes, fmt.Sprintf("round %d: %s", round, res.FailReason))
 			return finish(res, opts, true)
 		}

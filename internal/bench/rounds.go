@@ -67,6 +67,18 @@ func recordRound(res *Result, ws string, catch CatchResult, seconds float64, tim
 	return r.Witnesses
 }
 
+// recordFailedRound appends a round whose agent never reached a verdict: it records the work the round paid for,
+// so the rounds still add up to the run's turns and cost, and no witness, since nothing it left can be trusted.
+func recordFailedRound(res *Result, seconds float64) {
+	r := RoundResult{Round: len(res.Rounds) + 1, Witnesses: []string{}, WitnessError: "the round failed: " + res.FailReason,
+		Turns: res.Turns, CostUSD: res.CostUSD, Seconds: seconds}
+	for _, prev := range res.Rounds {
+		r.Turns -= prev.Turns
+		r.CostUSD -= prev.CostUSD
+	}
+	res.Rounds = append(res.Rounds, r)
+}
+
 // addRounds adds one valid run's per-round catches and broken tests to the reading's per-round totals.
 func addRounds(agg *Aggregate, rounds []RoundResult) {
 	for i, r := range rounds {
