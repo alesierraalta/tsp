@@ -1,0 +1,13 @@
+diff --git a/mux.go b/mux.go
+index 71620c0..3da7f3f 100644
+--- a/mux.go
++++ b/mux.go
+@@ -472,7 +472,7 @@ func (mx *Mux) routeHTTP(w http.ResponseWriter, r *http.Request) {
+ 			value := rctx.URLParams.Values[i]
+ 			r.SetPathValue(key, value)
+ 		}
+-		r.Pattern = rctx.routePattern
++		r.Pattern = rctx.RoutePattern()
+ 
+ 		h.ServeHTTP(w, r)
+ 		return

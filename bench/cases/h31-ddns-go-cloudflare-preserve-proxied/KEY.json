@@ -1,0 +1,31 @@
+{
+  "id": "h31-ddns-go-cloudflare-preserve-proxied",
+  "language": "go",
+  "suite": "go test ./dns",
+  "surface": "dns",
+  "family": "state-logic",
+  "source": "go-swe-bench-v0@0c5178b7",
+  "request": "When the Cloudflare proxied option is not set in the custom parameters, updating a record keeps the record's current proxy status: an unchanged IP sends no update at all, and a changed IP updates the address while leaving proxied as the record had it. Only an explicit proxied parameter changes it.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "dns/cloudflare.go",
+      "line": 191,
+      "class": "unset-option-overwrites",
+      "keywords": [
+        "cloudflare",
+        "preserve",
+        "proxy",
+        "status",
+        "proxied"
+      ],
+      "description": "Published bug fixed upstream: fix(cloudflare): preserve proxy status when proxied is unset (#1740)",
+      "trigger": {
+        "input": "printf %s 'cGFja2FnZSBkbnMKCmltcG9ydCAoCgkiZW5jb2RpbmcvanNvbiIKCSJpbyIKCSJuZXQvaHR0cCIKCSJzdHJpbmdzIgoJInRlc3RpbmciCgoJImdpdGh1Yi5jb20vamVlc3N5Mi9kZG5zLWdvL3Y2L2NvbmZpZyIKKQoKdHlwZSByb3VuZFRyaXBGdW5jIGZ1bmMoKmh0dHAuUmVxdWVzdCkgKCpodHRwLlJlc3BvbnNlLCBlcnJvcikKCi8vIFJvdW5kVHJpcCBpbXBsZW1lbnRzIGh0dHAuUm91bmRUcmlwcGVyIGZvciBDbG91ZGZsYXJlIHJlcXVlc3QgdGVzdHMuCmZ1bmMgKGYgcm91bmRUcmlwRnVuYykgUm91bmRUcmlwKHJlcXVlc3QgKmh0dHAuUmVxdWVzdCkgKCpodHRwLlJlc3BvbnNlLCBlcnJvcikgewoJcmV0dXJuIGYocmVxdWVzdCkKfQoKZnVuYyBUZXN0Q2xvdWRmbGFyZU1vZGlmeVByb3hpZWQodCAqdGVzdGluZy5UKSB7Cgl0ZXN0cyA6PSBbXXN0cnVjdCB7CgkJbmFtZSAgICAgICAgICBzdHJpbmcKCQljdXN0b21QYXJhbXMgIHN0cmluZwoJCXJlY29yZElQICAgICAgc3RyaW5nCgkJaXBBZGRyICAgICAgICBzdHJpbmcKCQlyZWNvcmRQcm94aWVkIGJvb2wKCQl3YW50UmVxdWVzdCAgIGJvb2wKCQl3YW50UHJveGllZCAgIGJvb2wKCX17CgkJewoJCQluYW1lOiAgICAgICAgICAicHJlc2VydmUgcHJveHkgc3RhdHVzIHdpdGhvdXQgY3VzdG9tIHBhcmFtZXRlciIsCgkJCXJlY29yZElQOiAgICAgICIxOTIuMC4yLjEiLAoJCQlpcEFkZHI6ICAgICAgICAiMTkyLjAuMi4xIiwKCQkJcmVjb3JkUHJveGllZDogdHJ1ZSwKCQkJd2FudFJlcXVlc3Q6ICAgZmFsc2UsCgkJfSwKCQl7CgkJCW5hbWU6ICAgICAgICAgICJwcmVzZXJ2ZSBwcm94eSBzdGF0dXMgd2hlbiBJUCBjaGFuZ2VzIiwKCQkJcmVjb3JkSVA6ICAgICAgIjE5Mi4wLjIuMSIsCgkJCWlwQWRkcjogICAgICAgICIxOTIuMC4yLjIiLAoJCQlyZWNvcmRQcm94aWVkOiB0cnVlLAoJCQl3YW50UmVxdWVzdDogICB0cnVlLAoJCQl3YW50UHJveGllZDogICB0cnVlLAoJCX0sCgkJewoJCQluYW1lOiAgICAgICAgICAic3luYyBleHBsaWNpdGx5IGRpc2FibGVkIHByb3h5IHN0YXR1cyB3aXRob3V0IElQIGNoYW5nZXMiLAoJCQljdXN0b21QYXJhbXM6ICAicHJveGllZD1mYWxzZSIsCgkJCXJlY29yZElQOiAgICAgICIxOTIuMC4yLjEiLAoJCQlpcEFkZHI6ICAgICAgICAiMTkyLjAuMi4xIiwKCQkJcmVjb3JkUHJveGllZDogdHJ1ZSwKCQkJd2FudFJlcXVlc3Q6ICAgdHJ1ZSwKCQkJd2FudFByb3hpZWQ6ICAgZmFsc2UsCgkJfSwKCX0KCglmb3IgXywgdHQgOj0gcmFuZ2UgdGVzdHMgewoJCXQuUnVuKHR0Lm5hbWUsIGZ1bmModCAqdGVzdGluZy5UKSB7CgkJCXJlcXVlc3RDb3VudCA6PSAwCgkJCXZhciB1cGRhdGVkUmVjb3JkIENsb3VkZmxhcmVSZWNvcmQKCQkJY2xpZW50IDo9ICZodHRwLkNsaWVudHsKCQkJCVRyYW5zcG9ydDogcm91bmRUcmlwRnVuYyhmdW5jKHJlcXVlc3QgKmh0dHAuUmVxdWVzdCkgKCpodHRwLlJlc3BvbnNlLCBlcnJvcikgewoJCQkJCXJlcXVlc3RDb3VudCsrCgkJCQkJaWYgZXJyIDo9IGpzb24uTmV3RGVjb2RlcihyZXF1ZXN0LkJvZHkpLkRlY29kZSgmdXBkYXRlZFJlY29yZCk7IGVyciAhPSBuaWwgewoJCQkJCQl0LkZhdGFsZigiZGVjb2RlIHJlcXVlc3QgYm9keTogJXYiLCBlcnIpCgkJCQkJfQoJCQkJCXJldHVybiAmaHR0cC5SZXNwb25zZXsKCQkJCQkJU3RhdHVzQ29kZTogaHR0cC5TdGF0dXNPSywKCQkJCQkJQm9keTogICAgICAgaW8uTm9wQ2xvc2VyKHN0cmluZ3MuTmV3UmVhZGVyKGB7InN1Y2Nlc3MiOnRydWV9YCkpLAoJCQkJCQlIZWFkZXI6ICAgICBtYWtlKGh0dHAuSGVhZGVyKSwKCQkJCQl9LCBuaWwKCQkJCX0pLAoJCQl9CgoJCQljZiA6PSBDbG91ZGZsYXJle1RUTDogMSwgaHR0cENsaWVudDogY2xpZW50fQoJCQlkb21haW4gOj0gJmNvbmZpZy5Eb21haW57CgkJCQlEb21haW5OYW1lOiAgICJleGFtcGxlLmNvbSIsCgkJCQlTdWJEb21haW46ICAgICJ0ZXN0IiwKCQkJCUN1c3RvbVBhcmFtczogdHQuY3VzdG9tUGFyYW1zLAoJCQl9CgkJCWNmLm1vZGlmeShDbG91ZGZsYXJlUmVjb3Jkc1Jlc3B7CgkJCQlSZXN1bHQ6IFtdQ2xvdWRmbGFyZVJlY29yZHt7CgkJCQkJSUQ6ICAgICAgInJlY29yZC1pZCIsCgkJCQkJQ29udGVudDogdHQucmVjb3JkSVAsCgkJCQkJUHJveGllZDogdHQucmVjb3JkUHJveGllZCwKCQkJCX19LAoJCQl9LCAiem9uZS1pZCIsIGRvbWFpbiwgdHQuaXBBZGRyKQoKCQkJaWYgZ290IDo9IHJlcXVlc3RDb3VudCA+IDA7IGdvdCAhPSB0dC53YW50UmVxdWVzdCB7CgkJCQl0LkZhdGFsZigicmVxdWVzdCBzZW50ID0gJXYsIHdhbnQgJXYiLCBnb3QsIHR0LndhbnRSZXF1ZXN0KQoJCQl9CgkJCWlmIHR0LndhbnRSZXF1ZXN0ICYmIHVwZGF0ZWRSZWNvcmQuUHJveGllZCAhPSB0dC53YW50UHJveGllZCB7CgkJCQl0LkVycm9yZigidXBkYXRlZCBwcm94aWVkID0gJXYsIHdhbnQgJXYiLCB1cGRhdGVkUmVjb3JkLlByb3hpZWQsIHR0LndhbnRQcm94aWVkKQoJCQl9CgkJfSkKCX0KfQo=' | base64 -d > dns/cloudflare_test.go\nif go test -count=1 -run '^(TestCloudflareModifyProxied)$' ./dns >/dev/null 2>&1; then echo probe: pass; else echo probe: fail; fi",
+        "expected": "probe: pass",
+        "actual": "probe: fail"
+      },
+      "why_missed": "The project's own suite at the parent commit never exercised this input; the fix commit added the test that does."
+    }
+  ]
+}

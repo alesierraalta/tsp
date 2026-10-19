@@ -1,0 +1,31 @@
+{
+  "id": "h14-livekit-pacer-activity-no-extensions",
+  "language": "go",
+  "suite": "go test ./pkg/sfu/pacer",
+  "surface": "pkg/sfu/pacer",
+  "family": "time",
+  "source": "go-swe-bench-v0@6939fe3c",
+  "request": "Every packet the pacer sends updates its last-sent activity time, including packets whose RTP header carries no header extensions: right after such a send, the time since the last sent packet is close to zero.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "pkg/sfu/pacer/base.go",
+      "line": 107,
+      "class": "activity-timestamp-path",
+      "keywords": [
+        "pacer",
+        "activity",
+        "tracking",
+        "without",
+        "rtp"
+      ],
+      "description": "Published bug fixed upstream: Fix pacer activity tracking without RTP header extensions (#4831)",
+      "trigger": {
+        "input": "printf %s 'Ly8gQ29weXJpZ2h0IDIwMjYgTGl2ZUtpdCwgSW5jLgovLwovLyBMaWNlbnNlZCB1bmRlciB0aGUgQXBhY2hlIExpY2Vuc2UsIFZlcnNpb24gMi4wICh0aGUgIkxpY2Vuc2UiKTsKLy8geW91IG1heSBub3QgdXNlIHRoaXMgZmlsZSBleGNlcHQgaW4gY29tcGxpYW5jZSB3aXRoIHRoZSBMaWNlbnNlLgovLyBZb3UgbWF5IG9idGFpbiBhIGNvcHkgb2YgdGhlIExpY2Vuc2UgYXQKLy8KLy8gICAgIGh0dHA6Ly93d3cuYXBhY2hlLm9yZy9saWNlbnNlcy9MSUNFTlNFLTIuMAovLwovLyBVbmxlc3MgcmVxdWlyZWQgYnkgYXBwbGljYWJsZSBsYXcgb3IgYWdyZWVkIHRvIGluIHdyaXRpbmcsIHNvZnR3YXJlCi8vIGRpc3RyaWJ1dGVkIHVuZGVyIHRoZSBMaWNlbnNlIGlzIGRpc3RyaWJ1dGVkIG9uIGFuICJBUyBJUyIgQkFTSVMsCi8vIFdJVEhPVVQgV0FSUkFOVElFUyBPUiBDT05ESVRJT05TIE9GIEFOWSBLSU5ELCBlaXRoZXIgZXhwcmVzcyBvciBpbXBsaWVkLgovLyBTZWUgdGhlIExpY2Vuc2UgZm9yIHRoZSBzcGVjaWZpYyBsYW5ndWFnZSBnb3Zlcm5pbmcgcGVybWlzc2lvbnMgYW5kCi8vIGxpbWl0YXRpb25zIHVuZGVyIHRoZSBMaWNlbnNlLgoKcGFja2FnZSBwYWNlcgoKaW1wb3J0ICgKCSJ0ZXN0aW5nIgoJInRpbWUiCgoJImdpdGh1Yi5jb20vbGl2ZWtpdC9wcm90b2NvbC9sb2dnZXIiCgkiZ2l0aHViLmNvbS9saXZla2l0L3Byb3RvY29sL3V0aWxzL21vbm8iCgkiZ2l0aHViLmNvbS9waW9uL3J0cCIKCSJnaXRodWIuY29tL3N0cmV0Y2hyL3Rlc3RpZnkvcmVxdWlyZSIKKQoKdHlwZSB0ZXN0VHJhY2tMb2NhbFdyaXRlciBzdHJ1Y3R7fQoKZnVuYyAodGVzdFRyYWNrTG9jYWxXcml0ZXIpIFdyaXRlUlRQKGhlYWRlciAqcnRwLkhlYWRlciwgcGF5bG9hZCBbXWJ5dGUpIChpbnQsIGVycm9yKSB7CglyZXR1cm4gaGVhZGVyLk1hcnNoYWxTaXplKCkgKyBsZW4ocGF5bG9hZCksIG5pbAp9CgpmdW5jICh0ZXN0VHJhY2tMb2NhbFdyaXRlcikgV3JpdGUoYiBbXWJ5dGUpIChpbnQsIGVycm9yKSB7CglyZXR1cm4gbGVuKGIpLCBuaWwKfQoKZnVuYyBUZXN0QmFzZVNlbmRQYWNrZXRUcmFja3NBY3Rpdml0eVdpdGhvdXRIZWFkZXJFeHRlbnNpb25zKHQgKnRlc3RpbmcuVCkgewoJYiA6PSBOZXdCYXNlKGxvZ2dlci5HZXRMb2dnZXIoKSwgbmlsKQoJYi5sYXN0UGFja2V0U2VudEF0LlN0b3JlKG1vbm8uVW5peE5hbm8oKSAtIGludDY0KHRpbWUuU2Vjb25kKSkKCglwIDo9ICZQYWNrZXR7CgkJSGVhZGVyOiAgICAgICZydHAuSGVhZGVye1ZlcnNpb246IDJ9LAoJCUhlYWRlclNpemU6IDEyLAoJCVBheWxvYWQ6ICAgICBbXWJ5dGV7MSwgMiwgMywgNH0sCgkJV3JpdGVTdHJlYW06IHRlc3RUcmFja0xvY2FsV3JpdGVye30sCgl9CgoJXywgZXJyIDo9IGIuU2VuZFBhY2tldChwKQoJcmVxdWlyZS5Ob0Vycm9yKHQsIGVycikKCXJlcXVpcmUuTGVzcyh0LCBiLlRpbWVTaW5jZUxhc3RTZW50UGFja2V0KCksIDEwMCp0aW1lLk1pbGxpc2Vjb25kKQp9Cg==' | base64 -d > pkg/sfu/pacer/base_test.go\nif go test -count=1 -run '^(TestBaseSendPacketTracksActivityWithoutHeaderExtensions)$' ./pkg/sfu/pacer >/dev/null 2>&1; then echo probe: pass; else echo probe: fail; fi",
+        "expected": "probe: pass",
+        "actual": "probe: fail"
+      },
+      "why_missed": "The project's own suite at the parent commit never exercised this input; the fix commit added the test that does."
+    }
+  ]
+}

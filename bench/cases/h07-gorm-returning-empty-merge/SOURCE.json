@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/go-gorm/gorm",
+  "commit": "4ef3af10ed7478255f7fade8c27ccf7af149439d",
+  "patch": "fix.patch"
+}

@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/helm/helm",
+  "commit": "952708b436bb2c8d5ef0e2e9ef1d8aabe64aeae9",
+  "patch": "fix.patch"
+}

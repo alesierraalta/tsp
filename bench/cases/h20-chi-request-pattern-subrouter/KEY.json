@@ -1,0 +1,31 @@
+{
+  "id": "h20-chi-request-pattern-subrouter",
+  "language": "go",
+  "suite": "go test .",
+  "surface": ".",
+  "family": "contract",
+  "source": "go-swe-bench-v0@818fdcfc",
+  "request": "Inside a handler, Request.Pattern holds the full route pattern that matched, composed across every mounted or nested sub-router (for a handler on /hi inside Route(\"/accounts/{accountID}\") it is /accounts/{accountID}/hi), not only the part registered on the innermost router.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "mux.go",
+      "line": 475,
+      "class": "composed-route-pattern",
+      "keywords": [
+        "set",
+        "request",
+        "pattern",
+        "from",
+        "routepattern"
+      ],
+      "description": "Published bug fixed upstream: fix: set Request.Pattern from RoutePattern() (#1097)",
+      "trigger": {
+        "input": "printf %s 'Ly9nbzpidWlsZCBnbzEuMjMKLy8gK2J1aWxkIGdvMS4yMwoKcGFja2FnZSBjaGkKCmltcG9ydCAoCgkibmV0L2h0dHAiCgkibmV0L2h0dHAvaHR0cHRlc3QiCgkidGVzdGluZyIKKQoKZnVuYyBUZXN0UGF0dGVybih0ICp0ZXN0aW5nLlQpIHsKCXRlc3RDYXNlcyA6PSBbXXN0cnVjdCB7CgkJbmFtZSAgICAgICAgc3RyaW5nCgkJcGF0dGVybiAgICAgc3RyaW5nCgkJbWV0aG9kICAgICAgc3RyaW5nCgkJcmVxdWVzdFBhdGggc3RyaW5nCgl9ewoJCXsKCQkJbmFtZTogICAgICAgICJCYXNpYyBwYXRoIHZhbHVlIiwKCQkJcGF0dGVybjogICAgICIvaHVicy97aHViSUR9IiwKCQkJbWV0aG9kOiAgICAgICJHRVQiLAoJCQlyZXF1ZXN0UGF0aDogIi9odWJzLzM5MiIsCgkJfSwKCQl7CgkJCW5hbWU6ICAgICAgICAiVHdvIHBhdGggdmFsdWVzIiwKCQkJcGF0dGVybjogICAgICIvdXNlcnMve3VzZXJJRH0vY29udmVyc2F0aW9ucy97Y29udmVyc2F0aW9uSUR9IiwKCQkJbWV0aG9kOiAgICAgICJQT1NUIiwKCQkJcmVxdWVzdFBhdGg6ICIvdXNlcnMvR29qby9jb252ZXJzYXRpb25zLzI5NDgiLAoJCX0sCgkJewoJCQluYW1lOiAgICAgICAgIldpbGRjYXJkIHBhdGgiLAoJCQlwYXR0ZXJuOiAgICAgIi91c2Vycy97dXNlcklEfS9mcmllbmRzLyoiLAoJCQltZXRob2Q6ICAgICAgIlBPU1QiLAoJCQlyZXF1ZXN0UGF0aDogIi91c2Vycy9Hb2pvL2ZyaWVuZHMvYWxsLW9mLXRoZW0vYW5kL21vcmUiLAoJCX0sCgkJewoJCQluYW1lOiAgICAgICAgIk5lc3RlZCBzdWItcm91dGVyIiwKCQkJcGF0dGVybjogICAgICIvYWNjb3VudHMve2FjY291bnRJRH0vaGkiLAoJCQltZXRob2Q6ICAgICAgIkdFVCIsCgkJCXJlcXVlc3RQYXRoOiAiL2FjY291bnRzLzQ0L2hpIiwKCQl9LAoJfQoKCWZvciBfLCB0YyA6PSByYW5nZSB0ZXN0Q2FzZXMgewoJCXQuUnVuKHRjLm5hbWUsIGZ1bmModCAqdGVzdGluZy5UKSB7CgkJCXIgOj0gTmV3Um91dGVyKCkKCgkJCWlmIHRjLm5hbWUgPT0gIk5lc3RlZCBzdWItcm91dGVyIiB7CgkJCQlyLlJvdXRlKCIvYWNjb3VudHMve2FjY291bnRJRH0iLCBmdW5jKHIgUm91dGVyKSB7CgkJCQkJci5IYW5kbGUodGMubWV0aG9kKyIgL2hpIiwgaHR0cC5IYW5kbGVyRnVuYyhmdW5jKHcgaHR0cC5SZXNwb25zZVdyaXRlciwgciAqaHR0cC5SZXF1ZXN0KSB7CgkJCQkJCXcuV3JpdGUoW11ieXRlKHIuUGF0dGVybikpCgkJCQkJfSkpCgkJCQl9KQoJCQl9IGVsc2UgewoJCQkJci5IYW5kbGUodGMubWV0aG9kKyIgIit0Yy5wYXR0ZXJuLCBodHRwLkhhbmRsZXJGdW5jKGZ1bmModyBodHRwLlJlc3BvbnNlV3JpdGVyLCByICpodHRwLlJlcXVlc3QpIHsKCQkJCQl3LldyaXRlKFtdYnl0ZShyLlBhdHRlcm4pKQoJCQkJfSkpCgkJCX0KCgkJCXRzIDo9IGh0dHB0ZXN0Lk5ld1NlcnZlcihyKQoJCQlkZWZlciB0cy5DbG9zZSgpCgoJCQlfLCBib2R5IDo9IHRlc3RSZXF1ZXN0KHQsIHRzLCB0Yy5tZXRob2QsIHRjLnJlcXVlc3RQYXRoLCBuaWwpCgkJCWlmIGJvZHkgIT0gdGMucGF0dGVybiB7CgkJCQl0LkZhdGFsZigiZXhwZWN0aW5nICVxLCBnb3QgJXEiLCB0Yy5wYXR0ZXJuLCBib2R5KQoJCQl9CgkJfSkKCX0KfQo=' | base64 -d > pattern_test.go\nif go test -count=1 -run '^(TestPattern)$' . >/dev/null 2>&1; then echo probe: pass; else echo probe: fail; fi",
+        "expected": "probe: pass",
+        "actual": "probe: fail"
+      },
+      "why_missed": "The project's own suite at the parent commit never exercised this input; the fix commit added the test that does."
+    }
+  ]
+}

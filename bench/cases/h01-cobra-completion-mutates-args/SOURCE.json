@@ -1,0 +1,5 @@
+{
+  "repo": "https://github.com/spf13/cobra",
+  "commit": "f2878bab8c96afd6e36968af96343b35dbb82a82",
+  "patch": "fix.patch"
+}

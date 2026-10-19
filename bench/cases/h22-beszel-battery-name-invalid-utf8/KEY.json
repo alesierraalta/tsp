@@ -1,0 +1,31 @@
+{
+  "id": "h22-beszel-battery-name-invalid-utf8",
+  "language": "go",
+  "suite": "go test ./agent/battery",
+  "surface": "agent/battery",
+  "family": "input-domain",
+  "source": "go-swe-bench-v0@aa1d67a1",
+  "request": "Battery names reported to the hub are always valid UTF-8: invalid byte sequences coming from firmware are dropped (\"LNV-5B11K63024@\\xd0\" becomes \"LNV-5B11K63024@\"), and a name left empty by that falls back to the generic \"Battery N\" name for its position.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "agent/battery/battery.go",
+      "line": 36,
+      "class": "invalid-utf8-sanitising",
+      "keywords": [
+        "agent",
+        "strip",
+        "invalid",
+        "utf",
+        "from"
+      ],
+      "description": "Published bug fixed upstream: fix(agent): strip invalid UTF-8 from battery names (#2241)",
+      "trigger": {
+        "input": "printf %s 'cGFja2FnZSBiYXR0ZXJ5CgppbXBvcnQgKAoJInRlc3RpbmciCgkidW5pY29kZS91dGY4IgoKCSJnaXRodWIuY29tL3N0cmV0Y2hyL3Rlc3RpZnkvYXNzZXJ0IgoJImdpdGh1Yi5jb20vc3RyZXRjaHIvdGVzdGlmeS9yZXF1aXJlIgopCgpmdW5jIFRlc3RQcmltYXJ5U2VsZWN0aW9uKHQgKnRlc3RpbmcuVCkgewoJdGVzdHMgOj0gW11zdHJ1Y3QgewoJCW5hbWUgc3RyaW5nCgkJYmF0cyBbXUJhdHRlcnkKCQl3YW50IHN0cmluZwoJfXsKCQl7Imxhcmdlc3QgcmVwb3J0ZWQgY2FwYWNpdHkiLCBbXUJhdHRlcnl7e05hbWU6ICJTbWFsbCIsIEZ1bGxDaGFyZ2VDYXBhY2l0eTogMjAsIEhhc0Z1bGxDaGFyZ2VDYXBhY2l0eTogdHJ1ZSwgU3lzdGVtOiB0cnVlfSwge05hbWU6ICJMYXJnZSIsIEZ1bGxDaGFyZ2VDYXBhY2l0eTogODAsIEhhc0Z1bGxDaGFyZ2VDYXBhY2l0eTogdHJ1ZX19LCAiTGFyZ2UifSwKCQl7InJlcG9ydGVkIHJhbmtzIG92ZXIgbWlzc2luZyIsIFtdQmF0dGVyeXt7TmFtZTogIlVua25vd24iLCBTeXN0ZW06IHRydWV9LCB7TmFtZTogIktub3duIiwgRnVsbENoYXJnZUNhcGFjaXR5OiAxLCBIYXNGdWxsQ2hhcmdlQ2FwYWNpdHk6IHRydWV9fSwgIktub3duIn0sCgkJeyJzeXN0ZW0gd2lucyBjYXBhY2l0eSB0aWUiLCBbXUJhdHRlcnl7e05hbWU6ICJQZXJpcGhlcmFsIiwgRnVsbENoYXJnZUNhcGFjaXR5OiA1MCwgSGFzRnVsbENoYXJnZUNhcGFjaXR5OiB0cnVlfSwge05hbWU6ICJTeXN0ZW0iLCBGdWxsQ2hhcmdlQ2FwYWNpdHk6IDUwLCBIYXNGdWxsQ2hhcmdlQ2FwYWNpdHk6IHRydWUsIFN5c3RlbTogdHJ1ZX19LCAiU3lzdGVtIn0sCgkJeyJuYW1lIHJlc29sdmVzIGZpbmFsIHRpZSIsIFtdQmF0dGVyeXt7TmFtZTogIlplZCJ9LCB7TmFtZTogIkFscGhhIn19LCAiQWxwaGEifSwKCX0KCWZvciBfLCB0dCA6PSByYW5nZSB0ZXN0cyB7CgkJdC5SdW4odHQubmFtZSwgZnVuYyh0ICp0ZXN0aW5nLlQpIHsKCQkJZ290LCBvayA6PSBQcmltYXJ5KHR0LmJhdHMpCgkJCXJlcXVpcmUuVHJ1ZSh0LCBvaykKCQkJYXNzZXJ0LkVxdWFsKHQsIHR0LndhbnQsIGdvdC5OYW1lKQoJCX0pCgl9CglfLCBvayA6PSBQcmltYXJ5KG5pbCkKCWFzc2VydC5GYWxzZSh0LCBvaykKfQoKZnVuYyBUZXN0Tm9ybWFsaXplQmF0dGVyaWVzRmFsbGJhY2tOYW1lcyh0ICp0ZXN0aW5nLlQpIHsKCWJhdHMgOj0gbm9ybWFsaXplQmF0dGVyaWVzKFtdQmF0dGVyeXt7fSwge30sIHtOYW1lOiAiTW91c2UifSwge05hbWU6ICJNb3VzZSJ9fSkKCWFzc2VydC5FcXVhbCh0LCBbXXN0cmluZ3siQmF0dGVyeSAxIiwgIkJhdHRlcnkgMiIsICJNb3VzZSIsICJNb3VzZSAoMikifSwgW11zdHJpbmd7YmF0c1swXS5OYW1lLCBiYXRzWzFdLk5hbWUsIGJhdHNbMl0uTmFtZSwgYmF0c1szXS5OYW1lfSkKfQoKZnVuYyBUZXN0Tm9ybWFsaXplQmF0dGVyaWVzU3RyaXBzSW52YWxpZFVURjgodCAqdGVzdGluZy5UKSB7CgkvLyBGaXJtd2FyZSBvY2Nhc2lvbmFsbHkgcmVwb3J0cyBuYW1lcyB0aGF0IGFyZSBub3QgdmFsaWQgVVRGLTggKGEgVGhpbmtQYWQKCS8vIHJlcG9ydGluZyAiTE5WLTVCMTFLNjMwMjRAXHhkMCIgaW4gbW9kZWxfbmFtZSBpcyBhIHJlYWwgZXhhbXBsZSkuCgliYXRzIDo9IG5vcm1hbGl6ZUJhdHRlcmllcyhbXUJhdHRlcnl7e05hbWU6ICJMTlYtNUIxMUs2MzAyNEBceGQwIn0sIHtOYW1lOiAiXHhmZlx4ZmUifX0pCglhc3NlcnQuRXF1YWwodCwgIkxOVi01QjExSzYzMDI0QCIsIGJhdHNbMF0uTmFtZSkKCS8vIEEgbmFtZSBtYWRlIHVwIGVudGlyZWx5IG9mIGludmFsaWQgYnl0ZXMgZmFsbHMgYmFjayB0byB0aGUgZ2VuZXJpYyBuYW1lLgoJYXNzZXJ0LkVxdWFsKHQsICJCYXR0ZXJ5IDIiLCBiYXRzWzFdLk5hbWUpCglmb3IgXywgYiA6PSByYW5nZSBiYXRzIHsKCQlhc3NlcnQuVHJ1ZSh0LCB1dGY4LlZhbGlkU3RyaW5nKGIuTmFtZSkpCgl9Cn0K' | base64 -d > agent/battery/battery_test.go\nif go test -count=1 -run '^(TestNormalizeBatteriesStripsInvalidUTF8)$' ./agent/battery >/dev/null 2>&1; then echo probe: pass; else echo probe: fail; fi",
+        "expected": "probe: pass",
+        "actual": "probe: fail"
+      },
+      "why_missed": "The project's own suite at the parent commit never exercised this input; the fix commit added the test that does."
+    }
+  ]
+}
