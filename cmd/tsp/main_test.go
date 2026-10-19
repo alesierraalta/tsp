@@ -75,7 +75,7 @@ func TestCLIContract(t *testing.T) {
 		{name: "bench with no subcommand exits 2", args: []string{"bench"}, wantExit: 2, wantOut: "usage: tsp"},
 		{name: "bench with an unknown subcommand exits 2", args: []string{"bench", "bogus"}, wantExit: 2, wantOut: "usage: tsp"},
 		// A runner the bench cannot spawn must be refused before it scaffolds or spawns anything.
-		{name: "bench run with an unknown runner exits 2", args: []string{"bench", "run", "--runner", "gemini"}, wantExit: 2, wantOut: "use pi, codex or claude"},
+		{name: "bench run with an unknown runner exits 2", args: []string{"bench", "run", "--runner", "gemini"}, wantExit: 2, wantOut: "use pi, codex, agy or claude"},
 		{name: "bench score without arguments exits 2", args: []string{"bench", "score"}, wantExit: 2, wantOut: "needs --case"},
 		{name: "bench score with both workspace and plan exits 2", args: []string{"bench", "score", "--case", "c", "--workspace", "w", "--plan", "p"}, wantExit: 2, wantOut: "exactly one"},
 		{name: "bench compare without two directories exits 2", args: []string{"bench", "compare", "only-one"}, wantExit: 2, wantOut: "two result directories"},
@@ -2302,6 +2302,9 @@ func TestConfigModeForTheAgentConfigFlag(t *testing.T) {
 		{"pi", "none", bench.ConfigNone},
 		{"codex", "none", bench.ConfigNone},
 		{"codex", "", bench.ConfigNone},
+		{"agy", "", bench.ConfigBench},
+		{"agy", "bench", bench.ConfigBench},
+		{"agy", "none", bench.ConfigNone},
 	}
 	for _, tt := range tests {
 		if got := configModeFor(tt.runner, tt.agentConfig); got != tt.want {
@@ -2318,6 +2321,8 @@ func TestBenchRunRefusesAConfigTheRunnerCannotHonor(t *testing.T) {
 		{"--runner", "claude", "--agent-config", "none"},
 		{"--runner", "claude", "--agent-config", "bench-all"},
 		{"--runner", "codex", "--agent-config", "bench-all"},
+		{"--runner", "agy", "--agent-config", "bench-all"},
+		{"--runner", "agy", "--agent-config", "/tmp/op-config"},
 	} {
 		out := t.TempDir()
 		if code := runBenchRun(append(args, "--dry-run", "--cases", filepath.Join(t.TempDir(), "none-*"), "--out", out)); code != 2 {
@@ -2325,6 +2330,34 @@ func TestBenchRunRefusesAConfigTheRunnerCannotHonor(t *testing.T) {
 		}
 		if entries, _ := os.ReadDir(out); len(entries) != 0 {
 			t.Errorf("bench run %v must refuse before building any config, wrote %d entries", args, len(entries))
+		}
+	}
+}
+
+// An agy run always builds its config from the operator's agy login under the results directory: the tsp arm by
+// default, the bare arm with --agent-config none. Neither may run on the operator's own ~/.gemini.
+func TestBenchRunBuildsAnIsolatedAgyConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	login := filepath.Join(home, ".gemini", "antigravity-cli", bench.AgyAuthFile)
+	if err := os.MkdirAll(filepath.Dir(login), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(login, []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	copied := filepath.Join(bench.IsolatedHomeDir, ".gemini", "antigravity-cli", bench.AgyAuthFile)
+	for _, tt := range []struct{ agentConfig, dir string }{{"", ".agy-agent-config"}, {"none", ".agy-none-config"}} {
+		out := t.TempDir()
+		if code := runBenchRun([]string{"--runner", "agy", "--agent-config", tt.agentConfig, "--dry-run", "--cases", filepath.Join(t.TempDir(), "none-*"), "--out", out}); code != 1 {
+			t.Errorf("agy %q exit = %d, want 1 (config built, no case matched)", tt.agentConfig, code)
+		}
+		if data, err := os.ReadFile(filepath.Join(out, tt.dir, copied)); err != nil || string(data) != "token" {
+			t.Errorf("agy %q must copy the login into %s: %v %q", tt.agentConfig, tt.dir, err, data)
+		}
+		_, err := os.Stat(bench.AgySkillFile(filepath.Join(out, tt.dir)))
+		if hasSkill := err == nil; hasSkill != (tt.agentConfig == "") {
+			t.Errorf("agy %q carries the skill = %v", tt.agentConfig, hasSkill)
 		}
 	}
 }

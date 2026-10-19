@@ -52,6 +52,7 @@ type Report struct {
 var capabilities = []Capability{
 	{Name: "git", Required: true, Degrades: "the gate and the fingerprint cannot run at all"},
 	{Name: "claude", Degrades: "bench run --runner claude has no agent to spawn"},
+	{Name: "agy", Degrades: "bench run --runner agy has no agent to spawn"},
 	{Name: "node", Degrades: "fixtures that use node:test cannot run"},
 	{Name: "python3", Degrades: "the Python helper scripts some skills ship cannot run"},
 	{Name: "docker", Degrades: "plan admit --sandbox has no container to observe in, so a sandbox pin cannot be checked and a mutation cannot be replayed"},

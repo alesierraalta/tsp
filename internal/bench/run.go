@@ -44,11 +44,12 @@ const (
 	RunnerClaude = "claude"
 	RunnerPi     = "pi"
 	RunnerCodex  = "codex"
+	RunnerAgy    = "agy"
 )
 
 // KnownRunner reports whether name selects a runner the bench can spawn; empty means the default.
 func KnownRunner(name string) bool {
-	return name == "" || name == RunnerClaude || name == RunnerPi || name == RunnerCodex
+	return name == "" || name == RunnerClaude || name == RunnerPi || name == RunnerCodex || name == RunnerAgy
 }
 
 // DefaultModel is the model a runner uses when the operator does not name one: the free Pi model the
@@ -57,6 +58,8 @@ func DefaultModel(runner string) string {
 	switch runner {
 	case RunnerClaude:
 		return "haiku"
+	case RunnerAgy:
+		return "gemini-3.8-flash-low"
 	case RunnerCodex:
 		return "gpt-6-luna"
 	}
@@ -69,6 +72,8 @@ func runnerAgent(runner string) Agent {
 	switch runner {
 	case RunnerPi:
 		return piAgent
+	case RunnerAgy:
+		return agyAgent
 	case RunnerCodex:
 		return codexAgent
 	}
@@ -82,7 +87,7 @@ type Options struct {
 	// EscalateModel, when set, reruns a case with this model in a fresh workspace whenever the first run left
 	// no new test failing on the unmodified code (RedCheck found no witness). Empty never escalates.
 	EscalateModel string
-	Runner        string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, or RunnerCodex
+	Runner        string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, RunnerCodex, or RunnerAgy
 	Runs          int
 	// Prompt replaces the bare instruction for every arm of a reading, so a bare agent can be asked to hunt
 	// defects instead of rerunning the suite; empty keeps the bench prompt.
@@ -937,6 +942,7 @@ func claudeAgent(ctx context.Context, ws string, key Key, opts Options) (AgentRe
 		args = append(args, "--model", opts.Model)
 	}
 	cmd := exec.CommandContext(ctx, "claude", args...)
+	boundProcessTree(cmd)
 	cmd.Dir = ws
 	cmd.Env = agentEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
 	cmd.Stdin = strings.NewReader("")
