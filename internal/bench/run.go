@@ -632,6 +632,9 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	if res.Failed {
 		res.Seconds = time.Since(started).Seconds()
 		// An agent that never ran is not a detection result; scoring it would read as recall 0.
+		if opts.Rounds > 1 {
+			recordFailedRound(&res, roundSeconds)
+		}
 		res.Notes = append(res.Notes, res.FailReason)
 		return finish(res, opts, true)
 	}
