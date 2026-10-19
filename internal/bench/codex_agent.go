@@ -19,6 +19,7 @@ import (
 // reports token usage but no price, so a codex run records no cost; --max-cost-usd never stops it.
 func codexAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 	cmd := exec.CommandContext(ctx, "codex", codexArgs(key, opts, ws)...)
+	boundProcessTree(cmd)
 	cmd.Dir = ws
 	cmd.Env = codexEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
 	// Codex reads extra prompt input from stdin when it is open; an empty reader ends that read.

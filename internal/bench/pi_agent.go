@@ -19,6 +19,7 @@ import (
 // enforces; --max-turns applies to the claude runner alone.
 func piAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 	cmd := exec.CommandContext(ctx, "pi", piArgs(key, opts)...)
+	boundProcessTree(cmd)
 	cmd.Dir = ws
 	cmd.Env = piEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
 	cmd.Stdin = strings.NewReader("")
