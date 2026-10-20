@@ -139,6 +139,11 @@ func VerifyOracle(run string, opts Options) (OracleReport, error) {
 		if cache == "" {
 			cache = DefaultCaseCache()
 		}
+		// A recorded name addresses exactly one case directory: anything that could escape the corpus is refused
+		// rather than resolved to whatever it names.
+		if r.Case == "" || r.Case == "." || r.Case == ".." || filepath.IsAbs(r.Case) || r.Case != filepath.Base(r.Case) {
+			return report, fmt.Errorf("%q: recorded case name is not a single directory under the case corpus", r.Case)
+		}
 		casePath := filepath.Join(opts.BenchDir, "cases", r.Case)
 		if _, e := os.Stat(casePath); os.IsNotExist(e) {
 			if suffix := regexp.MustCompile(`-[0-9a-f]{12}$`).FindString(r.Case); suffix != "" {
@@ -406,7 +411,7 @@ func oracleContract(caseDir string, timeout time.Duration) (string, error) {
 		}
 		if info.IsDir() {
 			name := info.Name()
-			if path != fixture && (name == "vendor" || name == "node_modules" || name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
+			if path != fixture && (name == "vendor" || name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
 				return filepath.SkipDir
 			}
 			if path != fixture && ownModule {
