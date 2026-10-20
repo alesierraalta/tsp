@@ -16,6 +16,36 @@ import (
 // through rather than guessing one: a recorded 3 stays 3, and an absent count stays 0, which is the
 // honest "this aggregate never recorded a run count" that no reading can be compared on. This test pins
 // behavior that already held before the doc comments named it.
+func TestRescoreKeepsRounds(t *testing.T) {
+	caseDir, key := shellCase(t)
+	name := filepath.Base(caseDir)
+	key.Language = "node"
+	for i := range key.Defects {
+		key.Defects[i].Keywords = []string{key.Defects[i].ID}
+	}
+	if err := writeJSON(filepath.Join(caseDir, KeyFile), key); err != nil {
+		t.Fatal(err)
+	}
+	results := t.TempDir()
+	rounds := []RoundResult{{Round: 1, Caught: 1, BrokenTests: 2, Witnesses: []string{"witness"}}, {Round: 2, Caught: 2, BrokenTests: 3}}
+	original := Aggregate{Cases: []Result{{Case: name, Run: 1, Total: len(key.Defects), Rounds: rounds}, {Case: "invalid", Invalid: true, Rounds: rounds}, {Case: "failed", Failed: true, Rounds: rounds}}}
+	if err := writeJSON(filepath.Join(results, "aggregate.json"), original); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Rescore(results, func(string) (string, error) { return caseDir, nil }, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got.CaughtByRound) != "[1 2]" || fmt.Sprint(got.BrokenByRound) != "[2 3]" {
+		t.Fatalf("rescored round totals = %v / %v", got.CaughtByRound, got.BrokenByRound)
+	}
+	for i, c := range got.Cases {
+		if fmt.Sprintf("%#v", c.Rounds) != fmt.Sprintf("%#v", original.Cases[i].Rounds) {
+			t.Fatalf("case %d rounds changed: %+v", i, c.Rounds)
+		}
+	}
+}
+
 func TestRescoreCarriesTheRunCountItWasGiven(t *testing.T) {
 	results := t.TempDir()
 	// No cases: the aggregate's own fields are what this test reads, and a lookup that must never run

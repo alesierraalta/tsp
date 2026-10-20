@@ -303,13 +303,13 @@ refusal there would block every pair across a toolchain patch. The throwaway age
 verified to hold exactly the embedded `test-strategy` skill: a config that quietly carries anything else fails the
 run before it spends, which is what keeps an inherited configuration or a stray memory skill out of
 the measurement. Every run records `corpus`, a digest over the case names and
-defect ids it measured, in its aggregate and in a `corpus` column appended last to the history; a
+defect ids it measured, in its aggregate and in the history's `corpus` column; a
 case that failed or was invalid still contributes its name and key defect ids to that digest.
 
 Each valid run also records which plan mode it wrote: `light` counts plans that declare a validated
 scoped run, and `micro` counts activated micro plans (declared and accepted by `plan check`). The two
 are counted independently — plan check refuses a plan that is both — per case in the summary, in the
-aggregate, and in the history, where `micro` is a column appended last. Rows written before that
+aggregate, and in the history's `micro` column. Rows written before that
 column sit under a note saying they record no micro plan either way. `bench compare` prints both counts
 before → after beside the turn and cost totals, so a Micro A/B reads its cost next to its activation.
 
@@ -321,6 +321,17 @@ bin/tpp bench run --cases '*' --runs 2 --model sonnet --agent-config bench --max
 
 Eighteen cases at two runs each is roughly 36 agent runs; the last fifteen-case run cost $12.83, so
 the ceiling above stops the run just past where it would have spent what the corpus is worth.
+
+The history's `rounds` column is appended last and always records passes per run (1 for a one-pass
+reading). Rows without the key predate the column; they did not record a round count.
+
+Use `--rounds N` to run all N rounds in the same workspace, each in a fresh agent process. Later
+rounds receive the tests earlier rounds left failing on the unmodified code, and keep those tests.
+Each round records witnesses, new witnesses, caught defects, tests red on the fully fixed code,
+turns, cost and seconds; the summary totals catches and broken tests by round over valid runs.
+The stop-on-no-new-witness rule can be evaluated offline. A later round that exhausts retries fails
+the run. Counts above 1 cannot be combined with `--escalate-model`, and `bench compare` refuses
+mixed round counts. Omitting the flag or using 1 preserves the one-pass behavior.
 
 ## What a reading can decide
 

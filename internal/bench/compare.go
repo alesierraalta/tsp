@@ -82,6 +82,7 @@ func refuseProvenanceMismatch(before, after Aggregate, opts CompareOptions) erro
 		refuseRunner,
 		refuseSkillVersion,
 		refuseRuns,
+		refuseRounds,
 		refuseAgentConfig,
 		refuseEnvironment,
 	}
@@ -120,6 +121,16 @@ func refuseRuns(before, after Provenance) error {
 		return nil
 	}
 	return fmt.Errorf("different runs per case: before %d, after %d", before.Runs, after.Runs)
+}
+
+// refuseRounds keeps a reading whose runs made several passes apart from one whose runs made one: its rates are
+// paid with more rounds per run.
+func refuseRounds(before, after Provenance) error {
+	b, a := passes(before.Rounds), passes(after.Rounds)
+	if b == a {
+		return nil
+	}
+	return fmt.Errorf("different rounds per run: before %d, after %d", b, a)
 }
 
 func refuseAgentConfig(before, after Provenance) error {

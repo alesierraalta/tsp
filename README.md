@@ -745,6 +745,21 @@ model is refused.
 tsp bench run --runner pi --model openai-codex/gpt-6-luna --escalate-model openai-codex/gpt-6-sol --cases 'bench/cases/*'
 ```
 
+To measure rounds, `--rounds N` runs the agent N times per run in the same workspace. After
+each round the bench reads the tests the workspace leaves failing on the unmodified code (the
+witnesses `tsp redcheck` reports) and what its tests catch. Every later round is told those
+witnesses and asked for defects they do not cover; finding none is stated as a valid answer. All N
+rounds run, so a stop rule such as "stop when a round adds no new witness" is read afterwards from
+the records. Each result carries a `rounds` list (witnesses, new witnesses, caught, tests red on the
+fixed code, and the round's own turns, cost and seconds), the aggregate sums `caught_by_round` and
+`broken_by_round` over valid runs, and the provenance records `rounds`, so `bench compare` refuses
+to set a reading with rounds beside a one-pass one. A later round that still fails after its retries
+fails the run. `--rounds` above 1 cannot be combined with `--escalate-model`.
+
+```
+tsp bench run --runner pi --model openai-codex/gpt-6-luna --rounds 3 --runs 3 --cases 'bench/cases/h*'
+```
+
 ## License
 
 Apache-2.0. See `LICENSE` and `NOTICE` for the attribution of the skills derived from the

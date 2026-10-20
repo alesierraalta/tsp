@@ -30,15 +30,18 @@ type Provenance struct {
 	// EscalateModel names the model a run fell back to when its first attempt pinned nothing; empty for a reading
 	// that ran one model, so an escalated reading is never compared with a plain one unawares.
 	EscalateModel string `json:"escalate_model,omitempty"`
-	SkillVersion  string `json:"skill_version"`
-	Corpus        string `json:"corpus"` // digest of cases, requests and runs per case
-	Cases         int    `json:"cases"`
-	Runs          int    `json:"runs"`                    // runs per case
-	AgentConfig   string `json:"agent_config"`            // bench | inherited | custom | unspecified
-	SkillsDigest  string `json:"skills_digest,omitempty"` // digest of the skills a throwaway config carried
-	Environment   string `json:"environment"`             // os/arch of the instrument
-	SuiteTools    string `json:"suite_tools,omitempty"`   // node and go versions the suites ran with
-	Prompt        string `json:"prompt,omitempty"`        // the instruction every arm got, when it was not the bench prompt
+	// Rounds is how many rounds each run made when above 1; zero for a one-pass reading, so a reading whose runs
+	// made several passes is never compared with a one-pass one.
+	Rounds       int    `json:"rounds,omitempty"`
+	SkillVersion string `json:"skill_version"`
+	Corpus       string `json:"corpus"` // digest of cases, requests and runs per case
+	Cases        int    `json:"cases"`
+	Runs         int    `json:"runs"`                    // runs per case
+	AgentConfig  string `json:"agent_config"`            // bench | inherited | custom | unspecified
+	SkillsDigest string `json:"skills_digest,omitempty"` // digest of the skills a throwaway config carried
+	Environment  string `json:"environment"`             // os/arch of the instrument
+	SuiteTools   string `json:"suite_tools,omitempty"`   // node and go versions the suites ran with
+	Prompt       string `json:"prompt,omitempty"`        // the instruction every arm got, when it was not the bench prompt
 }
 
 // Agent-config modes identify whether a run used the isolated benchmark configuration or an operator-owned one.
@@ -247,6 +250,9 @@ func provenanceForRun(opts Options, corpus string, cases int) Provenance {
 		Environment:    environment(),
 		SuiteTools:     suiteTools(),
 		Prompt:         opts.Prompt,
+	}
+	if opts.Rounds > 1 {
+		p.Rounds = opts.Rounds
 	}
 	if opts.ConfigDir != "" {
 		p.SkillsDigest, _ = SkillsDigest(opts.ConfigDir)

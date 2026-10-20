@@ -155,6 +155,27 @@ func TestCompareAllowsAndNotesTwoUnspecifiedAgentConfigModes(t *testing.T) {
 	}
 }
 
+// A reading whose runs made several rounds pays several passes per run, so its rates are not a one-pass reading's:
+// compare refuses to put the two side by side, while two readings with the same rounds still compare.
+func TestCompareRefusesReadingsWithDifferentRounds(t *testing.T) {
+	onePass := comparisonAggregate(comparisonProvenance())
+	rounds := comparisonProvenance()
+	rounds.Rounds = 3
+	_, err := Compare(
+		writeAggregate(t, filepath.Join(t.TempDir(), "one"), onePass),
+		writeAggregate(t, filepath.Join(t.TempDir(), "rounds"), comparisonAggregate(rounds)),
+	)
+	if err == nil || err.Error() != "different rounds per run: before 1, after 3" {
+		t.Fatalf("err = %v, want the rounds mismatch refused", err)
+	}
+	if _, err := Compare(
+		writeAggregate(t, filepath.Join(t.TempDir(), "a"), comparisonAggregate(rounds)),
+		writeAggregate(t, filepath.Join(t.TempDir(), "b"), comparisonAggregate(rounds)),
+	); err != nil {
+		t.Fatalf("two readings with the same rounds were refused: %v", err)
+	}
+}
+
 func TestCompareRefusesLegacyAggregateAgainstVersionTwo(t *testing.T) {
 	legacy := Aggregate{Corpus: "sha256:corpus", Cases: []Result{{Case: "a", Total: 1, PlanFound: true}}}
 	modern := comparisonAggregate(comparisonProvenance())

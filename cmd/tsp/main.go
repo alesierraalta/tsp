@@ -103,7 +103,7 @@ flags for setup and doctor:
                        runtime integration signal exists), standalone, or gentle (refused as
                        pending integration), resolved before any work runs
 
-bench run [--cases <glob>] [--runner pi|claude] [--model <m>] [--runs N] [--max-turns N] [--timeout 30m]
+bench run [--cases <glob>] [--runner pi|claude] [--model <m>] [--runs N] [--rounds N] [--max-turns N] [--timeout 30m]
           [--max-cost-usd N] [--out <dir>] [--bench-dir <dir>] [--dry-run] [--keep]
           [--retries N] [--retry-delay 60s] [--agent-config bench|<dir>] [--concurrency N]
           (--cases accepts comma-separated patterns)
@@ -1632,6 +1632,7 @@ func runBenchRun(args []string) int {
 		bench.DefaultModel(bench.RunnerPi)+" for pi, "+bench.DefaultModel(bench.RunnerAgy)+" for agy, "+bench.DefaultModel(bench.RunnerClaude)+" for claude)")
 	escalateModel := fs.String("escalate-model", "", "rerun a case with this model, from a fresh workspace, when the first run left no new test failing on the unmodified code (tsp redcheck found no witness); cost and turns count both attempts; recorded in the provenance")
 	runs := fs.Int("runs", 1, "runs per case")
+	rounds := fs.Int("rounds", 1, "rounds per run: the agent runs again in the same workspace up to N times, every later round told the tests earlier rounds left failing on the unmodified code and asked for defects they do not cover; each round is recorded, and the provenance records the rounds")
 	prompt := fs.String("prompt", "", "instruction every arm receives instead of the bench prompt (\""+bench.Prompt+"\"); recorded in the provenance")
 	maxTurns := fs.Int("max-turns", 70, "agent turn cap per run")
 	timeout := fs.Duration("timeout", 30*time.Minute, "agent wall-clock cap per run")
@@ -1670,6 +1671,14 @@ func runBenchRun(args []string) int {
 	}
 	if *model == "" {
 		*model = bench.DefaultModel(*runner)
+	}
+	if *rounds < 1 {
+		fmt.Fprintf(os.Stderr, "bench run: --rounds must be at least 1, got %d\n", *rounds)
+		return 2
+	}
+	if *rounds > 1 && *escalateModel != "" {
+		fmt.Fprintln(os.Stderr, "bench run: --rounds above 1 cannot be combined with --escalate-model: both rerun the agent and their costs would mix")
+		return 2
 	}
 	if *escalateModel != "" && *escalateModel == *model {
 		fmt.Fprintf(os.Stderr, "bench run: --escalate-model must differ from --model (%s): the rerun would pay twice for one model\n", *model)
@@ -1751,7 +1760,7 @@ func runBenchRun(args []string) int {
 		skillFile = filepath.Join(cfgDir, "skills", "test-strategy", "SKILL.md")
 	}
 	_, code := bench.Run(bench.Options{
-		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
+		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
 		Timeout:      *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,
@@ -2173,6 +2182,7 @@ func runBenchRescore(args []string) int {
 		FalsePositives: agg.FalsePositives, Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan,
 		Kind: bench.KindRescore, RunTS: agg.RunTS, SourceRun: results, SkillVersion: agg.SkillVersion,
 		Corpus: agg.Corpus, LightActivated: agg.LightActivated, MicroActivated: agg.MicroActivated, Runs: agg.Runs,
+		Rounds: max(1, agg.Provenance.Rounds),
 	})
 	fmt.Print(bench.Summary(agg))
 	return 0
