@@ -152,14 +152,24 @@ func TestPythonDecoratorChangeNeedsReview(t *testing.T) {
 	if out, err := exec.Command("python3", "-m", "pytest", "--version").CombinedOutput(); err != nil {
 		t.Skipf("pytest unavailable: %s", out)
 	}
-	source := "import pytest\n# Keeps the parameter promise.\n@pytest.mark.parametrize(\n    \"want\", [pytest.param(2, id=\"expected\", marks=pytest.mark.skipif(False, reason=\") ]\"))],\n)\ndef test_value(want):\n    assert 1 == want\n"
+	put(t, d, "value.py", "value = 1\n")
+	command(t, d, "git", "add", "value.py")
+	command(t, d, "git", "commit", "-qm", "python defect")
+	source := "import pytest\nfrom value import value\n# Keeps the parameter promise.\n@pytest.mark.parametrize(\n    \"want\", [pytest.param(2, id=\"\"\"expected\"\"\", marks=pytest.mark.skipif(False, reason='''brackets ) ]\n    multiline string'''))],\n)\ndef test_value(want):\n    assert value == want\n"
 	put(t, d, "test_value.py", source)
 	if out, code := findings.Record(d, "python3 -m pytest test_value.py", wait); code != 0 {
 		t.Fatalf("record: %d %s", code, out)
 	}
-	put(t, d, "test_value.py", strings.ReplaceAll(source, "pytest.param(2,", "pytest.param(1,"))
+	put(t, d, "value.py", "value = 2\n")
 	out, code := findings.Check(d, wait)
-	want := "review 1 on topic: 0 fixed, 0 open, 0 new, 0 regressed, 1 need review\nF1 test-changed test_value.py test_value.py::test_value[expected] — Keeps the parameter promise.\n"
+	want := "review 1 on topic: 1 fixed, 0 open, 0 new, 0 regressed\nF1 fixed test_value.py test_value.py::test_value[expected] — Keeps the parameter promise.\n"
+	if code != 0 || out != want {
+		t.Fatalf("unchanged decorated test: exit=%d got=%q want=%q", code, out, want)
+	}
+	put(t, d, "value.py", "value = 1\n")
+	put(t, d, "test_value.py", strings.ReplaceAll(source, "pytest.param(2,", "pytest.param(1,"))
+	out, code = findings.Check(d, wait)
+	want = "review 2 on topic: 0 fixed, 0 open, 0 new, 0 regressed, 1 need review\nF1 test-changed test_value.py test_value.py::test_value[expected] — Keeps the parameter promise.\n"
 	if code != 1 || out != want {
 		t.Fatalf("decorator change: exit=%d got=%q want=%q", code, out, want)
 	}

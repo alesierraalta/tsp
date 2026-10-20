@@ -140,9 +140,10 @@ func pythonBody(source, test string, parents []string) (string, string) {
 func pythonDecoratorStart(lines []string, def int) int {
 	start := def
 	stack := ""
+	triple := ""
 	for i, line := range lines[:def] {
 		text := strings.TrimSpace(line)
-		if stack == "" {
+		if stack == "" && triple == "" {
 			if text == "" || strings.HasPrefix(text, "#") {
 				continue
 			}
@@ -156,12 +157,23 @@ func pythonDecoratorStart(lines []string, def int) int {
 		}
 		for j := 0; j < len(line); j++ {
 			c := line[j]
+			if triple != "" {
+				if c == '\\' {
+					j++
+				} else if strings.HasPrefix(line[j:], triple) {
+					j += 2
+					triple = ""
+				}
+				continue
+			}
 			if c == '#' {
 				break
 			}
 			if c == '\'' || c == '"' {
-				if strings.HasPrefix(line[j:], strings.Repeat(string(c), 3)) {
-					return -1
+				if delimiter := strings.Repeat(string(c), 3); strings.HasPrefix(line[j:], delimiter) {
+					triple = delimiter
+					j += 2
+					continue
 				}
 				end := quotedEnd(line, j)
 				if end <= j+1 || line[end-1] != c {
@@ -182,7 +194,7 @@ func pythonDecoratorStart(lines []string, def int) int {
 			}
 		}
 	}
-	if stack != "" {
+	if stack != "" || triple != "" {
 		return -1
 	}
 	return start
