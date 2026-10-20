@@ -1,0 +1,47 @@
+{
+  "id": "f38-event-relay",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "family": "resilience-io",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/reader.js",
+      "line": 8,
+      "class": "socket-timeout-collision",
+      "keywords": [
+        "socket",
+        "timeout",
+        "blocking",
+        "keepalive"
+      ],
+      "description": "Blocking wait equals the default client socket timeout, excluding server response time.",
+      "trigger": {
+        "input": "timeout 20 node --input-type=module -e 'import {MessageLog,LogClient} from \"./lib/message-log.js\"; import {Relay} from \"./src/relay.js\"; const r=new Relay(new LogClient(new MessageLog())); const s=r.subscribe(\"desk\",\"news\"); try {const a=await s.next();const b=await s.next();console.log(a.value.type+\",\"+b.value.type);await s.return();} catch(e){console.log(e.code ?? e.message);}'",
+        "expected": "keep-alive,keep-alive",
+        "actual": "SOCKET_TIMEOUT"
+      },
+      "why_missed": "Quiet reads use a fake client with immediate empty results; stored-event tests never block."
+    },
+    {
+      "id": "D2",
+      "file": "src/session.js",
+      "line": 30,
+      "class": "cancelled-cleanup",
+      "keywords": [
+        "cancellation",
+        "permit",
+        "cleanup",
+        "finally"
+      ],
+      "description": "Signal-aware acknowledgement rejects during cancellation before the permit is returned.",
+      "trigger": {
+        "input": "timeout 20 node --input-type=module -e 'import {MessageLog,LogClient} from \"./lib/message-log.js\"; import {Relay} from \"./src/relay.js\"; const log=new MessageLog(); log.append(\"news\",{n:1}); const r=new Relay(new LogClient(log)); const c=new AbortController(); const s=r.subscribe(\"desk\",\"news\",{signal:c.signal}); await s.next(); c.abort(new Error(\"closed\")); try{await s.next();}catch{} const again=r.subscribe(\"desk\",\"news\");try{const v=await again.next();console.log(\"reconnected:\"+v.value.cursor);await again.return();}catch(e){console.log(e.code ?? e.message);}'",
+        "expected": "reconnected:1",
+        "actual": "CAPACITY"
+      },
+      "why_missed": "Tests return iterators normally or cancel before iteration acquires a permit."
+    }
+  ]
+}
