@@ -10,6 +10,10 @@ imagining the inputs nobody expects, writing the probe. The binaries do the dete
 installing the skills, wiring the hook that keeps them invoked, and reporting what the
 environment can do so a skill degrades explicitly instead of failing on a tool it assumed.
 
+For benchmark review/fix/review cycles, use `tsp bench run --sessions N`: independent
+sessions keep the agent's tests and apply reference fixes for caught defects between reviews.
+See [benchmark sessions](bench/README.md#independent-review-sessions) for records and constraints.
+
 ## How it works
 
 Four pictures of the same system: the pieces, the decision the gate takes at every Stop, the testing

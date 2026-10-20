@@ -7,6 +7,22 @@ reasonable developer would have written. The corpus exists to measure whether a 
 finds what the happy path hides, and to compare one version of the flow against another on the
 same ground.
 
+## Independent review sessions
+
+`tsp bench run --sessions N` measures a review/fix/review cycle. Each session starts a fresh
+agent process with the plain prompt and case request, never a list of previous findings.
+After each session, reference fixes remove the defects its tests distinguish; the agent's
+tests remain. Runs stop at N sessions or zero remaining defects. An unrepresentable remaining
+set stops the run with a recorded reason (`fix/all` and `fix/keep-<ID>` are the supported variants).
+A session that catches nothing leaves the workspace unchanged. Failed sessions retain their
+work and fail the run after retries.
+
+Per-session records include new catches, remaining defects, tests red on fixed code, turns,
+cost and seconds. Summaries sum catches/remaining/broken tests over valid runs and count runs
+reaching zero at each session. Provenance records the session limit; comparisons refuse mixed
+limits, and history appends a sessions column. `--sessions` defaults to 1 (the original single
+pass), must be positive, and above 1 cannot be combined with `--rounds` or `--escalate-model`.
+
 ## Reading plan-less runs and comparisons
 
 For readings with no recorded plan, plan-only metrics (reported/found, recall, precision,

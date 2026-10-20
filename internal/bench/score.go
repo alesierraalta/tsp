@@ -33,40 +33,41 @@ type DefectResult struct {
 
 // Result is the score of one workspace against its key.
 type Result struct {
-	Case                 string         `json:"case"`
-	Run                  int            `json:"run"`
-	Control              bool           `json:"control"`
-	Defects              []DefectResult `json:"defects"`
-	Total                int            `json:"total"`
-	Found                int            `json:"found"`
-	Recall               float64        `json:"recall"`
-	FalsePositives       int            `json:"false_positives"`
-	UnmatchedFindings    int            `json:"unmatched_findings"`
-	PendingAdjudication  int            `json:"pending_adjudication"`
-	AdjudicatedTrue      int            `json:"adjudicated_true"`
-	AdjudicatedFalse     int            `json:"adjudicated_false"`
-	OutOfScope           int            `json:"out_of_scope"`
-	Precision            *float64       `json:"precision"`
-	AdjudicationComplete bool           `json:"adjudication_complete"`
-	MetricsVersion       int            `json:"metrics_version"`
-	FindingRows          int            `json:"finding_rows"`
-	FindingsWithEvidence int            `json:"findings_with_evidence"`
-	LedgerRows           int            `json:"ledger_rows"`
-	Notes                []string       `json:"notes,omitempty"`
-	CostUSD              float64        `json:"cost_usd"`
-	Turns                int            `json:"turns"`
-	Escalated            bool           `json:"escalated,omitempty"` // scored on a rerun with Options.EscalateModel; cost and turns count both
-	Rounds               []RoundResult  `json:"rounds,omitempty"`    // one entry per round when Options.Rounds is above 1
-	Seconds              float64        `json:"seconds"`
-	Invalid              bool           `json:"invalid"`
-	InvalidReason        string         `json:"invalid_reason,omitempty"`
-	Failed               bool           `json:"failed"`
-	FailReason           string         `json:"fail_reason,omitempty"`
-	Suite                SuiteResult    `json:"suite"`
-	Workspace            string         `json:"workspace,omitempty"`
-	PlanFound            bool           `json:"plan_found"`
-	PlanPath             string         `json:"plan_path,omitempty"` // workspace-relative path read, set only when a plan was found
-	PlanFormat           string         `json:"plan_format"`         // FormatTable, FormatProse or FormatEmpty
+	Case                 string          `json:"case"`
+	Run                  int             `json:"run"`
+	Control              bool            `json:"control"`
+	Defects              []DefectResult  `json:"defects"`
+	Total                int             `json:"total"`
+	Found                int             `json:"found"`
+	Recall               float64         `json:"recall"`
+	FalsePositives       int             `json:"false_positives"`
+	UnmatchedFindings    int             `json:"unmatched_findings"`
+	PendingAdjudication  int             `json:"pending_adjudication"`
+	AdjudicatedTrue      int             `json:"adjudicated_true"`
+	AdjudicatedFalse     int             `json:"adjudicated_false"`
+	OutOfScope           int             `json:"out_of_scope"`
+	Precision            *float64        `json:"precision"`
+	AdjudicationComplete bool            `json:"adjudication_complete"`
+	MetricsVersion       int             `json:"metrics_version"`
+	FindingRows          int             `json:"finding_rows"`
+	FindingsWithEvidence int             `json:"findings_with_evidence"`
+	LedgerRows           int             `json:"ledger_rows"`
+	Notes                []string        `json:"notes,omitempty"`
+	CostUSD              float64         `json:"cost_usd"`
+	Turns                int             `json:"turns"`
+	Escalated            bool            `json:"escalated,omitempty"` // scored on a rerun with Options.EscalateModel; cost and turns count both
+	Sessions             []SessionResult `json:"sessions,omitempty"`
+	Rounds               []RoundResult   `json:"rounds,omitempty"` // one entry per round when Options.Rounds is above 1
+	Seconds              float64         `json:"seconds"`
+	Invalid              bool            `json:"invalid"`
+	InvalidReason        string          `json:"invalid_reason,omitempty"`
+	Failed               bool            `json:"failed"`
+	FailReason           string          `json:"fail_reason,omitempty"`
+	Suite                SuiteResult     `json:"suite"`
+	Workspace            string          `json:"workspace,omitempty"`
+	PlanFound            bool            `json:"plan_found"`
+	PlanPath             string          `json:"plan_path,omitempty"` // workspace-relative path read, set only when a plan was found
+	PlanFormat           string          `json:"plan_format"`         // FormatTable, FormatProse or FormatEmpty
 	// LightActivated records that the run declared a scoped run its own plan validates. It is the only
 	// durable answer to "did the mode run?": a defect found, a well-formed ordinary plan, or a line that
 	// merely looks like a declaration leaves it false.

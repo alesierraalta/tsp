@@ -93,9 +93,10 @@ type Options struct {
 	// Rounds, above 1, runs the agent again in the same workspace until it has run this many times. Every later
 	// round is told the tests earlier rounds left failing on the unmodified code, so it looks for other defects.
 	// Below 2 is one pass.
-	Rounds int
-	Runner string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, RunnerCodex, or RunnerAgy
-	Runs   int
+	Rounds   int
+	Sessions int
+	Runner   string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, RunnerCodex, or RunnerAgy
+	Runs     int
 	// Prompt replaces the bare instruction for every arm of a reading, so a bare agent can be asked to hunt
 	// defects instead of rerunning the suite; empty keeps the bench prompt.
 	Prompt string
@@ -147,9 +148,16 @@ type Aggregate struct {
 	Escalated      int      `json:"escalated"` // runs rerun with Options.EscalateModel because the first pinned nothing
 	// CaughtByRound and BrokenByRound sum, over valid runs, the defects caught and the tests red on the fully
 	// fixed code once round k ended; empty when the runs made one pass.
-	CaughtByRound []int `json:"caught_by_round,omitempty"`
-	BrokenByRound []int `json:"broken_by_round,omitempty"`
-	NoPlan        int   `json:"no_plan"` // valid runs whose selected plan file is absent; scored zero
+	TurnsBySession     []int     `json:"turns_by_session,omitempty"`
+	CostBySession      []float64 `json:"cost_by_session,omitempty"`
+	SecondsBySession   []float64 `json:"seconds_by_session,omitempty"`
+	CaughtBySession    []int     `json:"caught_by_session,omitempty"`
+	RemainingBySession []int     `json:"remaining_by_session,omitempty"`
+	BrokenBySession    []int     `json:"broken_by_session,omitempty"`
+	CompletedBySession []int     `json:"completed_by_session,omitempty"`
+	CaughtByRound      []int     `json:"caught_by_round,omitempty"`
+	BrokenByRound      []int     `json:"broken_by_round,omitempty"`
+	NoPlan             int       `json:"no_plan"` // valid runs whose selected plan file is absent; scored zero
 	// LightActivated counts the valid runs whose own plan declares a validated scoped run: the reading's
 	// answer to "did the mode run?", next to what it cost and what it caught.
 	LightActivated int `json:"light_activated"`
@@ -462,6 +470,8 @@ func finalizeAggregate(agg *Aggregate) {
 	agg.AdjudicatedTrue, agg.AdjudicatedFalse, agg.OutOfScope = 0, 0, 0
 	agg.PendingAdjudication = 0
 	agg.CaughtByRound, agg.BrokenByRound = nil, nil
+	agg.CaughtBySession, agg.RemainingBySession, agg.BrokenBySession, agg.CompletedBySession = nil, nil, nil, nil
+	agg.TurnsBySession, agg.CostBySession, agg.SecondsBySession = nil, nil, nil
 	complete := true
 	for _, r := range agg.Cases {
 		if r.Invalid {
@@ -473,6 +483,7 @@ func finalizeAggregate(agg *Aggregate) {
 			continue
 		}
 		addRounds(agg, r.Rounds)
+		addSessions(agg, r.Sessions)
 		agg.AdjudicatedTrue += r.AdjudicatedTrue
 		agg.AdjudicatedFalse += r.AdjudicatedFalse
 		agg.OutOfScope += r.OutOfScope
@@ -572,7 +583,7 @@ func historyEntry(agg Aggregate, caseDirs []string, opts Options) HistoryEntry {
 		Controls: agg.Controls, Precision: agg.Precision, PendingAdjudication: agg.PendingAdjudication,
 		OutOfScope: agg.OutOfScope, Inconclusive: agg.Inconclusive, UnstableCases: agg.UnstableCases,
 		AgentConfig: agg.Provenance.AgentConfig, Environment: agg.Provenance.Environment,
-		Rounds: passes(opts.Rounds),
+		Rounds: passes(opts.Rounds), Sessions: passes(opts.Sessions),
 	}
 }
 
@@ -625,6 +636,9 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 			return finish(res, opts, true)
 		}
 		runOpts.ConfigDir = clone
+	}
+	if opts.Sessions > 1 {
+		return runSessions(caseDir, ws, key, runOpts, opts, res)
 	}
 	started := time.Now()
 	ar, attempts := runAgent(ws, key, runOpts, opts, &res, 0)
@@ -785,6 +799,7 @@ func merge(res, scored Result) Result {
 	scored.Case, scored.Run, scored.Workspace = res.Case, res.Run, res.Workspace
 	scored.CostUSD, scored.Turns, scored.Seconds, scored.Escalated = res.CostUSD, res.Turns, res.Seconds, res.Escalated
 	scored.Rounds = res.Rounds
+	scored.Sessions = res.Sessions
 	scored.Suite, scored.Invalid, scored.InvalidReason = res.Suite, res.Invalid, res.InvalidReason
 	scored.Failed, scored.FailReason = res.Failed, res.FailReason
 	scored.FinalMessage = res.FinalMessage
@@ -894,7 +909,7 @@ func Summary(agg Aggregate) string {
 		return planlessSummary(agg)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s", agg.TS, agg.Model, len(agg.Cases), aggregateTotals(agg), roundsTotals(agg))
+	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s", agg.TS, agg.Model, len(agg.Cases), aggregateTotals(agg), roundsTotals(agg)+sessionsTotals(agg))
 	if agg.Corpus != "" {
 		fmt.Fprintf(&b, " · corpus: %s", agg.Corpus)
 	}
