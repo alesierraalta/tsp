@@ -147,6 +147,24 @@ func TestD3ChangedBodyCannotBeFixed(t *testing.T) {
 	put(t, d, "value_test.go", strings.ReplaceAll(redTest, "!= 1", "!= 0"))
 	review(t, d, 1, "test-changed", 0, 0, 0, 0, 1, 1)
 }
+func TestPythonDecoratorChangeNeedsReview(t *testing.T) {
+	d := repo(t)
+	if out, err := exec.Command("python3", "-m", "pytest", "--version").CombinedOutput(); err != nil {
+		t.Skipf("pytest unavailable: %s", out)
+	}
+	source := "import pytest\n# Keeps the parameter promise.\n@pytest.mark.parametrize(\n    \"want\", [pytest.param(2, id=\"expected\", marks=pytest.mark.skipif(False, reason=\") ]\"))],\n)\ndef test_value(want):\n    assert 1 == want\n"
+	put(t, d, "test_value.py", source)
+	if out, code := findings.Record(d, "python3 -m pytest test_value.py", wait); code != 0 {
+		t.Fatalf("record: %d %s", code, out)
+	}
+	put(t, d, "test_value.py", strings.ReplaceAll(source, "pytest.param(2,", "pytest.param(1,"))
+	out, code := findings.Check(d, wait)
+	want := "review 1 on topic: 0 fixed, 0 open, 0 new, 0 regressed, 1 need review\nF1 test-changed test_value.py test_value.py::test_value[expected] — Keeps the parameter promise.\n"
+	if code != 1 || out != want {
+		t.Fatalf("decorator change: exit=%d got=%q want=%q", code, out, want)
+	}
+}
+
 func TestD4StatusTransitions(t *testing.T) {
 	d := repo(t)
 	put(t, d, "value_test.go", redTest)
@@ -160,7 +178,7 @@ func TestD4StatusTransitions(t *testing.T) {
 	put(t, d, "value.go", "package sample\nfunc Value() int { return 0 }\n")
 	review(t, d, 4, "regressed", 0, 0, 0, 1, 0, 1)
 	put(t, d, "value.go", "not valid Go")
-	review(t, d, 5, "unknown", 0, 0, 0, 0, 1, 1)
+	review(t, d, 5, "unknown", 0, 0, 0, 0, 1, 2)
 	put(t, d, "value.go", "package sample\nfunc Value() int { return 0 }\n")
 	put(t, d, "value_test.go", "package sample\n")
 	review(t, d, 6, "missing", 0, 0, 0, 0, 1, 1)

@@ -377,7 +377,8 @@ Its summary counts newly fixed, still open, new and regressed findings. This tra
 witnesses, not instructions for an agent to hunt for more bugs.
 
 Check exits 0 when nothing remains unresolved (including an empty registry), 1 for unresolved
-findings, and 2 when it cannot judge. Record exits 0 for recorded or refreshed witnesses, 1 for
+findings, and 2 when it cannot judge a finding (a suite does not build or times out), or the
+registry cannot be read. Record exits 0 for recorded or refreshed witnesses, 1 for
 none, and 2 for errors. Re-recording a failing witness refreshes its body fingerprint rather
 than allocating another id.
 

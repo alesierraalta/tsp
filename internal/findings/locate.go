@@ -110,7 +110,11 @@ func pythonBody(source, test string, parents []string) (string, string) {
 			}
 			end++
 		}
-		promise := commentPromise(lines[:i], "#")
+		start := pythonDecoratorStart(lines, i)
+		if start < 0 {
+			return "", ""
+		}
+		promise := commentPromise(lines[:start], "#")
 		for j := i + 1; j < end; j++ {
 			s := strings.TrimSpace(lines[j])
 			if s == "" {
@@ -128,9 +132,60 @@ func pythonBody(source, test string, parents []string) (string, string) {
 			}
 			break
 		}
-		return strings.TrimRight(strings.Join(lines[i:end], ""), " \t\r\n"), promise
+		return strings.TrimRight(strings.Join(lines[start:end], ""), " \t\r\n"), promise
 	}
 	return "", ""
+}
+
+func pythonDecoratorStart(lines []string, def int) int {
+	start := def
+	stack := ""
+	for i, line := range lines[:def] {
+		text := strings.TrimSpace(line)
+		if stack == "" {
+			if text == "" || strings.HasPrefix(text, "#") {
+				continue
+			}
+			if !strings.HasPrefix(text, "@") || indentation(line) != indentation(lines[def]) {
+				start = def
+				continue
+			}
+			if start == def {
+				start = i
+			}
+		}
+		for j := 0; j < len(line); j++ {
+			c := line[j]
+			if c == '#' {
+				break
+			}
+			if c == '\'' || c == '"' {
+				if strings.HasPrefix(line[j:], strings.Repeat(string(c), 3)) {
+					return -1
+				}
+				end := quotedEnd(line, j)
+				if end <= j+1 || line[end-1] != c {
+					return -1
+				}
+				j = end - 1
+				continue
+			}
+			if strings.ContainsRune("([{", rune(c)) {
+				stack += string(c)
+			} else if close := strings.IndexByte(")]}", c); close >= 0 {
+				if len(stack) == 0 || stack[len(stack)-1] != "([{"[close] {
+					return -1
+				}
+				stack = stack[:len(stack)-1]
+			} else if c == '\\' {
+				return -1
+			}
+		}
+	}
+	if stack != "" {
+		return -1
+	}
+	return start
 }
 
 func commentPromise(lines []string, marker string) string {

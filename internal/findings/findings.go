@@ -178,6 +178,7 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	}
 	runs := map[string]run{}
 	fixed, open, newCount, regressed, need := 0, 0, 0, 0, 0
+	cannotJudge := false
 	var lines strings.Builder
 	for i := range r.Findings {
 		f := &r.Findings[i]
@@ -231,6 +232,7 @@ func Check(dir string, timeout time.Duration) (string, int) {
 				fixed++
 			}
 		}
+		cannotJudge = cannotJudge || f.Status == "unknown"
 		f.Reviewed = true
 		fmt.Fprintf(&lines, "%s %s %s %s", f.ID, f.Status, f.File, f.Test)
 		if f.Promise != "" {
@@ -249,6 +251,9 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	code := 0
 	if open+newCount+regressed+need > 0 {
 		code = 1
+	}
+	if cannotJudge {
+		code = 2
 	}
 	return report + "\n" + lines.String(), code
 }
