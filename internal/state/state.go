@@ -61,6 +61,11 @@ func Path() (string, error) {
 
 // resolveRoot answers the directory that holds state.json, its backups and the update cache; see Path.
 func resolveRoot() (string, error) {
+	return Root()
+}
+
+// Root resolves the directory holding state.json.
+func Root() (string, error) {
 	for _, name := range []string{"TSP_HOME", "TPP_HOME", "RDD_PLUS_HOME"} {
 		if root := os.Getenv(name); root != "" {
 			return root, nil
@@ -254,6 +259,11 @@ func decode(data []byte, path string) (*State, error) {
 }
 
 func writeAtomic(path string, data []byte) error {
+	return WriteAtomic(path, data)
+}
+
+// WriteAtomic replaces path using a private temporary file in the same directory.
+func WriteAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	temporary, err := os.CreateTemp(dir, ".state-*.tmp")
 	if err != nil {

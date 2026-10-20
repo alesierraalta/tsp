@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -48,6 +49,7 @@ func runCapture(dir string, argv []string, timeout time.Duration) (int, string) 
 	argv = suiteArgv(dir, argv)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
 	boundProcessTree(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
@@ -148,6 +150,17 @@ func goPatternsCover(patterns []string, dir string) bool {
 		}
 	}
 	return false
+}
+
+// SupportsPerTest reports whether the shared runner can read individual outcomes.
+func SupportsPerTest(suite string) bool {
+	_, parser, err := perTestCommand(suite)
+	return err == nil && parser != nil
+}
+
+// PerTest runs the same per-test runner used by RedCheck.
+func PerTest(dir, suite string, timeout time.Duration) (map[string]bool, int, string, error) {
+	return perTest(dir, suite, timeout)
 }
 
 // perTest runs the suite and returns each test's outcome by name. A runner without a per-test

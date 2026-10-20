@@ -9,6 +9,29 @@ import (
 	"time"
 )
 
+func TestPerTestDoesNotWritePythonCache(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real Python runner")
+	}
+	t.Setenv("TSP_HOME", t.TempDir())
+	t.Setenv("PYTHONDONTWRITEBYTECODE", "")
+	dir := t.TempDir()
+	if out, err := exec.Command("python3", "-m", "pytest", "--version").CombinedOutput(); err != nil {
+		t.Skipf("pytest unavailable: %s", out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "test_sample.py"), []byte("def test_sample():\n    assert True\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outcomes, code, out, err := PerTest(dir, "python3 -m pytest test_sample.py", 30*time.Second)
+	if err != nil || code != 0 || !outcomes["test_sample.py::test_sample"] {
+		t.Fatalf("per-test outcome: %v %d %v %s", outcomes, code, err, out)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "test_sample.py" {
+		t.Fatalf("runner wrote into repository: %v %v", entries, err)
+	}
+}
+
 func TestParseTAP(t *testing.T) {
 	out := "TAP version 13\n# Subtest: escapes tags\nok 1 - escapes tags\n  ---\n  duration_ms: 0.8\n  ...\nnot ok 2 - escapes single quotes\n  ---\n  error: 'x'\n  ...\n# Subtest: file\n    ok 1 - nested case\nnot ok 3 - file\n1..3\n"
 	got := parseTAP(out)
