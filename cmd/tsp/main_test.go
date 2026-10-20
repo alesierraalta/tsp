@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -59,6 +60,157 @@ func TestRunShellBoundsARowWhoseDescendantHoldsThePipes(t *testing.T) {
 	if elapsed > 3*time.Second {
 		t.Fatalf("the row ran %s against a 300ms timeout: the bound held only until the descendant that inherited the pipes exited", elapsed)
 	}
+}
+
+func verdictCLI(t *testing.T) (func(int, string, string, ...string), string, string) {
+	t.Helper()
+	t.Setenv("TSP_HOME", t.TempDir())
+	dir, bin := t.TempDir(), buildCLI(t)
+	git := func(args ...string) {
+		t.Helper()
+		c := exec.Command("git", args...)
+		c.Dir = dir
+		if b, e := c.CombinedOutput(); e != nil {
+			t.Fatalf("git: %v %s", e, b)
+		}
+	}
+	git("init", "-b", "topic")
+	git("config", "user.name", "Test")
+	git("config", "user.email", "test@example.invalid")
+	for name, text := range map[string]string{"go.mod": "module witness\n\ngo 1.22\n", "value.go": "package witness\nfunc Value() int { return 0 }\n"} {
+		if e := os.WriteFile(filepath.Join(dir, name), []byte(text), 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	git("add", ".")
+	git("commit", "-qm", "base")
+	if e := os.WriteFile(filepath.Join(dir, "value_test.go"), []byte("package witness\nimport \"testing\"\nfunc TestValue(t *testing.T) { if Value()!=1 { t.Fatal(\"broken\") } }\n"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	run := func(code int, stdout, stderr string, args ...string) {
+		t.Helper()
+		c := exec.Command(bin, append([]string{"findings"}, args...)...)
+		c.Dir = dir
+		var out, err bytes.Buffer
+		c.Stdout = &out
+		c.Stderr = &err
+		e := c.Run()
+		got := 0
+		if ee := new(exec.ExitError); errors.As(e, &ee) {
+			got = ee.ExitCode()
+		} else if e != nil {
+			t.Fatal(e)
+		}
+		if got != code || out.String() != stdout || err.String() != stderr {
+			t.Fatalf("%v: exit=%d stdout=%q stderr=%q; want %d %q %q", args, got, out.String(), err.String(), code, stdout, stderr)
+		}
+	}
+	run(0, "F1 recorded value_test.go witness.TestValue\n", "", "record")
+	files, _ := filepath.Glob(filepath.Join(os.Getenv("TSP_HOME"), "findings", "*", "*.json"))
+	if len(files) != 1 {
+		t.Fatal(files)
+	}
+	return run, files[0], dir
+}
+
+func TestFindingsVerdictLifecycle(t *testing.T) {
+	run, path, dir := verdictCLI(t)
+	testPath := filepath.Join(dir, "value_test.go")
+	body, err := os.ReadFile(testPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(testPath, bytes.ReplaceAll(body, []byte("broken"), []byte("changed")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	text := "package witness\nimport \"os\"\nfunc init() { f,_:=os.OpenFile(os.Getenv(\"TSP_HOME\")+\"/ran\", os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600); f.WriteString(\"x\"); f.Close() }\nfunc Value() int { return 0 }\n"
+	if err = os.WriteFile(filepath.Join(dir, "value.go"), []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for n, decision := range []string{"rejected", "wontfix"} {
+		run(0, "F1 "+decision+": deliberate\n", "", "verdict", "F1", decision, "--reason", "deliberate")
+		data, e := os.ReadFile(path)
+		if e != nil {
+			t.Fatal(e)
+		}
+		var r struct {
+			Findings []struct {
+				Fingerprint string
+				Verdict     *struct{ Decision, Reason, Fingerprint, Commit string }
+			}
+		}
+		if e = json.Unmarshal(data, &r); e != nil || len(r.Findings) != 1 || r.Findings[0].Verdict == nil {
+			t.Fatalf("stored verdict: %s %v", data, e)
+		}
+		v := r.Findings[0].Verdict
+		head, e := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+		if e != nil || v.Decision != decision || v.Reason != "deliberate" || len(v.Fingerprint) != 64 || v.Fingerprint == r.Findings[0].Fingerprint || v.Commit != strings.TrimSpace(string(head)) {
+			t.Fatalf("verdict metadata: %+v %v", v, e)
+		}
+		marker := filepath.Join(os.Getenv("TSP_HOME"), "ran")
+		before, _ := os.ReadFile(marker)
+		run(0, fmt.Sprintf("review %d on topic: 0 fixed, 0 open, 0 new, 0 regressed\nF1 %s value_test.go witness.TestValue — deliberate\n", 2*n+1, decision), "", "check")
+		after, _ := os.ReadFile(marker)
+		if !bytes.Equal(before, after) {
+			t.Fatal("closed finding scheduled a suite")
+		}
+		run(0, "F1 verdict cleared\n", "", "verdict", "F1", "clear")
+		data, e = os.ReadFile(path)
+		if e != nil || bytes.Contains(data, []byte(`"verdict"`)) {
+			t.Fatalf("verdict not cleared: %s %v", data, e)
+		}
+		run(1, fmt.Sprintf("review %d on topic: 0 fixed, 1 open, 0 new, 0 regressed\nF1 open value_test.go witness.TestValue\n", 2*n+2), "", "check")
+	}
+}
+
+func TestFindingsVerdictReopens(t *testing.T) {
+	run, _, dir := verdictCLI(t)
+	run(0, "F1 rejected: deliberate\n", "", "verdict", "F1", "rejected", "--reason", "deliberate")
+	path := filepath.Join(dir, "value_test.go")
+	data, e := os.ReadFile(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(path, bytes.ReplaceAll(data, []byte("!=1"), []byte("!=0")), 0600); e != nil {
+		t.Fatal(e)
+	}
+	line := "F1 test-changed value_test.go witness.TestValue"
+	run(1, "review 1 on topic: 0 fixed, 0 open, 0 new, 0 regressed, 1 need review\n"+line+" (verdict dropped: test changed)\n", "", "check")
+	run(1, "review 2 on topic: 0 fixed, 0 open, 0 new, 0 regressed, 1 need review\n"+line+"\n", "", "check")
+}
+
+func TestFindingsVerdictRefusals(t *testing.T) {
+	run, path, dir := verdictCLI(t)
+	before, _ := os.ReadFile(path)
+	unchanged := func() {
+		t.Helper()
+		after, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("refusal changed registry: %v", err)
+		}
+	}
+	for _, tc := range []struct {
+		args    []string
+		message string
+	}{
+		{[]string{"F99", "clear"}, "unknown finding F99"},
+		{[]string{"F1", "invalid"}, "verdict must be rejected, wontfix or clear"},
+		{[]string{"F1", "rejected"}, "rejected requires a non-empty --reason"},
+		{[]string{"F1", "wontfix", "--reason", "  "}, "wontfix requires a non-empty --reason"},
+	} {
+		run(2, "", "tsp findings: "+tc.message+"\n", append([]string{"verdict"}, tc.args...)...)
+		unchanged()
+	}
+	outside := t.TempDir()
+	c := exec.Command("git", "-C", outside, "rev-parse", "--show-toplevel")
+	b, _ := c.CombinedOutput()
+	run(2, "", "tsp findings: git rev-parse --show-toplevel: "+strings.TrimSpace(string(b))+"\n", "verdict", "F1", "clear", "--cwd", outside)
+	unchanged()
+	if b, e := exec.Command("git", "-C", dir, "switch", "--detach").CombinedOutput(); e != nil {
+		t.Fatalf("detach: %v %s", e, b)
+	}
+	run(2, "", "tsp findings: detached HEAD: findings require a branch\n", "verdict", "F1", "clear")
+	unchanged()
 }
 
 func TestCLIContract(t *testing.T) {

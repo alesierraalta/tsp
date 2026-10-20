@@ -11,6 +11,7 @@ import (
 // exit 2 and read it as a failed call; the usage is the answer, so it exits 0. A flag the command does not
 // know is still a usage error.
 func TestHelpFlagExitsZeroAndAnUnknownFlagStaysAUsageError(t *testing.T) {
+	t.Setenv("TSP_HOME", t.TempDir())
 	bin := buildCLI(t)
 	dir := t.TempDir()
 	run := func(args ...string) (int, string) {
@@ -26,9 +27,16 @@ func TestHelpFlagExitsZeroAndAnUnknownFlagStaysAUsageError(t *testing.T) {
 		}
 		return 0, string(out)
 	}
+	for _, args := range [][]string{{"findings"}, {"findings", "no-such-command"}} {
+		code, out := run(args...)
+		if code != 2 || !strings.Contains(out, "Usage of findings:") {
+			t.Fatalf("findings usage: %v exited %d: %s", args, code, out)
+		}
+	}
 	for _, sub := range [][]string{
 		{"plan", "add-evidence"}, {"plan", "init"}, {"feedback"}, {"doctor"}, {"check"}, {"redcheck"},
 		{"bench", "run"}, {"bench", "adjudicate"}, {"sync"},
+		{"findings"}, {"findings", "record"}, {"findings", "check"}, {"findings", "verdict"},
 	} {
 		for _, help := range []string{"-h", "--help"} {
 			code, out := run(append(append([]string{}, sub...), help)...)

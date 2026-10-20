@@ -25,6 +25,7 @@ import (
 	"github.com/alesierraalta/tsp/internal/evidence"
 	"github.com/alesierraalta/tsp/internal/feature"
 	"github.com/alesierraalta/tsp/internal/feedback"
+	"github.com/alesierraalta/tsp/internal/findings"
 	"github.com/alesierraalta/tsp/internal/gate"
 	"github.com/alesierraalta/tsp/internal/hookcmd"
 	"github.com/alesierraalta/tsp/internal/mode"
@@ -76,6 +77,10 @@ commands:
            new test fails on the unmodified code, 1 when none does or none was added, 2 when nothing
            could be judged
            ([--cwd <dir>] [--suite <test command>] [--timeout <duration>])
+  findings record defect witnesses after a TSP run; check their state at the next review
+           (record [--cwd <dir>] [--suite <test command>] [--timeout <duration>])
+           (check [--cwd <dir>] [--timeout <duration>])
+           (verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear)
   status   report the local installation state and optional features
   update   check the Go module proxy for a newer release and install it through go install,
            printing the exact command when go is absent
@@ -199,6 +204,8 @@ func main() {
 		os.Exit(runCheck(os.Args[2:]))
 	case "redcheck":
 		os.Exit(runRedcheck(os.Args[2:]))
+	case "findings":
+		os.Exit(runFindings(os.Args[2:]))
 	case "status":
 		os.Exit(runStatus(os.Args[2:]))
 	case "update":
@@ -942,6 +949,60 @@ func runCheck(args []string) int {
 }
 
 // runRedcheck tells a testing agent which of its new tests pin nothing: they pass on the code HEAD holds.
+func runFindings(args []string) int {
+	const help = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\n"
+	if len(args) == 0 || (args[0] != "record" && args[0] != "check" && args[0] != "verdict") {
+		fmt.Fprint(os.Stderr, help)
+		if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+			return 0
+		}
+		return 2
+	}
+	fs := flag.NewFlagSet("findings "+args[0], flag.ContinueOnError)
+	cwd := fs.String("cwd", ".", "directory inside the repository")
+	timeout := fs.Duration("timeout", 5*time.Minute, "cap for each suite run")
+	var suite, reason, id, decision string
+	flags := args[1:]
+	if args[0] == "verdict" {
+		fs.StringVar(&reason, "reason", "", "why the finding is closed")
+		if len(args) >= 3 {
+			id, decision, flags = args[1], args[2], args[3:]
+		}
+	}
+	if args[0] == "record" {
+		fs.StringVar(&suite, "suite", "", "test command (default: inferred from changed tests)")
+	}
+	if code, ok := parseFlags(fs, flags); !ok {
+		return code
+	}
+	if args[0] == "verdict" {
+		if id == "" || fs.NArg() != 0 {
+			fmt.Fprintln(os.Stderr, "tsp findings: verdict requires an id and rejected, wontfix or clear")
+			return 2
+		}
+		out, code := findings.SetVerdict(*cwd, id, decision, reason)
+		if code == 2 {
+			fmt.Fprint(os.Stderr, out)
+		} else {
+			fmt.Print(out)
+		}
+		return code
+	}
+	if fs.NArg() != 0 || *timeout <= 0 {
+		fmt.Fprint(os.Stderr, help)
+		return 2
+	}
+	var out string
+	var code int
+	if args[0] == "record" {
+		out, code = findings.Record(*cwd, suite, *timeout)
+	} else {
+		out, code = findings.Check(*cwd, *timeout)
+	}
+	fmt.Print(out)
+	return code
+}
+
 func runRedcheck(args []string) int {
 	fs := flag.NewFlagSet("redcheck", flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
