@@ -385,7 +385,7 @@ func oracleJudge(ws, file, contract string, names []string, opts Options, realAg
 }
 
 func oracleParse(answer string, names []string) ([]OracleTest, error) {
-	if err := oracleUniqueKeys(json.NewDecoder(strings.NewReader(answer))); err != nil {
+	if err := oracleUniqueKeys(json.NewDecoder(strings.NewReader(answer)), 0); err != nil {
 		return nil, fmt.Errorf("parse verdict: %w", err)
 	}
 	var v struct {
@@ -416,7 +416,12 @@ func oracleParse(answer string, names []string) ([]OracleTest, error) {
 	return v.Tests, nil
 }
 
-func oracleUniqueKeys(d *json.Decoder) error {
+// oracleSchemaKeys are the exact keys each object level may hold. encoding/json matches field names without
+// regard to case, so "Tests" or "Verdict" would silently overwrite "tests" or "verdict": every key is checked
+// byte for byte before decoding, and anything else makes the answer unparseable, which keeps its tests.
+var oracleSchemaKeys = []map[string]bool{{"tests": true}, {"name": true, "verdict": true, "reason": true}}
+
+func oracleUniqueKeys(d *json.Decoder, level int) error {
 	tok, err := d.Token()
 	if err != nil {
 		return err
@@ -427,6 +432,9 @@ func oracleUniqueKeys(d *json.Decoder) error {
 	}
 	switch delim {
 	case '{':
+		if level >= len(oracleSchemaKeys) {
+			return errors.New("unexpected object")
+		}
 		seen := map[string]bool{}
 		for d.More() {
 			key, err := d.Token()
@@ -434,17 +442,17 @@ func oracleUniqueKeys(d *json.Decoder) error {
 				return err
 			}
 			s, ok := key.(string)
-			if !ok || seen[s] {
-				return errors.New("duplicate object key")
+			if !ok || seen[s] || !oracleSchemaKeys[level][s] {
+				return fmt.Errorf("unexpected or duplicate object key %q", s)
 			}
 			seen[s] = true
-			if err := oracleUniqueKeys(d); err != nil {
+			if err := oracleUniqueKeys(d, level+1); err != nil {
 				return err
 			}
 		}
 	case '[':
 		for d.More() {
-			if err := oracleUniqueKeys(d); err != nil {
+			if err := oracleUniqueKeys(d, level); err != nil {
 				return err
 			}
 		}

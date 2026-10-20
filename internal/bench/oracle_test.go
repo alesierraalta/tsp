@@ -36,8 +36,13 @@ func oracleReading(t *testing.T) (string, Options) {
 }
 
 func TestOracleBlindInputAndRecomputedReading(t *testing.T) {
-	for _, malformed := range []bool{false, true} {
-		t.Run(map[bool]string{false: "verdicts", true: "unparseable-keeps-tests"}[malformed], func(t *testing.T) {
+	// A key that differs only in case would be merged by Go's case-insensitive decoding, so an "invented" verdict
+	// could overwrite a "contract" one: such an answer must keep its tests exactly like an unparseable one.
+	collision := `{"tests":[{"name":"TestContract","verdict":"contract","reason":"documented"},{"name":"TestInvented","verdict":"contract","reason":"documented"}],` +
+		`"Tests":[{"name":"TestContract","verdict":"invented","reason":"x"},{"name":"TestInvented","verdict":"invented","reason":"x"}]}`
+	for _, mode := range []string{"verdicts", "unparseable-keeps-tests", "case-collision-keeps-tests"} {
+		malformed := mode != "verdicts"
+		t.Run(mode, func(t *testing.T) {
 			run, opts := oracleReading(t)
 			original, _ := os.ReadFile(filepath.Join(run, "aggregate.json"))
 			result, _ := os.ReadFile(filepath.Join(run, "demo/1/result.json"))
@@ -79,8 +84,11 @@ func TestOracleBlindInputAndRecomputedReading(t *testing.T) {
 					t.Fatal("missing judging prompt")
 				}
 				answer := `{"tests":[{"name":"TestContract","verdict":"contract","reason":"documented"},{"name":"TestInvented","verdict":"invented","reason":"not documented"}]}`
-				if malformed {
+				if mode == "unparseable-keeps-tests" {
 					answer = "not JSON"
+				}
+				if mode == "case-collision-keeps-tests" {
+					answer = collision
 				}
 				return AgentResult{Result: answer, CostUSD: 0.25, Turns: 2}, nil
 			}
