@@ -182,9 +182,16 @@ test("without UI nothing renders — and help never spawns a process", async () 
 // The TSP offer: after a run that changed source code, Pi asks in the chat whether to run TSP; "Sí" sends the
 // identity prompt "haz el TSP" as if the user typed it. Every collaborator is faked: no Pi, no files.
 function offerHarness(opts = {}) {
-  const { hasUI = true, optedOut = false } = opts;
+  const { hasUI = true, optedOut = false, env = {}, findings = {} } = opts;
   const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
-  const asked = [], sent = [];
+  const asked = [], sent = [], calls = [], notes = [];
+  // findings maps a findings subcommand to the child it answers with; a missing one answers exit 0, no output.
+  const exec = async (argv, o) => {
+    calls.push({ argv: [...argv], cwd: o.cwd });
+    const outcome = findings[argv[1]] ?? { stdout: "", stderr: "", code: 0 };
+    if (outcome instanceof Error) throw outcome;
+    return outcome;
+  };
   const handlers = {};
   const pi = {
     registerCommand: () => {},
@@ -192,8 +199,11 @@ function offerHarness(opts = {}) {
     on: (event, handler) => { handlers[event] = handler; },
     sendUserMessage: (text) => sent.push(text),
   };
-  tppExtension(pi, { optedOut: () => optedOut });
-  const ctx = { hasUI, cwd: "/repo", ui: { select: async (title, options) => { asked.push({ title, options }); return answer; } } };
+  tppExtension(pi, { optedOut: () => optedOut, env, exec });
+  const ctx = { hasUI, cwd: "/repo", ui: {
+    select: async (title, options) => { asked.push({ title, options }); return answer; },
+    notify: (message, type) => notes.push({ message, type }),
+  } };
   const run = async (prompt, edits, { aborted = false } = {}) => {
     await handlers.before_agent_start?.({ type: "before_agent_start", messageType: "user", prompt }, ctx);
     for (const [toolName, path, isError = false] of edits) {
@@ -201,7 +211,7 @@ function offerHarness(opts = {}) {
     }
     await handlers.agent_settled({ type: "agent_settled", aborted }, ctx);
   };
-  return { asked, sent, run };
+  return { asked, sent, calls, notes, run };
 }
 
 test("a run that edits source code ends with the TSP question, and Sí sends haz el TSP", async () => {
@@ -241,6 +251,56 @@ test("no question after a TSP run, an aborted run, without UI, or when the repo 
   const optedOut = offerHarness({ optedOut: true });
   await optedOut.run("change a", [["edit", "a.go"]]);
   assert.deepEqual(optedOut.asked, []);
+});
+
+test("a delegated child session never asks the TSP question nor touches the findings registry", async () => {
+  const child = offerHarness({ env: { GENTLE_PI_AGENTS_CHILD: "1" } });
+  await child.run("change a", [["edit", "a.go"]]);
+  await child.run("haz el TSP", [["edit", "a_test.go"]]);
+  assert.deepEqual(child.asked, []);
+  assert.deepEqual(child.calls, []);
+  assert.deepEqual(child.sent, []);
+});
+
+test("a TSP run ends by recording its witnesses, then shows the review of every finding", async () => {
+  const review = "review 2 on feat/x: 1 fixed, 0 open, 1 new, 0 regressed\nF1 fixed a_test.go TestA\nF2 open b_test.go TestB\n";
+  for (const [code, type] of [[0, "info"], [1, "warning"], [2, "error"]]) {
+    const h = offerHarness({ findings: { record: { stdout: "F2 recorded b_test.go TestB\n", stderr: "", code: 0 }, check: { stdout: review, stderr: "", code } } });
+    await h.run("haz el TSP", [["edit", "b_test.go"]]);
+    assert.deepEqual(h.calls, [
+      { argv: ["findings", "record", "--cwd", "/repo"], cwd: "/repo" },
+      { argv: ["findings", "check", "--cwd", "/repo"], cwd: "/repo" },
+    ]);
+    assert.deepEqual(h.notes, [{ message: review.trim(), type }], `check exit ${code}`);
+    assert.deepEqual(h.asked, []);
+  }
+});
+
+test("a TSP run that pinned nothing still shows the review; a record that cannot run stops before check", async () => {
+  const none = offerHarness({ findings: { record: { stdout: "no new witness\n", stderr: "", code: 1 }, check: { stdout: "no finding recorded on feat/x\n", stderr: "", code: 0 } } });
+  await none.run("haz el TSP", []);
+  assert.deepEqual(none.calls.map((c) => c.argv[1]), ["record", "check"]);
+  assert.deepEqual(none.notes, [{ message: "no finding recorded on feat/x", type: "info" }]);
+  const detached = offerHarness({ findings: { record: { stdout: "", stderr: "tsp findings: detached HEAD\n", code: 2 } } });
+  await detached.run("haz el TSP", []);
+  assert.deepEqual(detached.calls.map((c) => c.argv[1]), ["record"]);
+  assert.deepEqual(detached.notes, [{ message: "tsp findings: detached HEAD", type: "error" }]);
+  const missing = offerHarness({ findings: { record: new Error("spawn tsp ENOENT") } });
+  await missing.run("haz el TSP", []);
+  assert.deepEqual(missing.notes, [{ message: "tsp: spawn tsp ENOENT", type: "error" }]);
+});
+
+test("the findings review runs only after a TSP run the user asked for, with UI, not aborted, not opted out", async () => {
+  for (const [h, prompt, aborted] of [
+    [offerHarness({ answer: "No" }), "change a", false],
+    [offerHarness(), "haz el TSP", true],
+    [offerHarness({ hasUI: false }), "haz el TSP", false],
+    [offerHarness({ optedOut: true }), "haz el TSP", false],
+  ]) {
+    await h.run(prompt, [["edit", "a.go"]], { aborted });
+    assert.deepEqual(h.calls, [], `${prompt} aborted=${aborted}`);
+    assert.deepEqual(h.notes, []);
+  }
 });
 
 test("dismissing the question (no answer) sends nothing", async () => {
