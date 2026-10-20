@@ -16,8 +16,8 @@ import (
 	"github.com/alesierraalta/tsp/internal/hookcmd"
 )
 
-// perTestCommand rewrites a suite command so it reports one line per test: node's TAP reporter
-// go's -json stream, and pytest's -rA summary. Other runners keep their command and are read as one whole-suite result.
+// perTestCommand selects a runner's per-test reporter, preserving the user's arguments.
+// Other runners keep their command and are read as one whole-suite result.
 // The suite is one field stored as one string, so it is split by the shared rule the hook command uses; a
 // suite the splitter cannot read is reported instead of rewritten, for the same reason the whole-suite path
 // refuses it: the words read so far are the head of a command nobody wrote.
@@ -28,6 +28,19 @@ func perTestCommand(suite string) (argv []string, parser func(string) map[string
 	}
 	if len(fields) == 0 {
 		return nil, nil, nil
+	}
+	runner := fields
+	if fields[0] == "npx" && len(fields) > 1 {
+		runner = fields[1:]
+	}
+	if runner[0] == "jest" {
+		return append(fields, "--json"), parseJSJSON, nil
+	}
+	if runner[0] == "vitest" && len(runner) > 1 && runner[1] == "run" {
+		return append(fields, "--reporter=json"), parseJSJSON, nil
+	}
+	if fields[0] == "cargo" && len(fields) > 1 && fields[1] == "test" {
+		return fields, parseCargo, nil
 	}
 	switch {
 	case fields[0] == "node" && len(fields) > 1 && fields[1] == "--test":
@@ -187,6 +200,45 @@ func perTest(dir, suite string, timeout time.Duration, testFiles ...string) (map
 		tests = map[string]bool{"suite": code == 0}
 	}
 	return tests, code, out, nil
+}
+
+// Jest and Vitest share assertionResults. Combined output can include diagnostics.
+func parseJSJSON(out string) map[string]bool {
+	res := map[string]bool{}
+	for i := 0; i < len(out); i++ {
+		if out[i] != '{' {
+			continue
+		}
+		var report struct {
+			TestResults []struct {
+				AssertionResults []struct{ FullName, Status string }
+			}
+		}
+		if json.NewDecoder(strings.NewReader(out[i:])).Decode(&report) != nil || report.TestResults == nil {
+			continue
+		}
+		for _, file := range report.TestResults {
+			for _, test := range file.AssertionResults {
+				if test.FullName != "" && (test.Status == "passed" || test.Status == "failed") {
+					res[test.FullName] = test.Status == "passed"
+				}
+			}
+		}
+		return res
+	}
+	return res
+}
+
+var cargoLine = regexp.MustCompile(`^test (\S+) \.\.\. (ok|FAILED|ignored)$`)
+
+func parseCargo(out string) map[string]bool {
+	res := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		if m := cargoLine.FindStringSubmatch(strings.TrimSpace(line)); m != nil && m[2] != "ignored" {
+			res[m[1]] = m[2] == "ok"
+		}
+	}
+	return res
 }
 
 var tapLine = regexp.MustCompile(`^( *)(ok|not ok) \d+ - (.*?)(?: # .*)?$`)

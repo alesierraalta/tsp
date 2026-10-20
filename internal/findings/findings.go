@@ -16,6 +16,7 @@ import (
 
 	"github.com/alesierraalta/tsp/internal/bench"
 	"github.com/alesierraalta/tsp/internal/filelock"
+	"github.com/alesierraalta/tsp/internal/hookcmd"
 	"github.com/alesierraalta/tsp/internal/state"
 )
 
@@ -132,7 +133,7 @@ func lockRegistry(path string) (func(), error) {
 	return func() { filelock.Unlock(file); file.Close() }, nil
 }
 
-var unsupportedRunner = errors.New("supported runners: go test, pytest, node --test")
+var unsupportedRunner = errors.New("supported runners: go test, pytest, node --test, jest, vitest run, cargo test")
 
 func failure(e error) (string, int) { return "tsp findings: " + e.Error() + "\n", 2 }
 
@@ -281,7 +282,11 @@ func Check(dir string, timeout time.Duration) (string, int) {
 		if !ok {
 			tests, code, _, err := bench.PerTest(top, f.Suite, timeout)
 			_, whole := tests["suite"]
-			result = run{tests: tests, failed: err != nil || whole || len(tests) == 0 || code < 0 || code > 1, code: code}
+			// Cargo uses 101 for test failures as well as build errors; only a
+			// parsed per-test report makes that exit code judgeable.
+			argv, _ := hookcmd.ShellWords(f.Suite)
+			cargoFailure := code == 101 && len(argv) > 1 && argv[0] == "cargo" && argv[1] == "test"
+			result = run{tests: tests, failed: err != nil || whole || len(tests) == 0 || code < 0 || (code > 1 && !cargoFailure), code: code}
 			runs[f.Suite] = result
 		}
 		previous := f.Status

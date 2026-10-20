@@ -950,7 +950,7 @@ func runCheck(args []string) int {
 
 // runRedcheck tells a testing agent which of its new tests pin nothing: they pass on the code HEAD holds.
 func runFindings(args []string) int {
-	const help = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\n"
+	const help = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\nSupported suites: go test, pytest, node --test, jest, vitest run (also npx), cargo test.\nCargo witnesses must be in recognized test files (e.g. tests/), not inline unit tests.\n"
 	if len(args) == 0 || (args[0] != "record" && args[0] != "check" && args[0] != "verdict") {
 		fmt.Fprint(os.Stderr, help)
 		if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
@@ -970,7 +970,7 @@ func runFindings(args []string) int {
 		}
 	}
 	if args[0] == "record" {
-		fs.StringVar(&suite, "suite", "", "test command (default: inferred from changed tests)")
+		fs.StringVar(&suite, "suite", "", "test command: go test, pytest, node --test, jest, vitest run (also npx), cargo test (tests/ witnesses, not inline unit tests); default: inferred")
 	}
 	if code, ok := parseFlags(fs, flags); !ok {
 		return code
@@ -1006,7 +1006,7 @@ func runFindings(args []string) int {
 func runRedcheck(args []string) int {
 	fs := flag.NewFlagSet("redcheck", flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
-	suite := fs.String("suite", "", "command that runs the changed tests (default: their Go packages, pytest on changed .py tests, or node --test on them)")
+	suite := fs.String("suite", "", "test command: go test, pytest, node --test, jest, vitest run (also npx), cargo test (tests/ witnesses, not inline unit tests); default: Go packages, changed Python/Node files, or package.json test runner")
 	timeout := fs.Duration("timeout", 5*time.Minute, "cap for each suite run")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
