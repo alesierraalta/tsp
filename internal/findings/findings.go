@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/alesierraalta/tsp/internal/bench"
+	"github.com/alesierraalta/tsp/internal/filelock"
 	"github.com/alesierraalta/tsp/internal/state"
 )
 
@@ -74,7 +76,12 @@ func load(dir string) (*registry, string, string, error) {
 		return nil, "", "", e
 	}
 	sum := sha256.Sum256([]byte(filepath.Clean(common)))
-	path := filepath.Join(root, "findings", fmt.Sprintf("%x", sum[:8]), url.PathEscape(branch)+".json")
+	name := url.PathEscape(branch)
+	if len(name) > 200 {
+		hash := sha256.Sum256([]byte(branch))
+		name = name[:175] + "-" + fmt.Sprintf("%x", hash[:12])
+	}
+	path := filepath.Join(root, "findings", fmt.Sprintf("%x", sum[:8]), name+".json")
 	r := &registry{Version: 1, Repository: top, Branch: branch, NextID: 1}
 	b, e := os.ReadFile(path)
 	if errors.Is(e, os.ErrNotExist) {
@@ -110,6 +117,21 @@ func save(r *registry, path string) error {
 	return state.WriteAtomic(path, append(b, '\n'))
 }
 
+func lockRegistry(path string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := filelock.Lock(file); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return func() { filelock.Unlock(file); file.Close() }, nil
+}
+
 var unsupportedRunner = errors.New("supported runners: go test, pytest, node --test")
 
 func failure(e error) (string, int) { return "tsp findings: " + e.Error() + "\n", 2 }
@@ -134,6 +156,15 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 		return "no defect witnesses recorded\n", 1
 	}
 	commit, e := git(top, "rev-parse", "HEAD")
+	if e != nil {
+		return failure(e)
+	}
+	unlock, e := lockRegistry(path)
+	if e != nil {
+		return failure(e)
+	}
+	defer unlock()
+	r, _, _, e = load(dir)
 	if e != nil {
 		return failure(e)
 	}
@@ -174,6 +205,15 @@ func SetVerdict(dir, id, decision, reason string) (string, int) {
 	if decision != "clear" && strings.TrimSpace(reason) == "" {
 		return failure(fmt.Errorf("%s requires a non-empty --reason", decision))
 	}
+	unlock, err := lockRegistry(path)
+	if err != nil {
+		return failure(err)
+	}
+	defer unlock()
+	r, _, _, err = load(dir)
+	if err != nil {
+		return failure(err)
+	}
 	for i := range r.Findings {
 		f := &r.Findings[i]
 		if f.ID != id {
@@ -207,6 +247,7 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	if len(r.Findings) == 0 {
 		return fmt.Sprintf("no findings recorded on %s\n", r.Branch), 0
 	}
+	original := append([]Finding(nil), r.Findings...)
 	type run struct {
 		tests  map[string]bool
 		failed bool
@@ -243,12 +284,16 @@ func Check(dir string, timeout time.Duration) (string, int) {
 			result = run{tests: tests, failed: err != nil || whole || len(tests) == 0 || code < 0 || code > 1, code: code}
 			runs[f.Suite] = result
 		}
-		_, fileErr := os.Stat(filepath.Join(top, f.File))
-		fileGone := f.File != "" && errors.Is(fileErr, os.ErrNotExist)
 		previous := f.Status
 		passed, ran := result.tests[f.Test]
+		if file == "" && ran {
+			file, fingerprint, _ = relocate(top, *f)
+			if file != "" {
+				f.File = file
+			}
+		}
 		switch {
-		case fileGone:
+		case !ran && !result.failed:
 			f.Status = "missing"
 			need++
 		case result.failed && result.code != 0:
@@ -289,6 +334,24 @@ func Check(dir string, timeout time.Duration) (string, int) {
 		f.Reviewed = true
 		writeLine(*f, f.Promise, suffix)
 	}
+	unlock, e := lockRegistry(path)
+	if e != nil {
+		return failure(e)
+	}
+	defer unlock()
+	latest, _, _, e := load(dir)
+	if e != nil {
+		return failure(e)
+	}
+	for i := range latest.Findings {
+		for j, computed := range r.Findings {
+			if latest.Findings[i].ID == computed.ID && reflect.DeepEqual(latest.Findings[i], original[j]) {
+				latest.Findings[i] = computed
+				break
+			}
+		}
+	}
+	r = latest
 	r.Review++
 	report := fmt.Sprintf("review %d on %s: %d fixed, %d open, %d new, %d regressed", r.Review, r.Branch, fixed, open, newCount, regressed)
 	if need > 0 {

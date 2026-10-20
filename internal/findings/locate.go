@@ -70,6 +70,43 @@ func locate(root, name string, files []string) (string, string, string) {
 	}
 	return "", "", ""
 }
+func relocate(root string, f Finding) (string, string, string) {
+	if strings.HasSuffix(f.File, "_test.go") {
+		files, _ := filepath.Glob(filepath.Join(root, filepath.Dir(f.File), "*_test.go"))
+		for i, file := range files {
+			files[i], _ = filepath.Rel(root, file)
+		}
+		return locate(root, f.Test, files)
+	}
+	var files []string
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" || entry.Name() == "node_modules" || entry.Name() == ".venv" || entry.Name() == "__pycache__" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		file, err := filepath.Rel(root, path)
+		if err == nil {
+			files = append(files, file)
+		}
+		return nil
+	})
+	for _, file := range files {
+		name := f.Test
+		if parts := strings.SplitN(name, "::", 2); len(parts) == 2 && strings.HasSuffix(file, ".py") {
+			name = filepath.ToSlash(file) + "::" + parts[1]
+		}
+		if found, fingerprint, promise := locate(root, name, []string{file}); found != "" {
+			return found, fingerprint, promise
+		}
+	}
+	return "", "", ""
+}
+
 func first(s string) string    { return strings.TrimSpace(strings.Split(strings.TrimSpace(s), "\n")[0]) }
 func indentation(s string) int { return len(s) - len(strings.TrimLeft(s, " \t")) }
 
