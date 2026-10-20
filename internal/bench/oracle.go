@@ -2,6 +2,7 @@ package bench
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +77,9 @@ func VerifyOracle(run string, opts Options) (OracleReport, error) {
 	agg, err := readAggregate(run)
 	if err != nil {
 		return report, fmt.Errorf("verify-oracle needs a reading with aggregate.json: %w", err)
+	}
+	if err := oracleCheckOutput(run); err != nil {
+		return report, err
 	}
 	workspaces := make([]string, len(agg.Cases))
 	for i, r := range agg.Cases {
@@ -227,15 +232,82 @@ func VerifyOracle(run string, opts Options) (OracleReport, error) {
 		report.Filtered.NoWitness += after.NoWitness
 		report.UnattributedBroken += unknown
 	}
+	return report, oracleWriteOutput(run, report)
+}
+
+func oracleCheckOutput(run string) error {
 	out := filepath.Join(run, "oracle")
-	if err := os.MkdirAll(out, 0755); err != nil {
-		return report, err
+	if _, err := os.Lstat(out); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
 	}
-	if err := writeJSON(filepath.Join(out, "verdicts.json"), report); err != nil {
-		return report, err
+	return filepath.WalkDir(out, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("oracle refuses output symlink %s", path)
+		}
+		return nil
+	})
+}
+
+func oracleWriteOutput(run string, report OracleReport) error {
+	if err := oracleCheckOutput(run); err != nil {
+		return err
 	}
-	err = os.WriteFile(filepath.Join(out, "summary.md"), []byte(report.Summary()), 0644)
-	return report, err
+	reading, err := os.OpenRoot(run)
+	if err != nil {
+		return err
+	}
+	defer reading.Close()
+	if err := reading.Mkdir("oracle", 0755); err != nil && !os.IsExist(err) {
+		return err
+	}
+	before, err := reading.Lstat("oracle")
+	if err != nil {
+		return err
+	}
+	if before.Mode()&os.ModeSymlink != 0 {
+		return errors.New("oracle refuses output symlink")
+	}
+	out, err := reading.OpenRoot("oracle")
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	after, err := out.Stat(".")
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(before, after) {
+		return errors.New("oracle output directory changed")
+	}
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	for _, file := range []struct {
+		name string
+		data []byte
+	}{{"verdicts.json", append(data, '\n')}, {"summary.md", []byte(report.Summary())}} {
+		tmp := ".oracle-" + rand.Text()
+		f, err := out.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err != nil {
+			return err
+		}
+		defer out.Remove(tmp)
+		_, writeErr := f.Write(file.data)
+		closeErr := f.Close()
+		if err := errors.Join(writeErr, closeErr); err != nil {
+			return err
+		}
+		if err := out.Rename(tmp, file.name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func oracleRead(root, rel string) ([]byte, error) {
@@ -465,8 +537,76 @@ func oracleUniqueKeys(d *json.Decoder, level int) error {
 
 var oracleFunctionRE = regexp.MustCompile(`(?m)(?:def\s+(test_[\w]+)|#\[(?:\w+::)?test(?:\([^]]*\))?\]\s*(?:async\s+)?fn\s+([\w]+)\s*\(|(?:test|it)(?:\.[\w]+)?\s*\(\s*['\x22\x60]([^'\x22\x60]+)['\x22\x60])`)
 
+var oracleJSTokens = regexp.MustCompile("(?s)//[^\\n]*|/\\*.*?\\*/|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`|[A-Za-z_$][A-Za-z_0-9$]*|[^\\s]")
+
+func oracleJSNames(data []byte) map[string]string {
+	tokens := oracleJSTokens.FindAllString(string(data), -1)
+	aliases := map[string]string{}
+	contexts := map[int]string{}
+	var stack []string
+	for i, tok := range tokens {
+		switch tok {
+		case "{":
+			stack = append(stack, contexts[i])
+		case "}":
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		case "test", "it", "describe":
+			j := i + 1
+			if j+1 < len(tokens) && tokens[j] == "." && (tokens[j+1] == "only" || tokens[j+1] == "skip" || tokens[j+1] == "todo") {
+				j += 2
+			}
+			if j+2 >= len(tokens) || tokens[j] != "(" {
+				continue
+			}
+			literal := tokens[j+1]
+			if len(literal) < 2 || !strings.ContainsRune("\"'`", rune(literal[0])) || tokens[j+2] != "," || strings.Contains(literal, "${") {
+				continue
+			}
+			var title strings.Builder
+			for rest := literal[1 : len(literal)-1]; rest != ""; {
+				ch, _, tail, err := strconv.UnquoteChar(rest, literal[0])
+				if err != nil {
+					break
+				}
+				title.WriteRune(ch)
+				rest = tail
+			}
+			for k := j + 3; k < len(tokens); k++ {
+				if tokens[k] == "{" {
+					contexts[k] = title.String()
+					break
+				}
+				if tokens[k] == ";" {
+					break
+				}
+			}
+			if tok == "describe" {
+				continue
+			}
+			var parts []string
+			for _, parent := range stack {
+				if parent != "" {
+					parts = append(parts, parent)
+				}
+			}
+			parts = append(parts, title.String())
+			name := strings.Join(parts, " ")
+			aliases[name] = name
+			aliases[strings.Join(parts, "/")] = name
+		}
+	}
+	return aliases
+}
+
+func oracleNameMatches(name, def string) bool {
+	return name == def || strings.HasSuffix(name, "/"+def) || strings.HasSuffix(name, "."+def) || strings.Contains(name, "."+def+"/") || strings.HasSuffix(name, "::"+def) || strings.Contains(name, "/"+def+"/") || strings.Contains(name, "::"+def+"[")
+}
+
 func oracleNames(file string, data []byte, c CatchResult) []string {
 	defined := map[string]bool{}
+	var jsAliases map[string]string
 	if strings.HasSuffix(file, ".go") {
 		if f, e := parser.ParseFile(token.NewFileSet(), file, data, 0); e == nil {
 			for _, decl := range f.Decls {
@@ -474,6 +614,11 @@ func oracleNames(file string, data []byte, c CatchResult) []string {
 					defined[fn.Name.Name] = true
 				}
 			}
+		}
+	} else if ext := filepath.Ext(file); ext == ".js" || ext == ".mjs" || ext == ".cjs" || ext == ".ts" || ext == ".tsx" || ext == ".jsx" {
+		jsAliases = oracleJSNames(data)
+		for _, name := range jsAliases {
+			defined[name] = true
 		}
 	} else {
 		for _, m := range oracleFunctionRE.FindAllStringSubmatch(string(data), -1) {
@@ -485,12 +630,18 @@ func oracleNames(file string, data []byte, c CatchResult) []string {
 		}
 	}
 	selected := map[string]bool{}
+	matched := map[string]bool{}
 	for _, by := range []map[string][]string{c.CaughtBy, c.InvertedBy} {
 		for _, names := range by {
 			for _, name := range names {
 				for def := range defined {
-					if name == def || strings.HasSuffix(name, "/"+def) || strings.HasSuffix(name, "."+def) || strings.Contains(name, "."+def+"/") || strings.HasSuffix(name, "::"+def) || strings.Contains(name, "/"+def+"/") || strings.Contains(name, "::"+def+"[") {
+					matches := oracleNameMatches(name, def)
+					if jsAliases != nil {
+						matches = jsAliases[name] == def
+					}
+					if matches {
 						selected[name] = true
+						matched[def] = true
 					}
 				}
 			}
@@ -498,13 +649,7 @@ func oracleNames(file string, data []byte, c CatchResult) []string {
 	}
 	// Include all definitions too: older catch records do not name every test red on fix/all.
 	for name := range defined {
-		matched := false
-		for s := range selected {
-			if s == name || strings.Contains(s, name) {
-				matched = true
-			}
-		}
-		if !matched {
+		if !matched[name] {
 			selected[name] = true
 		}
 	}
