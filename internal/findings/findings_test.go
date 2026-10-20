@@ -230,7 +230,7 @@ func TestD6ExitCodes(t *testing.T) {
 func TestD7UnsupportedRunnerRefused(t *testing.T) {
 	d := repo(t)
 	put(t, d, "value_test.go", redTest)
-	out, c := findings.Record(d, "cargo test", wait)
+	out, c := findings.Record(d, "make test", wait)
 	if c != 2 || !strings.Contains(out, "go test, pytest, node --test") {
 		t.Fatalf("unsupported: %d %q", c, out)
 	}

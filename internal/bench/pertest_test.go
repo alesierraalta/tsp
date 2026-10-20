@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,34 @@ func TestPerTestDoesNotWritePythonCache(t *testing.T) {
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != 1 || entries[0].Name() != "test_sample.py" {
 		t.Fatalf("runner wrote into repository: %v %v", entries, err)
+	}
+}
+
+func TestCapturedRunnerOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		file, suite string
+		want        map[string]bool
+	}{
+		{"jest-29.7.0.json", "jest", map[string]bool{"outer passes": true, "outer fails": false}},
+		{"vitest-2.1.9.json", "vitest run", map[string]bool{"outer passes": true, "outer fails": false}},
+		{"cargo-1.96.1.txt", "cargo test", map[string]bool{"tests::passes": true, "tests::fails": false}},
+	} {
+		t.Run(tc.suite, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("testdata", tc.file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, parse, err := perTestCommand(tc.suite)
+			if err != nil || parse == nil {
+				t.Fatalf("unsupported: %v", err)
+			}
+			if got := parse(string(data)); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %v want %v", got, tc.want)
+			}
+			if got := parse("build failed: not a report"); len(got) != 0 {
+				t.Fatalf("invalid report: %v", got)
+			}
+		})
 	}
 }
 
@@ -73,6 +102,11 @@ func TestPerTestCommand(t *testing.T) {
 		"sh run-tests.sh":         {"sh", "run-tests.sh"},
 		"python3 -m pytest tests": {"python3", "-m", "pytest", "-rA", "-p", "no:cacheprovider", "tests"},
 		"pytest -q":               {"pytest", "-rA", "-p", "no:cacheprovider", "-q"},
+		"jest --runInBand":        {"jest", "--runInBand", "--json"},
+		"npx jest x.test.js":      {"npx", "jest", "x.test.js", "--json"},
+		"vitest run x.test.ts":    {"vitest", "run", "x.test.ts", "--reporter=json"},
+		"npx vitest run":          {"npx", "vitest", "run", "--reporter=json"},
+		"cargo test --lib":        {"cargo", "test", "--lib"},
 	}
 	for suite, want := range cases {
 		got, _, err := perTestCommand(suite)

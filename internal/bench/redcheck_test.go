@@ -9,6 +9,42 @@ import (
 	"time"
 )
 
+func TestCargoQuietInlineDiagnostic(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real cargo runner")
+	}
+	if _, err := exec.LookPath("cargo"); err != nil {
+		t.Skip("cargo unavailable")
+	}
+	dir := redCheckRepo(t)
+	writeFile(t, dir, "Cargo.toml", "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[lib]\npath = \"lib.rs\"\n")
+	writeFile(t, dir, "lib.rs", "#[test]\nfn promise() { assert_eq!(1, 2); }\n")
+	_, err := RedCheck(dir, "cargo test --quiet", time.Minute)
+	if err == nil || err.Error() != "promise: inline Rust unit tests are not supported; move the test to tests/" {
+		t.Fatalf("diagnostic: %v", err)
+	}
+}
+
+func TestInferPackageTestRunner(t *testing.T) {
+	for _, tc := range []struct{ script, want string }{
+		{"jest --runInBand", "npx jest a.test.ts"},
+		{"npx vitest run --coverage", "npx vitest run a.test.ts"},
+		{"vitest", "npx vitest run a.test.ts"},
+		{"node scripts/jest-helper.js", "node --test a.test.ts"},
+		{"echo jest", "node --test a.test.ts"},
+		{"node --test", "node --test a.test.ts"},
+	} {
+		t.Run(tc.script, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "package.json", `{"scripts":{"test":"`+tc.script+`"}}`)
+			got, err := inferRedCheckSuite(dir, []string{"a.test.ts"})
+			if err != nil || got != tc.want {
+				t.Fatalf("got %q %v, want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
 // redCheckRepo is a git repository whose HEAD holds a Go module with one defect: Order returns "cab"
 // where its contract promises "abc". It also carries an existing table test the agent can extend.
 func redCheckRepo(t *testing.T) string {

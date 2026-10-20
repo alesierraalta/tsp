@@ -363,7 +363,7 @@ green once the defect is fixed. It probes each promise across its input classes,
 promises (order, round trip, never panics) as property tests with generated inputs, and builds inputs
 that must pass a validator with the code's own encoder before perturbing them. It writes no plan file:
 the tests are the deliverable, and `tsp redcheck` says which new tests actually fail on the unmodified
-code (Go, `node --test` and pytest are read test by test). This lean version replaced the plan-driven skill
+code (`go test`, `node --test`, pytest, Jest, `vitest run` and `cargo test` are read test by test). This lean version replaced the plan-driven skill
 after the benchmark showed most of that skill's cost was ceremony; `tsp check` without a plan asks for
 one such failing test, and `tsp plan` and the Stop gate remain for anyone who keeps a plan.
 The other skills are specialized and invoked by name.
@@ -372,7 +372,14 @@ The other skills are specialized and invoked by name.
 
 After a TSP run, run `tsp findings record` before committing the witness tests. At the next
 review, run `tsp findings check`. Both accept `--cwd` and `--timeout`; record also accepts
-`--suite` (Go, pytest or `node --test`). The registry lives outside the repository, under
+`--suite` (`go test`, pytest, `node --test`, `jest`, `npx jest`, `vitest run`,
+`npx vitest run`, or `cargo test`). Cargo witnesses must be in recognized test files
+(such as integration tests under `tests/`), not inline unit tests in production files
+like `src/lib.rs`: copying those files over HEAD would also copy source edits.
+A failing inline Rust unit test is reported with a request to move it to `tests/`.
+Jest/Vitest names include their describe ancestors; skipped/ignored tests are not outcomes.
+An unreadable per-test report falls back to a whole-suite result, never a defect witness.
+The registry lives outside the repository, under
 TSP's state directory, separately for each branch; detached HEAD is refused.
 
 Close a finding with `tsp findings verdict F1 rejected --reason "<why>"` or
@@ -494,7 +501,9 @@ root. `tsp check --no-test-needed "<reason>"` records the waiver in `.tsp-waiver
 fingerprint of the changed production files. Commit it with the change so the reviewer sees why there
 is no test; editing the code again voids it, and it is refused when a plan exists. How to run the changed
 tests is inferred for Go (`go test` on their packages), Python (`python3 -m pytest` on the changed
-`.py` tests) and Node (`node --test`); anything else needs `--suite`. When the tests cannot be run one
+`.py` tests) and Node (`node --test`). When `package.json`'s `scripts.test` starts with
+`jest` or `vitest` (optionally through `npx`), infer `npx jest` or `npx vitest run`
+on the changed files instead. Other runners, including Cargo, need `--suite`. When the tests cannot be run one
 by one, check fails instead of guessing.
 
 It reads no hook payload, no transcript and no host configuration, so anything that can run a
