@@ -307,24 +307,53 @@ func oracleWriteOutput(run string, report OracleReport) error {
 	if err != nil {
 		return err
 	}
-	for _, file := range []struct {
+	// Both artifacts are one report: they are staged first, and published with the verdicts last, so a failed run never
+	// leaves a verdicts.json that no summary describes and the previous summary survives a failed second publish.
+	publish := []struct {
 		name string
 		data []byte
-	}{{"verdicts.json", append(data, '\n')}, {"summary.md", []byte(report.Summary())}} {
+	}{{"summary.md", []byte(report.Summary())}, {"verdicts.json", append(data, '\n')}}
+	for _, file := range publish {
+		info, e := out.Lstat(file.name)
+		if e != nil {
+			if os.IsNotExist(e) {
+				continue
+			}
+			return e
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("oracle report path %s is not a regular file", file.name)
+		}
+	}
+	staged := make([]string, 0, len(publish))
+	for _, file := range publish {
 		tmp := ".oracle-" + rand.Text()
 		f, err := out.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 		if err != nil {
-			return err
+			return errors.Join(err, oracleDiscard(out, staged))
 		}
-		defer out.Remove(tmp)
+		staged = append(staged, tmp)
 		_, writeErr := f.Write(file.data)
 		closeErr := f.Close()
 		if err := errors.Join(writeErr, closeErr); err != nil {
-			return err
+			return errors.Join(err, oracleDiscard(out, staged))
 		}
-		if err := out.Rename(tmp, file.name); err != nil {
-			return err
+	}
+	backup := ""
+	if _, e := out.Lstat("summary.md"); e == nil {
+		backup = ".oracle-" + rand.Text()
+		if err := out.Rename("summary.md", backup); err != nil {
+			return errors.Join(err, oracleDiscard(out, staged))
 		}
+	}
+	if err := out.Rename(staged[0], "summary.md"); err != nil {
+		return errors.Join(err, oracleRestore(out, backup, staged))
+	}
+	if err := out.Rename(staged[1], "verdicts.json"); err != nil {
+		return errors.Join(err, out.Remove("summary.md"), oracleRestore(out, backup, staged))
+	}
+	if backup != "" {
+		return out.Remove(backup)
 	}
 	return nil
 }
@@ -398,14 +427,80 @@ func oracleContract(caseDir string, timeout time.Duration) (string, error) {
 	} else if !os.IsNotExist(e) {
 		return "", e
 	}
-	// go doc reads the original package, but only its documentation/signatures cross the blind boundary. The walk
-	// follows the packages Go itself builds: testdata, _- and .-prefixed directories and a module nested below the
-	// fixture's own module are not part of it. A fixture with no go.mod of its own may hold its module (or one module
-	// per subdirectory) deeper, and those are built, so they are walked.
+	// go doc reads the original package, but only its documentation/signatures cross the blind boundary. The package
+	// set is the one Go itself builds, which go list answers directly for a fixture that has a module of its own; a
+	// fixture without one cannot be listed and is walked with Go's own exclusions instead.
+	dirs, listed := []string(nil), false
+	if _, e := os.Stat(filepath.Join(fixture, "go.mod")); e == nil {
+		dirs, listed = oraclePackageDirs(fixture)
+	}
+	if !listed {
+		walked, e := oracleWalkPackages(fixture)
+		if e != nil {
+			return "", e
+		}
+		dirs = walked
+	}
+	documented := 0
+	for _, dir := range dirs {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		cmd := exec.CommandContext(ctx, "go", "doc", "-all", ".")
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GOWORK=off", "GOPROXY=off")
+		data, e := cmd.CombinedOutput()
+		timedOut := ctx.Err() != nil
+		cancel()
+		if e != nil {
+			if !timedOut && (strings.Contains(string(data), "doc: no buildable Go source files in ") || strings.Contains(string(data), "build constraints exclude all Go files in ") || strings.Contains(string(data), "doc: no source-code package in ")) {
+				continue
+			}
+			return "", fmt.Errorf("go doc contract: %w: %s", e, data)
+		}
+		documented++
+		fmt.Fprintf(&b, "\n## Go package documentation\n%s\n", data)
+	}
+	if len(dirs) > 0 && documented == 0 {
+		return "", errors.New("go doc contract: no package documentation for any of the fixture's Go packages")
+	}
+	return b.String(), nil
+}
+
+// oraclePackageDirs reports the directories of the packages Go builds in the fixture.
+func oraclePackageDirs(fixture string) ([]string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "list", "-f", "{{.Dir}}", "./...")
+	cmd.Dir = fixture
+	cmd.Env = append(os.Environ(), "GOWORK=off", "GOPROXY=off")
+	data, e := cmd.Output()
+	if e != nil || ctx.Err() != nil {
+		return nil, false
+	}
+	var dirs []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line == "" {
+			continue
+		}
+		if !filepath.IsAbs(line) {
+			return nil, false
+		}
+		dirs = append(dirs, line)
+	}
+	if len(dirs) == 0 {
+		return nil, false
+	}
+	sort.Strings(dirs)
+	return dirs, true
+}
+
+// oracleWalkPackages reports the directories that may hold packages when Go cannot list them: testdata, _- and
+// .-prefixed directories and a module nested below the fixture's own module are not part of the build, while a
+// fixture with no go.mod of its own may hold its module (or one module per subdirectory) deeper.
+func oracleWalkPackages(fixture string) ([]string, error) {
 	dirs := map[string]bool{}
 	_, e := os.Stat(filepath.Join(fixture, "go.mod"))
 	ownModule := e == nil
-	err = filepath.Walk(fixture, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(fixture, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -421,41 +516,40 @@ func oracleContract(caseDir string, timeout time.Duration) (string, error) {
 			}
 			return nil
 		}
-		if info.Mode().IsRegular() && strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go") {
+		if info.Mode().IsRegular() && strings.HasSuffix(path, ".go") {
 			dirs[filepath.Dir(path)] = true
 		}
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	var ordered []string
+	ordered := make([]string, 0, len(dirs))
 	for dir := range dirs {
 		ordered = append(ordered, dir)
 	}
 	sort.Strings(ordered)
-	documented := 0
-	for _, dir := range ordered {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		cmd := exec.CommandContext(ctx, "go", "doc", "-all", ".")
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GOWORK=off", "GOPROXY=off")
-		data, e := cmd.CombinedOutput()
-		timedOut := ctx.Err() != nil
-		cancel()
-		if e != nil {
-			if !timedOut && (strings.Contains(string(data), "doc: no buildable Go source files in ") || strings.Contains(string(data), "build constraints exclude all Go files in ")) {
-				continue
-			}
-			return "", fmt.Errorf("go doc contract: %w: %s", e, data)
+	return ordered, nil
+}
+
+func oracleDiscard(out *os.Root, names []string) error {
+	var errs []error
+	for _, name := range names {
+		if err := out.Remove(name); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, err)
 		}
-		documented++
-		fmt.Fprintf(&b, "\n## Go package documentation\n%s\n", data)
 	}
-	if len(ordered) > 0 && documented == 0 {
-		return "", errors.New("go doc contract: no package documentation for any of the fixture's Go packages")
+	return errors.Join(errs...)
+}
+
+func oracleRestore(out *os.Root, backup string, staged []string) error {
+	errs := []error{oracleDiscard(out, staged)}
+	if backup != "" {
+		if err := out.Rename(backup, "summary.md"); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return b.String(), nil
+	return errors.Join(errs...)
 }
 
 func oracleJudge(ws, file, contract string, names []string, opts Options, realAgent bool) (AgentResult, Result, error) {
