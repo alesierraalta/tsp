@@ -2,6 +2,7 @@ package bench
 
 import (
 	"archive/tar"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,9 +10,12 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/alesierraalta/tsp/internal/hookcmd"
 )
 
 // RedCheckReport is what the red check found: which test files the agent added or changed, and which of the
@@ -47,6 +51,64 @@ func RedCheck(dir, suite string, timeout time.Duration) (RedCheckReport, error) 
 		return rep, err
 	}
 	rep.TestFiles = files
+	if argv, _, e := perTestCommand(suite); e == nil && len(argv) > 1 && argv[0] == "cargo" && argv[1] == "test" {
+		_, out := runCapture(root, argv, timeout)
+		unsupported, sawFile := false, false
+		for _, line := range strings.Split(out, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) > 2 && fields[0] == "Running" {
+				file := fields[1]
+				if file == "unittests" {
+					file = fields[2]
+				}
+				unsupported, sawFile = !isTestFile(file), true
+			}
+			if m := cargoLine.FindStringSubmatch(strings.TrimSpace(line)); unsupported && m != nil && m[2] == "FAILED" {
+				return rep, fmt.Errorf("%s: inline Rust unit tests are not supported; move the test to tests/", m[1])
+			}
+		}
+		// --quiet hides Cargo's file headings. Conservatively diagnose a failing
+		// name also defined as a unit test outside the supported test paths.
+		if !sawFile {
+			failures := parseCargo(out)
+			for _, line := range strings.Split(out, "\n") {
+				if name, failed := strings.CutSuffix(strings.TrimSpace(line), " --- FAILED"); failed {
+					failures[name] = false
+				}
+			}
+			var inline string
+			_ = filepath.WalkDir(root, func(p string, entry os.DirEntry, err error) error {
+				if err != nil {
+					return nil
+				}
+				if entry.IsDir() {
+					if entry.Name() == "target" || entry.Name() == ".git" || entry.Name() == "node_modules" {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				rel, _ := filepath.Rel(root, p)
+				if !strings.HasSuffix(rel, ".rs") || isTestFile(rel) {
+					return nil
+				}
+				data, err := os.ReadFile(p)
+				if err != nil {
+					return nil
+				}
+				for _, m := range cargoUnitTest.FindAllStringSubmatch(string(data), -1) {
+					for name, passed := range failures {
+						if !passed && (name == m[1] || strings.HasSuffix(name, "::"+m[1])) && (inline == "" || name < inline) {
+							inline = name
+						}
+					}
+				}
+				return nil
+			})
+			if inline != "" {
+				return rep, fmt.Errorf("%s: inline Rust unit tests are not supported; move the test to tests/", inline)
+			}
+		}
+	}
 	if len(files) == 0 {
 		return rep, nil
 	}
@@ -90,6 +152,8 @@ func RedCheck(dir, suite string, timeout time.Duration) (RedCheckReport, error) 
 	sort.Strings(rep.PinsNothing)
 	return rep, nil
 }
+
+var cargoUnitTest = regexp.MustCompile(`(?s)#\[\s*test\s*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z_0-9]*)\s*\(`)
 
 // hasOwnName reports whether name ran at HEAD, whatever its outcome there.
 func hasOwnName(before map[string]bool, name string) bool {
@@ -156,7 +220,24 @@ func inferRedCheckSuite(root string, files []string) (string, error) {
 	if len(py) > 0 {
 		return "python3 -m pytest " + strings.Join(py, " "), nil
 	}
-	if _, err := os.Stat(filepath.Join(root, "package.json")); err == nil {
+	if data, err := os.ReadFile(filepath.Join(root, "package.json")); err == nil {
+		var pkg struct{ Scripts map[string]string }
+		if json.Unmarshal(data, &pkg) == nil {
+			words, err := hookcmd.ShellWords(pkg.Scripts["test"])
+			if err == nil && len(words) > 0 {
+				if words[0] == "npx" {
+					words = words[1:]
+				}
+				if len(words) > 0 {
+					switch words[0] {
+					case "jest":
+						return "npx jest " + strings.Join(files, " "), nil
+					case "vitest":
+						return "npx vitest run " + strings.Join(files, " "), nil
+					}
+				}
+			}
+		}
 		return "node --test " + strings.Join(files, " "), nil
 	}
 	return "", errors.New("cannot infer how to run the changed tests: pass --suite")

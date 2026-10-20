@@ -61,7 +61,9 @@ func locate(root, name string, files []string) (string, string, string) {
 			}
 			test := strings.Split(parts[len(parts)-1], "[")[0]
 			body, promise = pythonBody(source, test, parts[1:len(parts)-1])
-		case strings.HasSuffix(file, ".js") || strings.HasSuffix(file, ".mjs") || strings.HasSuffix(file, ".cjs"):
+		case strings.HasSuffix(file, ".rs"):
+			body, promise = rustBody(source, name)
+		case strings.HasSuffix(file, ".js") || strings.HasSuffix(file, ".mjs") || strings.HasSuffix(file, ".cjs") || strings.HasSuffix(file, ".ts") || strings.HasSuffix(file, ".tsx") || strings.HasSuffix(file, ".jsx") || strings.HasSuffix(file, ".mts") || strings.HasSuffix(file, ".cts"):
 			body, promise = nodeBody(source, name)
 		}
 		if body != "" {
@@ -278,7 +280,102 @@ func commentEnd(s string, i int) int {
 	}
 	return i
 }
+
+var rustItem = regexp.MustCompile(`\b(mod|fn)\s+([A-Za-z_][A-Za-z_0-9]*)\s*`)
+var rustAttribute = regexp.MustCompile(`(?s)#\[[^\]]*\]\s*$`)
+var rustTest = regexp.MustCompile(`(?m)#\[\s*test\s*\]`)
+
+func rustBody(source, name string) (string, string) {
+	// Mask literals and comments without changing byte offsets.
+	masked := []byte(source)
+	for i := 0; i < len(source); i++ {
+		end := commentEnd(source, i)
+		if end == i && (source[i] == '"' || (source[i] == '\'' && i+2 < len(source) && source[i+2] == '\'')) {
+			end = quotedEnd(source, i)
+		}
+		if end > i {
+			for j := i; j < end; j++ {
+				if masked[j] != '\n' {
+					masked[j] = ' '
+				}
+			}
+			i = end - 1
+		}
+	}
+	text := string(masked)
+	type module struct {
+		name string
+		end  int
+	}
+	var parents []module
+	for _, m := range rustItem.FindAllStringSubmatchIndex(text, -1) {
+		start := m[0]
+		for len(parents) > 0 && parents[len(parents)-1].end < start {
+			parents = parents[:len(parents)-1]
+		}
+		kind, item := text[m[2]:m[3]], text[m[4]:m[5]]
+		brace := strings.IndexByte(text[m[1]:], '{')
+		if brace < 0 {
+			continue
+		}
+		brace += m[1]
+		if strings.Contains(text[m[1]:brace], ";") {
+			continue
+		}
+		depth, end := 0, -1
+		for i := brace; i < len(text); i++ {
+			if text[i] == '{' {
+				depth++
+			}
+			if text[i] == '}' {
+				depth--
+				if depth == 0 {
+					end = i + 1
+					break
+				}
+			}
+		}
+		if end < 0 {
+			continue
+		}
+		if kind == "mod" {
+			parents = append(parents, module{item, end})
+			continue
+		}
+		var parts []string
+		for _, p := range parents {
+			parts = append(parts, p.name)
+		}
+		parts = append(parts, item)
+		if strings.Join(parts, "::") != name {
+			continue
+		}
+		line := strings.LastIndexByte(source[:start], '\n') + 1
+		attributeStart := line
+		for {
+			match := rustAttribute.FindStringIndex(source[:attributeStart])
+			if match == nil {
+				break
+			}
+			attributeStart = match[0]
+		}
+		body := source[attributeStart:end]
+		if !rustTest.MatchString(body[:brace-attributeStart]) {
+			continue
+		}
+		prefix := strings.TrimRight(source[:attributeStart], " \t")
+		lines := strings.Split(prefix, "\n")
+		return body, commentPromise(lines[:len(lines)-1], "//")
+	}
+	return "", ""
+}
+
 func nodeBody(source, name string) (string, string) {
+	type ancestor struct {
+		name string
+		end  int
+	}
+	var parents []ancestor
 	for i := 0; i < len(source); {
 		if source[i] == '\'' || source[i] == '"' || source[i] == '`' {
 			i = quotedEnd(source, i)
@@ -298,7 +395,7 @@ func nodeBody(source, name string) (string, string) {
 			i++
 		}
 		word := source[start:i]
-		if word != "test" && word != "it" {
+		if word != "test" && word != "it" && word != "describe" {
 			continue
 		}
 		j := i
@@ -330,7 +427,15 @@ func nodeBody(source, name string) (string, string) {
 		if decoded.Len() > 0 {
 			literal = decoded.String()
 		}
-		if literal != name {
+		for len(parents) > 0 && parents[len(parents)-1].end < start {
+			parents = parents[:len(parents)-1]
+		}
+		var titles []string
+		for _, p := range parents {
+			titles = append(titles, p.name)
+		}
+		titles = append(titles, literal)
+		if word != "describe" && strings.Join(titles, " ") != name && strings.Join(titles, "/") != name {
 			continue
 		}
 		depth := 0
@@ -349,6 +454,10 @@ func nodeBody(source, name string) (string, string) {
 			if source[k] == ')' {
 				depth--
 				if depth == 0 {
+					if word == "describe" {
+						parents = append(parents, ancestor{literal, k})
+						break
+					}
 					prefix := strings.TrimRight(source[:start], " \t")
 					lines := strings.Split(prefix, "\n")
 					promise := commentPromise(lines[:len(lines)-1], "//")
