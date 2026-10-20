@@ -371,6 +371,14 @@ review, run `tsp findings check`. Both accept `--cwd` and `--timeout`; record al
 `--suite` (Go, pytest or `node --test`). The registry lives outside the repository, under
 TSP's state directory, separately for each branch; detached HEAD is refused.
 
+Close a finding with `tsp findings verdict F1 rejected --reason "<why>"` or
+`tsp findings verdict F1 wontfix --reason "<why>"`. `tsp findings verdict F1 clear` removes
+the decision. A finding with a verdict schedules no suite run and its outcome never affects
+the report, counts or exit code; if its test executes because another active finding shares
+the suite, that outcome is ignored.
+If a closed finding's test body changes, check drops the verdict, computes the status again, and
+notes `(verdict dropped: test changed)` on the finding's line.
+
 Check reports `open`, `fixed`, or `regressed`. A weakened test is `test-changed`, a deleted
 test is `missing`, and an unreadable suite is `unknown`; these need review, never count as fixes.
 Its summary counts newly fixed, still open, new and regressed findings. This tracks existing

@@ -162,6 +162,42 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	return out.String(), 0
 }
 
+// SetVerdict records a human decision against the current test fingerprint.
+func SetVerdict(dir, id, decision, reason string) (string, int) {
+	r, path, top, err := load(dir)
+	if err != nil {
+		return failure(err)
+	}
+	if decision != "rejected" && decision != "wontfix" && decision != "clear" {
+		return failure(fmt.Errorf("verdict must be rejected, wontfix or clear"))
+	}
+	if decision != "clear" && strings.TrimSpace(reason) == "" {
+		return failure(fmt.Errorf("%s requires a non-empty --reason", decision))
+	}
+	for i := range r.Findings {
+		f := &r.Findings[i]
+		if f.ID != id {
+			continue
+		}
+		out := id + " verdict cleared\n"
+		f.Verdict = nil
+		if decision != "clear" {
+			_, fingerprint, _ := locate(top, f.Test, []string{f.File})
+			commit, err := git(top, "rev-parse", "HEAD")
+			if err != nil {
+				return failure(err)
+			}
+			f.Verdict = &Verdict{Decision: decision, Reason: reason, Fingerprint: fingerprint, Commit: commit}
+			out = fmt.Sprintf("%s %s: %s\n", id, decision, reason)
+		}
+		if err := save(r, path); err != nil {
+			return failure(err)
+		}
+		return out, 0
+	}
+	return failure(fmt.Errorf("unknown finding %s", id))
+}
+
 // Check runs each recorded suite once and saves the computed review.
 func Check(dir string, timeout time.Duration) (string, int) {
 	r, path, top, e := load(dir)
@@ -180,8 +216,26 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	fixed, open, newCount, regressed, need := 0, 0, 0, 0, 0
 	cannotJudge := false
 	var lines strings.Builder
+	writeLine := func(f Finding, promise, suffix string) {
+		fmt.Fprintf(&lines, "%s %s %s %s", f.ID, f.Status, f.File, f.Test)
+		if promise != "" {
+			fmt.Fprintf(&lines, " — %s", promise)
+		}
+		fmt.Fprintln(&lines, suffix)
+	}
 	for i := range r.Findings {
 		f := &r.Findings[i]
+		file, fingerprint, _ := locate(top, f.Test, []string{f.File})
+		suffix := ""
+		if f.Verdict != nil {
+			if fingerprint == f.Verdict.Fingerprint {
+				f.Status, f.Reviewed = f.Verdict.Decision, true
+				writeLine(*f, f.Verdict.Reason, "")
+				continue
+			}
+			f.Verdict = nil
+			suffix = " (verdict dropped: test changed)"
+		}
 		result, ok := runs[f.Suite]
 		if !ok {
 			tests, code, _, err := bench.PerTest(top, f.Suite, timeout)
@@ -189,7 +243,6 @@ func Check(dir string, timeout time.Duration) (string, int) {
 			result = run{tests: tests, failed: err != nil || whole || len(tests) == 0 || code < 0 || code > 1, code: code}
 			runs[f.Suite] = result
 		}
-		file, fingerprint, _ := locate(top, f.Test, []string{f.File})
 		_, fileErr := os.Stat(filepath.Join(top, f.File))
 		fileGone := f.File != "" && errors.Is(fileErr, os.ErrNotExist)
 		previous := f.Status
@@ -234,11 +287,7 @@ func Check(dir string, timeout time.Duration) (string, int) {
 		}
 		cannotJudge = cannotJudge || f.Status == "unknown"
 		f.Reviewed = true
-		fmt.Fprintf(&lines, "%s %s %s %s", f.ID, f.Status, f.File, f.Test)
-		if f.Promise != "" {
-			fmt.Fprintf(&lines, " — %s", f.Promise)
-		}
-		lines.WriteByte('\n')
+		writeLine(*f, f.Promise, suffix)
 	}
 	r.Review++
 	report := fmt.Sprintf("review %d on %s: %d fixed, %d open, %d new, %d regressed", r.Review, r.Branch, fixed, open, newCount, regressed)
