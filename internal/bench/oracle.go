@@ -358,7 +358,9 @@ func oracleContract(caseDir string, timeout time.Duration) (string, error) {
 			return nil
 		}
 		allowed := filepath.Dir(rel) == "." && strings.HasPrefix(strings.ToLower(info.Name()), "readme") || strings.HasPrefix(slash, "docs/") && strings.HasSuffix(slash, ".md")
-		if !allowed {
+		// A symlinked document is not followed: it may point outside the fixture, and the blind input never
+		// reads through a link.
+		if !allowed || !info.Mode().IsRegular() {
 			return nil
 		}
 		data, e := oracleRead(fixture, rel)
@@ -391,8 +393,16 @@ func oracleContract(caseDir string, timeout time.Duration) (string, error) {
 			return err
 		}
 		if info.IsDir() {
-			if info.Name() == "fix" || info.Name() == "vendor" || info.Name() == "node_modules" || strings.HasPrefix(info.Name(), ".") {
+			name := info.Name()
+			// The packages Go itself builds: testdata, _- and .-prefixed directories and nested modules are not
+			// part of the fixture's module.
+			if path != fixture && (name == "fix" || name == "vendor" || name == "node_modules" || name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
 				return filepath.SkipDir
+			}
+			if path != fixture {
+				if _, e := os.Stat(filepath.Join(path, "go.mod")); e == nil {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}
