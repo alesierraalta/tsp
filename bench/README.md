@@ -27,7 +27,9 @@ Malformed, truncated, incomplete, or failed answers become `unclear`, never reje
 Only `invented` witnesses are dropped. `<reading>/oracle/verdicts.json` records labels,
 reasons, per-file invocation costs/turns, runner/model, fixed-prompt SHA-256 and scorer
 revision; `summary.md` compares recorded and filtered caught defect-runs, red-on-fixed
-tests and runs without witnesses. The original reading files are not rewritten.
+tests and runs without witnesses. The original reading files are not rewritten. Oracle output symlinks (including the
+output directory itself) are refused before invoking a judge; output files are replaced
+without following existing file symlinks.
 Unkept runs remain unchanged in both views. Old catch records do not name every red
 on-fixed test: only named inverted tests can then be subtracted reliably; unattributed
 red tests are explicitly counted and kept, rather than guessing which test failed.
@@ -45,7 +47,8 @@ losing at most 2 caught defect-runs per 100. Otherwise it stays a bench option.
 `tsp bench run --sessions N` measures a review/fix/review cycle. Each session starts a fresh
 agent process with the plain prompt and case request, never a list of previous findings.
 After each session, reference fixes remove the defects its tests distinguish; the agent's
-tests remain. Runs stop at N sessions or zero remaining defects. An unrepresentable remaining
+tests remain. Source-referenced cases also apply the patch's recorded file deletions;
+planted partial overlays never infer deletions from omitted files. Runs stop at N sessions or zero remaining defects. An unrepresentable remaining
 set stops the run with a recorded reason (`fix/all` and `fix/keep-<ID>` are the supported variants).
 A session that catches nothing leaves the workspace unchanged. Failed sessions retain their
 work and fail the run after retries.

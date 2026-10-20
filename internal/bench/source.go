@@ -20,6 +20,8 @@ import (
 // are whole projects; vendoring them would copy third-party code into this repository.
 const SourceFile = "SOURCE.json"
 
+const sourceDeletionsFile = "source-deletions.json"
+
 // Source is the content of SOURCE.json.
 type Source struct {
 	Repo   string `json:"repo"`   // anything git fetch accepts: a URL or, in tests, a local path
@@ -63,12 +65,15 @@ func MaterializeCase(caseDir, cache string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(append(append(raw, 0), patch...))
+	sum := sha256.Sum256(append(append([]byte("source-layout-v2\x00"), append(raw, 0)...), patch...))
 	dir := filepath.Join(cache, filepath.Base(caseDir)+"-"+hex.EncodeToString(sum[:])[:12])
 	if _, err := os.Stat(filepath.Join(dir, FixDir, "all")); err != nil {
 		if err := buildSourceCase(src, patch, cache, dir); err != nil {
 			return "", fmt.Errorf("%s: %w", filepath.Base(caseDir), err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, sourceDeletionsFile)); err != nil {
+		return "", fmt.Errorf("source cache deletion manifest: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, KeyFile), key, 0o644); err != nil {
 		return "", err
@@ -106,7 +111,27 @@ func buildSourceCase(src Source, patch []byte, cache, dir string) error {
 	if out, err := apply.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s does not apply to %s: %s", src.Patch, src.Commit, strings.TrimSpace(string(out)))
 	}
-	_ = removeTree(dir)
+	deleted := []string{}
+	if err := filepath.WalkDir(fixture, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(fixture, path)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Lstat(filepath.Join(fixed, rel)); os.IsNotExist(err) {
+			deleted = append(deleted, rel)
+		} else if err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := writeJSON(filepath.Join(tmp, sourceDeletionsFile), deleted); err != nil {
+		return err
+	}
 	return os.Rename(tmp, dir)
 }
 

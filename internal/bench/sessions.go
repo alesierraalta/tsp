@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -111,6 +112,29 @@ func applySessionFix(caseDir, ws string, remaining []string) error {
 	}
 	if err := copyTree(overlay, ws); err != nil {
 		return err
+	}
+	manifest, err := os.ReadFile(filepath.Join(caseDir, sourceDeletionsFile))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		var deleted []string
+		if err := json.Unmarshal(manifest, &deleted); err != nil {
+			return err
+		}
+		root, err := os.OpenRoot(ws)
+		if err != nil {
+			return err
+		}
+		defer root.Close()
+		for _, path := range deleted {
+			if _, keep := saved[path]; keep {
+				continue
+			}
+			if err := root.Remove(path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
 	}
 	for test, data := range saved {
 		if err := os.WriteFile(filepath.Join(ws, test), data, 0644); err != nil {
