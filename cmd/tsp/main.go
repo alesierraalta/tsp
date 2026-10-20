@@ -30,6 +30,7 @@ import (
 	"github.com/alesierraalta/tsp/internal/hookcmd"
 	"github.com/alesierraalta/tsp/internal/mode"
 	"github.com/alesierraalta/tsp/internal/plan"
+	"github.com/alesierraalta/tsp/internal/probe"
 	"github.com/alesierraalta/tsp/internal/repair"
 	"github.com/alesierraalta/tsp/internal/sanitize"
 	"github.com/alesierraalta/tsp/internal/state"
@@ -81,6 +82,7 @@ commands:
            (record [--cwd <dir>] [--suite <test command>] [--timeout <duration>])
            (check [--cwd <dir>] [--timeout <duration>])
            (verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear)
+  probe    env [dir] [--json]: report undelivered environment settings (read-only)
   status   report the local installation state and optional features
   update   check the Go module proxy for a newer release and install it through go install,
            printing the exact command when go is absent
@@ -183,6 +185,8 @@ func main() {
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "probe":
+		os.Exit(runProbe(os.Args[2:]))
 	case "gate":
 		os.Exit(runGate(os.Args[2:]))
 	case "bind":
@@ -226,6 +230,62 @@ func main() {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
 	}
+}
+
+func runProbe(args []string) int {
+	const help = "Usage of probe:\n  tsp probe env [dir] [--json]\nReports literal environment reads absent from deploy artifacts with deployed siblings.\nExit 1: findings; 0: clean (no text output); 2: usage error. Never writes to the scanned tree.\n"
+	fail := func(message string) int { fmt.Fprintln(os.Stderr, "probe:", message); return 2 }
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprint(os.Stderr, help)
+		return 0
+	}
+	if len(args) == 0 || args[0] != "env" {
+		return fail("expected env [dir] [--json]")
+	}
+	dir := "."
+	haveDir, asJSON := false, false
+	for _, arg := range args[1:] {
+		switch {
+		case arg == "--help" || arg == "-h":
+			fmt.Fprint(os.Stderr, help)
+			return 0
+		case arg == "--json":
+			asJSON = true
+		case strings.HasPrefix(arg, "-"):
+			return fail("unknown flag " + arg)
+		case haveDir:
+			return fail("expected at most one directory")
+		default:
+			dir = arg
+			haveDir = true
+		}
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fail(err.Error())
+	}
+	if !info.IsDir() {
+		return fail("not a directory: " + dir)
+	}
+	findings, err := probe.Env(dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "probe:", err)
+		return 1
+	}
+	if asJSON {
+		if err := json.NewEncoder(os.Stdout).Encode(findings); err != nil {
+			fmt.Fprintln(os.Stderr, "probe:", err)
+			return exitArtifact
+		}
+	} else {
+		for _, f := range findings {
+			fmt.Printf("%s read at %s; siblings delivered by %s\n", f.Name, strings.Join(f.ReadAt, ", "), strings.Join(f.DeliveredBy, ", "))
+		}
+	}
+	if len(findings) > 0 {
+		return 1
+	}
+	return 0
 }
 
 func runGate(args []string) int {

@@ -14,6 +14,27 @@ For benchmark review/fix/review cycles, use `tsp bench run --sessions N`: indepe
 sessions keep the agent's tests and apply reference fixes for caught defects between reviews.
 See [benchmark sessions](bench/README.md#independent-review-sessions) for records and constraints.
 
+## Probe undelivered environment settings
+
+Run `tsp probe env [dir]` (default: current directory), or add `--json` for an array
+of `{name, read_at, siblings, delivered_by}`. The read-only probe finds uppercase literal
+Python, Node and Go environment reads (`os.getenv`, `os.environ`, their `from os import`
+forms, `process.env`, `os.Getenv`, `os.LookupEnv`) missing from deployment artifacts when a
+setting with the same first underscore-separated token (`APP_` for `APP_MODE`) is deployed;
+a lone word such as a Dockerfile `RUN` or a comment's `API` is not a deployed setting. In a source file that
+reads the environment (including bare `process.env` or `os.environ` references), all
+uppercase string literals containing an underscore also count as reads, covering
+settings helpers. Unrelated files retain direct literal-read matching only. Findings include source
+`path:line` locations and delivery paths, sorted by setting name.
+
+Deployment artifacts are files under `deploy/`, `infra/`, `k8s/`, `helm/`,
+`.github/workflows/`, plus `Dockerfile*`, `docker-compose*`, `*.tf`, `Procfile`,
+`.env.example`, `.env.sample`, and `.env.template` at any depth. Tests, dependency
+folders, Git internals, virtual environments and directories the probe may not read are
+skipped; real `.env` files are never opened. This is a literal-text heuristic, not a proof of runtime delivery.
+Exit codes: **1** findings, **0** clean (no text output; JSON prints `[]`), **2** usage
+errors (stderr only).
+
 ## How it works
 
 Four pictures of the same system: the pieces, the decision the gate takes at every Stop, the testing
