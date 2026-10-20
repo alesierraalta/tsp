@@ -116,6 +116,9 @@ bench compare [--skill-versions] <before-results> <after-results>
           (--skill-versions compares two skill versions on an otherwise identical instrument)
           (plan-less readings show - for plan-only metrics; caught remains meaningful.
            compare reports a 95% Wilson/Newcombe caught-difference noise interval)
+bench verify-oracle --run <reading> [--runner pi|claude|codex|agy] [--model <m>]
+                   [--concurrency N] [--timeout d] [--dry-run]
+  Blind post-hoc contract judge; requires kept workspaces. Writes only <reading>/oracle/.
 bench rescore [--bench-dir <dir>] <results>
 bench adjudicate --run <results>/<case>/<run> [--plan <path>] --row <n> --verdict <defect|false_positive|out_of_scope>
           [--defect <id>] --by <who> --reason <why> [--replace] [--ts <RFC3339>]
@@ -1591,6 +1594,8 @@ func runBench(args []string) int {
 		return runBenchHistory(args[1:])
 	case "compare":
 		return runBenchCompare(args[1:])
+	case "verify-oracle":
+		return runBenchVerifyOracle(args[1:])
 	case "rescore":
 		return runBenchRescore(args[1:])
 	case "adjudicate":
@@ -2165,6 +2170,32 @@ func shortFingerprint(fingerprint string) string {
 		return fingerprint
 	}
 	return fingerprint[:12]
+}
+
+func runBenchVerifyOracle(args []string) int {
+	fs := flag.NewFlagSet("bench verify-oracle", flag.ContinueOnError)
+	run := fs.String("run", "", "finished reading directory (requires --keep)")
+	runner := fs.String("runner", bench.RunnerPi, "verifier runner: pi, claude, codex, agy")
+	model := fs.String("model", "", "verifier model; empty uses runner default")
+	workers := fs.Int("concurrency", 1, "test files judged side by side")
+	timeout := fs.Duration("timeout", 30*time.Minute, "verifier wall-clock cap per attempt")
+	dry := fs.Bool("dry-run", false, "validate inputs without agents or writing artifacts")
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
+	}
+	if fs.NArg() != 0 || !bench.KnownRunner(*runner) || *workers < 1 || *timeout <= 0 {
+		fmt.Fprintln(os.Stderr, "verify-oracle: invalid arguments, runner, concurrency or timeout")
+		return 2
+	}
+	report, err := bench.VerifyOracle(*run, bench.Options{Runner: *runner, Model: *model, Workers: *workers, Timeout: *timeout, Retries: 1, RetryDelay: 60 * time.Second, DryRun: *dry, Log: os.Stdout})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, strings.ReplaceAll(err.Error(), "\n", " "))
+		return 2
+	}
+	if !*dry {
+		fmt.Print(report.Summary())
+	}
+	return 0
 }
 
 func runBenchRescore(args []string) int {
