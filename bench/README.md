@@ -22,17 +22,21 @@ copied into its temporary input directory. Test discovery matches the catch chec
 `--dry-run` validates/discovers inputs without invoking an agent or writing oracle artifacts.
 The case corpus must remain available under `bench/cases` (source cases use the case cache).
 
-The strict JSON answer labels each named test `contract`, `invented`, or `unclear`.
-Malformed, truncated, incomplete, or failed answers become `unclear`, never rejection.
+The strict JSON answer labels each named test `contract` or `invented`: a test may
+only assert what the contract demands, so an undecidable test is invented, and the
+judge cannot abstain. Malformed, truncated, incomplete, or failed answers become the
+legacy label `unclear`, never rejection; readings judged before this prompt keep it.
 Only `invented` witnesses are dropped. `<reading>/oracle/verdicts.json` records labels,
 reasons, per-file invocation costs/turns, runner/model, fixed-prompt SHA-256 and scorer
 revision; `summary.md` compares recorded and filtered caught defect-runs, red-on-fixed
 tests and runs without witnesses. The original reading files are not rewritten. Oracle output symlinks (including the
 output directory itself) are refused before invoking a judge; output files are replaced
 without following existing file symlinks.
-Unkept runs remain unchanged in both views. Old catch records do not name every red
-on-fixed test: only named inverted tests can then be subtracted reliably; unattributed
-red tests are explicitly counted and kept, rather than guessing which test failed.
+Unkept runs remain unchanged in both views. Catch records now name the tests red on the
+fixed code. A reading built before they did is re-checked from its own kept workspace, and
+only when the re-check reproduces the recorded counts; `--suite-timeout` caps that suite run.
+A red test the re-check cannot name, or a re-check that disagrees with the reading, stays
+unattributed and kept rather than guessing which test failed.
 
 This judge is **uncalibrated**, not evidence of correctness. No real-model evaluation
 or product integration is implied. Before using the labels as a gate, human-label a

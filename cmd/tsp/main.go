@@ -2179,6 +2179,7 @@ func runBenchVerifyOracle(args []string) int {
 	model := fs.String("model", "", "verifier model; empty uses runner default")
 	workers := fs.Int("concurrency", 1, "test files judged side by side")
 	timeout := fs.Duration("timeout", 30*time.Minute, "verifier wall-clock cap per attempt")
+	suiteTimeout := fs.Duration("suite-timeout", 10*time.Minute, "cap per suite run when a red test name is recovered from the reading")
 	dry := fs.Bool("dry-run", false, "validate inputs without agents or writing artifacts")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
@@ -2187,7 +2188,7 @@ func runBenchVerifyOracle(args []string) int {
 		fmt.Fprintln(os.Stderr, "verify-oracle: invalid arguments, runner, concurrency or timeout")
 		return 2
 	}
-	report, err := bench.VerifyOracle(*run, bench.Options{Runner: *runner, Model: *model, Workers: *workers, Timeout: *timeout, Retries: 1, RetryDelay: 60 * time.Second, DryRun: *dry, Log: os.Stdout})
+	report, err := bench.VerifyOracle(*run, bench.Options{Runner: *runner, Model: *model, Workers: *workers, Timeout: *timeout, SuiteTimeout: *suiteTimeout, Retries: 1, RetryDelay: 60 * time.Second, DryRun: *dry, Log: os.Stdout})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, strings.ReplaceAll(err.Error(), "\n", " "))
 		return 2

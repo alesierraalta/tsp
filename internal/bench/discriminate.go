@@ -23,6 +23,7 @@ type CatchResult struct {
 	TestFiles     []string            `json:"test_files,omitempty"`  // agent test files carried into the check
 	AllGreen      bool                `json:"all_green"`             // every test passes on the fully fixed code
 	BrokenTests   int                 `json:"broken_tests"`          // tests red on the fully fixed code; they prove nothing
+	RedTests      []string            `json:"red_tests,omitempty"`   // those tests by name, so an outside verdict can be applied to them
 	InvertedTests int                 `json:"inverted_tests"`        // of those, tests green while the defect is present: they pin the bug
 	InvertedBy    map[string][]string `json:"inverted_by,omitempty"` // defect id -> tests that assert its defective behaviour
 	Caught        map[string]bool     `json:"caught"`                // defect id -> caught
@@ -94,6 +95,7 @@ func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResul
 	}
 	sort.Strings(trusted)
 	sort.Strings(red)
+	res.RedTests = red
 	if len(trusted) == 0 {
 		// A test red on correct code is broken or written to a different API: it can prove nothing.
 		res.Notes = append(res.Notes, "no agent test is green on the fully fixed code: "+tail(out, 400))
