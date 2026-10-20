@@ -140,13 +140,11 @@ func VerifyOracle(run string, opts Options) (OracleReport, error) {
 			cache = DefaultCaseCache()
 		}
 		casePath := filepath.Join(opts.BenchDir, "cases", r.Case)
-		resolvedSource := false
 		if _, e := os.Stat(casePath); os.IsNotExist(e) {
 			if suffix := regexp.MustCompile(`-[0-9a-f]{12}$`).FindString(r.Case); suffix != "" {
 				candidate := filepath.Join(opts.BenchDir, "cases", strings.TrimSuffix(r.Case, suffix))
-				if st, e := os.Stat(filepath.Join(candidate, SourceFile)); e == nil && !st.IsDir() {
+				if sourceReferenced(candidate) {
 					casePath = candidate
-					resolvedSource = true
 				}
 			}
 		}
@@ -154,7 +152,9 @@ func VerifyOracle(run string, opts Options) (OracleReport, error) {
 		if e != nil {
 			return report, e
 		}
-		if resolvedSource && filepath.Base(caseDir) != r.Case {
+		// A source-referenced case materializes under a name carrying its cache suffix. Any other materialized name
+		// than the recorded one means the case or its patch changed, and judging it would score another fixture.
+		if sourceReferenced(casePath) && filepath.Base(caseDir) != r.Case {
 			return report, fmt.Errorf("%s: case changed since the reading", r.Case)
 		}
 		fixture := filepath.Join(caseDir, FixtureDir)
@@ -342,6 +342,13 @@ func oracleRead(root, rel string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// sourceReferenced reports whether a case carries its code by reference (SOURCE.json plus a patch) instead of
+// shipping a planted fixture tree.
+func sourceReferenced(caseDir string) bool {
+	st, err := os.Stat(filepath.Join(caseDir, SourceFile))
+	return err == nil && !st.IsDir()
+}
+
 func oracleContract(caseDir string, timeout time.Duration) (string, error) {
 	fixture := filepath.Join(caseDir, FixtureDir)
 	var b strings.Builder
@@ -386,20 +393,23 @@ func oracleContract(caseDir string, timeout time.Duration) (string, error) {
 	} else if !os.IsNotExist(e) {
 		return "", e
 	}
-	// go doc reads the original package, but only its documentation/signatures cross the blind boundary.
+	// go doc reads the original package, but only its documentation/signatures cross the blind boundary. The walk
+	// follows the packages Go itself builds: testdata, _- and .-prefixed directories and a module nested below the
+	// fixture's own module are not part of it. A fixture with no go.mod of its own may hold its module (or one module
+	// per subdirectory) deeper, and those are built, so they are walked.
 	dirs := map[string]bool{}
+	_, e := os.Stat(filepath.Join(fixture, "go.mod"))
+	ownModule := e == nil
 	err = filepath.Walk(fixture, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if info.IsDir() {
 			name := info.Name()
-			// The packages Go itself builds: testdata, _- and .-prefixed directories and nested modules are not
-			// part of the fixture's module.
-			if path != fixture && (name == "fix" || name == "vendor" || name == "node_modules" || name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
+			if path != fixture && (name == "vendor" || name == "node_modules" || name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
 				return filepath.SkipDir
 			}
-			if path != fixture {
+			if path != fixture && ownModule {
 				if _, e := os.Stat(filepath.Join(path, "go.mod")); e == nil {
 					return filepath.SkipDir
 				}
@@ -419,6 +429,7 @@ func oracleContract(caseDir string, timeout time.Duration) (string, error) {
 		ordered = append(ordered, dir)
 	}
 	sort.Strings(ordered)
+	documented := 0
 	for _, dir := range ordered {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		cmd := exec.CommandContext(ctx, "go", "doc", "-all", ".")
@@ -433,7 +444,11 @@ func oracleContract(caseDir string, timeout time.Duration) (string, error) {
 			}
 			return "", fmt.Errorf("go doc contract: %w: %s", e, data)
 		}
+		documented++
 		fmt.Fprintf(&b, "\n## Go package documentation\n%s\n", data)
+	}
+	if len(ordered) > 0 && documented == 0 {
+		return "", errors.New("go doc contract: no package documentation for any of the fixture's Go packages")
 	}
 	return b.String(), nil
 }
