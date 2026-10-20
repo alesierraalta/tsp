@@ -157,7 +157,10 @@ export async function runTppCommand(rawArgs: string, deps: TppDeps): Promise<voi
 
 // The TSP offer. When a run ends after the agent edited source code, Pi asks in the chat whether to run TSP;
 // "Sí" sends "haz el TSP" as if the user typed it, which invokes the test-strategy skill. Only edit and write
-// results are seen, so a change made through a shell command is not noticed.
+// results are seen, so a change made through a shell command is not noticed. When a TSP run ends, the tests
+// it left failing on HEAD's code are recorded as findings and the review of every finding is shown to the user;
+// the agent is never told about it. A delegated child session (GENTLE_PI_AGENTS_CHILD=1) has nobody to answer,
+// so it gets neither.
 export const OFFER_QUESTION = "¿Quieres hacer TSP?";
 export const OFFER_YES = "Sí";
 export const OFFER_NO = "No";
@@ -177,10 +180,32 @@ const isTspPrompt = (prompt: string | undefined): boolean => /\b(tsp|test[- ]str
 
 export interface OfferOptions {
   optedOut?: (cwd: string) => boolean; // the repo's .no-testing-gate opt-out, shared with the Stop gate
+  env?: Readonly<Record<string, string | undefined>>; // defaults to process.env
+  exec?: ExecTpp; // defaults to the tsp binary
+}
+
+type Notify = (message: string, type?: "info" | "warning" | "error") => void;
+const REVIEW_TYPE = { 0: "info", 1: "warning" } as const;
+
+/** Records the TSP run's witnesses, then shows the review; a record that cannot run stops before check. */
+export async function reviewFindings(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, notify: Notify): Promise<void> {
+  const run = (sub: string) => exec(["findings", sub, "--cwd", cwd], { cwd, env: { ...env } });
+  const shown = (r: ExecResult) => notice(r.stdout.trim() || r.stderr.trim() || `tsp findings: exited ${r.code}`);
+  try {
+    const recorded = await run("record");
+    if (recorded.code !== 0 && recorded.code !== 1) return notify(shown(recorded), "error");
+    const review = await run("check");
+    notify(shown(review), REVIEW_TYPE[review.code as 0 | 1] ?? "error");
+  } catch (error) {
+    notify(notice(`tsp: ${error instanceof Error ? error.message : String(error)}`), "error");
+  }
 }
 
 function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   const optedOut = opts.optedOut ?? ((cwd: string) => existsSync(join(cwd, ".no-testing-gate")));
+  const env = opts.env ?? process.env;
+  const exec = opts.exec ?? execTpp;
+  const child = env.GENTLE_PI_AGENTS_CHILD === "1";
   const edited = new Set<string>(); // source paths changed in the current run
   const declined = new Set<string>(); // paths the user already said No to
   let tspRun = false;
@@ -195,7 +220,9 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   pi.on("agent_settled", async (event, ctx) => {
     const fresh = [...edited].filter((p) => !declined.has(p));
     edited.clear();
-    if (event.aborted || tspRun || !ctx.hasUI || fresh.length === 0 || optedOut(ctx.cwd)) return;
+    if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd)) return;
+    if (tspRun) return reviewFindings(ctx.cwd, env, exec, (message, type) => ctx.ui.notify(message, type));
+    if (fresh.length === 0) return;
     const answer = await ctx.ui.select(OFFER_QUESTION, [OFFER_YES, OFFER_NO]);
     if (answer === OFFER_YES) {
       declined.clear();
