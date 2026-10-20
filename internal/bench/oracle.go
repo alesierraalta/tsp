@@ -413,10 +413,14 @@ func oracleContract(caseDir string, timeout time.Duration) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		cmd := exec.CommandContext(ctx, "go", "doc", "-all", ".")
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GOWORK=off", "GOPROXY=off", "GOTOOLCHAIN=local")
+		cmd.Env = append(os.Environ(), "GOWORK=off", "GOPROXY=off")
 		data, e := cmd.CombinedOutput()
+		timedOut := ctx.Err() != nil
 		cancel()
 		if e != nil {
+			if !timedOut && (strings.Contains(string(data), "doc: no buildable Go source files in ") || strings.Contains(string(data), "build constraints exclude all Go files in ")) {
+				continue
+			}
 			return "", fmt.Errorf("go doc contract: %w: %s", e, data)
 		}
 		fmt.Fprintf(&b, "\n## Go package documentation\n%s\n", data)
