@@ -139,9 +139,23 @@ func VerifyOracle(run string, opts Options) (OracleReport, error) {
 		if cache == "" {
 			cache = DefaultCaseCache()
 		}
-		caseDir, e := MaterializeCase(filepath.Join(opts.BenchDir, "cases", r.Case), cache)
+		casePath := filepath.Join(opts.BenchDir, "cases", r.Case)
+		resolvedSource := false
+		if _, e := os.Stat(casePath); os.IsNotExist(e) {
+			if suffix := regexp.MustCompile(`-[0-9a-f]{12}$`).FindString(r.Case); suffix != "" {
+				candidate := filepath.Join(opts.BenchDir, "cases", strings.TrimSuffix(r.Case, suffix))
+				if st, e := os.Stat(filepath.Join(candidate, SourceFile)); e == nil && !st.IsDir() {
+					casePath = candidate
+					resolvedSource = true
+				}
+			}
+		}
+		caseDir, e := MaterializeCase(casePath, cache)
 		if e != nil {
 			return report, e
+		}
+		if resolvedSource && filepath.Base(caseDir) != r.Case {
+			return report, fmt.Errorf("%s: case changed since the reading", r.Case)
 		}
 		fixture := filepath.Join(caseDir, FixtureDir)
 		if _, e := os.Stat(fixture); e != nil {
