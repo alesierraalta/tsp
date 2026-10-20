@@ -61,7 +61,8 @@ type HistoryEntry struct {
 	// is written even at zero: a row without the key predates the column and says nothing about Micro.
 	MicroActivated int `json:"micro"`
 	// Rounds records passes per run; an absent key predates this column.
-	Rounds int `json:"rounds"`
+	Rounds   int `json:"rounds"`
+	Sessions int `json:"sessions"`
 }
 
 // A row is either a run that spawned agents or a rescore that re-read one with newer rules.
@@ -70,7 +71,7 @@ const (
 	KindRescore = "rescore"
 )
 
-const historyHeader = "| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus | light | runs | metrics version | unique defects | unique found | unique confirmed | unique caught | defect runs | controls | precision | pending | out of scope | inconclusive | unstable | agent config | environment | micro | rounds |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+const historyHeader = "| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus | light | runs | metrics version | unique defects | unique found | unique confirmed | unique caught | defect runs | controls | precision | pending | out of scope | inconclusive | unstable | agent config | environment | micro | rounds | sessions |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
 
 // reported and caught count different things, so neither bounds the other.
 const historyIntro = "# Benchmark history\n\nOne row per `tpp bench run`; never rewritten. A `rescore` row re-reads an earlier\nrun with newer scoring rules: it spends nothing, so summing the cost column over rescore\nrows would count the same money twice. `reported and caught are independent`: reported\ncounts defects written in the plan, caught counts defects some test distinguishes, and\neither can exceed the other.\n\nEvery row names the `scorer` build that produced its numbers. When the scoring rules change,\na later rescore of one source run supersedes an earlier one, and the scorer column is what\ntells the two apart; rows are never rewritten.\n\nA row written before the adjudicated metrics carries no `metrics version` column and is read as version 1, which is why `bench compare` refuses to compare it with a version 2 row.\n\nA row written before the agent-config column carries no agent-config mode and cannot be compared with one that does.\n\n"
@@ -88,6 +89,7 @@ func AppendHistory(benchDir string, e HistoryEntry) error {
 		e.Scorer = buildinfo.Revision()
 	}
 	e.Rounds = passes(e.Rounds)
+	e.Sessions = passes(e.Sessions)
 	e.AgentConfig = configMode(e.AgentConfig)
 	if e.Environment == "" {
 		e.Environment = environment()
@@ -154,6 +156,9 @@ func ensureHistoryHeader(md, header string) error {
 	if !strings.Contains(string(existing), "| rounds |") {
 		notes = append(notes, "Rows above this header predate the rounds column and record no passes-per-run count.")
 	}
+	if !strings.Contains(string(existing), "| sessions |") {
+		notes = append(notes, "Rows above this header predate the sessions column and record no sessions-per-run count.")
+	}
 	note := "\n"
 	if len(notes) > 0 {
 		note += strings.Join(notes, "\n") + "\n"
@@ -166,9 +171,9 @@ func historyRow(e HistoryEntry, ts, kind string) string {
 	if unstable == "" {
 		unstable = "-"
 	}
-	return fmt.Sprintf("| %s | %s | %s | %s | %d | %d | %d | %.2f | %d | %.2f | %d | %d | %d | %d | %.3f | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s | %s | %d | %d |\n",
+	return fmt.Sprintf("| %s | %s | %s | %s | %d | %d | %d | %.2f | %d | %.2f | %d | %d | %d | %d | %.3f | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s | %s | %d | %d | %d |\n",
 		ts, kind, e.Out, e.Model, e.Cases, e.Defects, e.Found, e.Recall, e.Caught, e.RecallCaught, e.FalsePositives, e.Failed, e.Invalid, e.NoPlan, e.CostUSD, e.SkillVersion, e.Scorer, e.Corpus, e.LightActivated, e.Runs,
-		e.MetricsVersion, e.UniqueDefects, e.UniqueFound, e.UniqueConfirmed, e.UniqueCaught, e.DefectRuns, e.Controls, historyPrecision(e.Precision), e.PendingAdjudication, e.OutOfScope, e.Inconclusive, unstable, e.AgentConfig, e.Environment, e.MicroActivated, e.Rounds)
+		e.MetricsVersion, e.UniqueDefects, e.UniqueFound, e.UniqueConfirmed, e.UniqueCaught, e.DefectRuns, e.Controls, historyPrecision(e.Precision), e.PendingAdjudication, e.OutOfScope, e.Inconclusive, unstable, e.AgentConfig, e.Environment, e.MicroActivated, e.Rounds, e.Sessions)
 }
 
 func historyPrecision(precision *float64) string {

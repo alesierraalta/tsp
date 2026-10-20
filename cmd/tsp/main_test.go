@@ -44,6 +44,27 @@ func buildCLI(t *testing.T, names ...string) string {
 	return bin
 }
 
+func TestBenchSessionsRefuseInvalidCombinationsBeforeWriting(t *testing.T) {
+	bin := buildCLI(t)
+	for _, flags := range [][]string{{"--sessions", "0"}, {"--sessions", "2", "--rounds", "2"}, {"--sessions", "2", "--rounds", "1"}, {"--sessions", "2", "--escalate-model", "other"}} {
+		t.Run(strings.Join(flags, " "), func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "unwritten")
+			args := append([]string{"bench", "run", "--runner", "claude", "--agent-config", t.TempDir(), "--cases", filepath.Join(t.TempDir(), "absent"), "--out", out}, flags...)
+			data, err := exec.Command(bin, args...).CombinedOutput()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 2 {
+				t.Fatalf("exit %v: %s", err, data)
+			}
+			if strings.Count(string(data), "\n") != 1 || !strings.Contains(string(data), "--sessions") {
+				t.Fatalf("refusal %q", data)
+			}
+			if _, err := os.Stat(out); !os.IsNotExist(err) {
+				t.Fatalf("output written: %v", err)
+			}
+		})
+	}
+}
+
 // --timeout has to bound the row it names. The shell can start a descendant that inherits the output pipes
 // and outlives it, and Go's copy of that output finishes only at end of file, so without WaitDelay and the
 // process-group kill the run waits for the descendant: the whole pass runs past the deadline, no timeout

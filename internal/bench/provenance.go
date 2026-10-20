@@ -32,6 +32,7 @@ type Provenance struct {
 	EscalateModel string `json:"escalate_model,omitempty"`
 	// Rounds is how many rounds each run made when above 1; zero for a one-pass reading, so a reading whose runs
 	// made several passes is never compared with a one-pass one.
+	Sessions     int    `json:"sessions,omitempty"`
 	Rounds       int    `json:"rounds,omitempty"`
 	SkillVersion string `json:"skill_version"`
 	Corpus       string `json:"corpus"` // digest of cases, requests and runs per case
@@ -250,6 +251,9 @@ func provenanceForRun(opts Options, corpus string, cases int) Provenance {
 		Environment:    environment(),
 		SuiteTools:     suiteTools(),
 		Prompt:         opts.Prompt,
+	}
+	if opts.Sessions > 1 {
+		p.Sessions = opts.Sessions
 	}
 	if opts.Rounds > 1 {
 		p.Rounds = opts.Rounds

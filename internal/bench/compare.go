@@ -83,6 +83,7 @@ func refuseProvenanceMismatch(before, after Aggregate, opts CompareOptions) erro
 		refuseSkillVersion,
 		refuseRuns,
 		refuseRounds,
+		refuseSessions,
 		refuseAgentConfig,
 		refuseEnvironment,
 	}
@@ -131,6 +132,14 @@ func refuseRounds(before, after Provenance) error {
 		return nil
 	}
 	return fmt.Errorf("different rounds per run: before %d, after %d", b, a)
+}
+
+func refuseSessions(before, after Provenance) error {
+	b, a := passes(before.Sessions), passes(after.Sessions)
+	if b == a {
+		return nil
+	}
+	return fmt.Errorf("different sessions per run: before %d, after %d", b, a)
 }
 
 func refuseAgentConfig(before, after Provenance) error {

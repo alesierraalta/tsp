@@ -8,14 +8,14 @@ import (
 	"testing"
 )
 
-func TestHistoryRecordsRoundsLast(t *testing.T) {
+func TestHistoryRecordsSessionsLast(t *testing.T) {
 	dir := t.TempDir()
 	old := "| ts | micro |\n|---|---|\n| old | 0 |\n"
 	if err := os.WriteFile(filepath.Join(dir, "history.md"), []byte(old), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, rounds := range []int{0, 1, 3} {
-		e := historyEntry(Aggregate{}, nil, Options{Rounds: rounds})
+		e := historyEntry(Aggregate{}, nil, Options{Rounds: rounds, Sessions: rounds})
 		if err := AppendHistory(dir, e); err != nil {
 			t.Fatal(err)
 		}
@@ -29,7 +29,7 @@ func TestHistoryRecordsRoundsLast(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &row); err != nil {
 			t.Fatal(err)
 		}
-		if row["rounds"] != float64([]int{1, 1, 3}[i]) {
+		if row["rounds"] != float64([]int{1, 1, 3}[i]) || row["sessions"] != float64([]int{1, 1, 3}[i]) {
 			t.Fatalf("row %d rounds = %v", i, row["rounds"])
 		}
 	}
@@ -37,7 +37,7 @@ func TestHistoryRecordsRoundsLast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(md), old) || !strings.Contains(string(md), "predate the rounds column") || !strings.Contains(string(md), "| micro | rounds |\n") {
+	if !strings.HasPrefix(string(md), old) || !strings.Contains(string(md), "predate the rounds column") || !strings.Contains(string(md), "| micro | rounds | sessions |\n") {
 		t.Fatalf("history lost old rows or rounds migration: %s", md)
 	}
 	var tails []string
@@ -187,8 +187,8 @@ func TestHistoryAppendsAdjudicatedMetricsInDeclaredOrder(t *testing.T) {
 	if len(h) != len(r) {
 		t.Fatalf("header columns = %d, row columns = %d:\nheader %s\nrow %s", len(h), len(r), header, row)
 	}
-	wantHeaders := []string{"metrics version", "unique defects", "unique found", "unique confirmed", "unique caught", "defect runs", "controls", "precision", "pending", "out of scope", "inconclusive", "unstable", "agent config", "environment", "micro", "rounds"}
-	wantValues := []string{"2", "1", "1", "0", "1", "2", "1", "-", "3", "4", "5", "-", "bench", "linux/amd64", "6", "1"}
+	wantHeaders := []string{"metrics version", "unique defects", "unique found", "unique confirmed", "unique caught", "defect runs", "controls", "precision", "pending", "out of scope", "inconclusive", "unstable", "agent config", "environment", "micro", "rounds", "sessions"}
+	wantValues := []string{"2", "1", "1", "0", "1", "2", "1", "-", "3", "4", "5", "-", "bench", "linux/amd64", "6", "1", "1"}
 	start := len(h) - len(wantHeaders)
 	for i := range wantHeaders {
 		if h[start+i] != wantHeaders[i] || r[start+i] != wantValues[i] {
