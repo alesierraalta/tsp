@@ -25,7 +25,7 @@ func TestLoadKey(t *testing.T) {
 	}{
 		{"valid key parses", valid, ""},
 		{"malformed json", "{not json", "parse key"},
-		{"language outside node/go", strings.Replace(valid, `"node"`, `"rust"`, 1), "not node or go"},
+		{"language outside node/go/python", strings.Replace(valid, `"node"`, `"rust"`, 1), "not node, go, or python"},
 		{"defect without keywords", strings.Replace(valid, `["limit"]`, `[]`, 1), "no keywords"},
 		{"defect without a positive line", strings.Replace(valid, `"line":3`, `"line":0`, 1), "positive line"},
 		{"no defects", `{"id":"c1","language":"go","suite":"go test ./...","defects":[]}`, "no defects"},

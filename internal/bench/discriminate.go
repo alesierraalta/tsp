@@ -45,7 +45,7 @@ func (c CatchResult) Count() int {
 
 var (
 	testPathRe    = regexp.MustCompile(`(^|/)(tests?|__tests__|spec)/|(_test\.go|\.(test|spec)\.[cm]?[jt]sx?|_spec\.rb|(^|/)test_[^/]*\.py|(^|/)test\.[cm]?js|[-_]test\.[cm]?js|(^|/)test-[^/]*\.[cm]?js)$`)
-	ignoredPathRe = regexp.MustCompile(`(^|/)(\.git|node_modules|vendor|\.atl|\.claude|docs|testdata)(/|$)`)
+	ignoredPathRe = regexp.MustCompile(`(^|/)(\.git|node_modules|vendor|\.atl|\.claude|docs|testdata|\.venv|venv|__pycache__|\.pytest_cache)(/|$)`)
 )
 
 // isTestFile recognises the test files of the suites the benchmark runs.
@@ -246,6 +246,10 @@ func agentTestFiles(fixture, ws string) ([]string, error) {
 		rel, _ := filepath.Rel(ws, path)
 		if info.IsDir() {
 			if rel != "." && ignoredPathRe.MatchString(filepath.ToSlash(rel)+"/") {
+				return filepath.SkipDir
+			}
+			// A virtual environment carries pyvenv.cfg whatever it is called (`python -m venv env`).
+			if _, err := os.Stat(filepath.Join(path, "pyvenv.cfg")); err == nil {
 				return filepath.SkipDir
 			}
 			return nil

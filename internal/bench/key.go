@@ -132,8 +132,8 @@ func (k Key) Validate() error {
 	if strings.TrimSpace(k.ID) == "" {
 		problems = append(problems, "id is empty")
 	}
-	if k.Language != "node" && k.Language != "go" {
-		problems = append(problems, fmt.Sprintf("language %q is not node or go", k.Language))
+	if k.Language != "node" && k.Language != "go" && k.Language != "python" {
+		problems = append(problems, fmt.Sprintf("language %q is not node, go, or python", k.Language))
 	}
 	if strings.TrimSpace(k.Suite) == "" {
 		problems = append(problems, "suite is empty")
