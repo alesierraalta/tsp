@@ -1,0 +1,47 @@
+{
+  "id": "f40-search-settings",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "family": "contract",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/query.js",
+      "line": 11,
+      "class": "normalization-postcondition",
+      "keywords": [
+        "truncate",
+        "whitespace",
+        "normalize",
+        "trailing"
+      ],
+      "description": "Truncation after normalization can leave trailing whitespace in the interpreted query.",
+      "trigger": {
+        "input": "timeout 20 node --input-type=module -e 'import {interpretQuery} from \"./src/query.js\"; import {readSettings} from \"./src/settings.js\"; console.log(JSON.stringify(interpretQuery(\"amber meadow\",readSettings({SEARCH_MAX_QUERY_LENGTH:\"6\"})).text));'",
+        "expected": "\"amber\"",
+        "actual": "\"amber \""
+      },
+      "why_missed": "S9(d): a naive oracle takes the normalized prefix of the requested length, which looks right but violates the final whitespace postcondition; existing examples are short or truncate inside a word."
+    },
+    {
+      "id": "D2",
+      "file": "deploy/environment.mjs",
+      "line": 6,
+      "class": "configuration-allowlist",
+      "keywords": [
+        "environment",
+        "allowlist",
+        "configuration",
+        "deploy"
+      ],
+      "description": "The deployment allowlist omits SEARCH_MATCH_MODE although settings reads and documents it.",
+      "trigger": {
+        "input": "timeout 20 node --input-type=module -e 'import {renderEnvironment} from \"./deploy/environment.mjs\"; import {readSettings} from \"./src/settings.js\"; const input={SEARCH_MATCH_MODE:\"phrase\"}; const direct=readSettings(input); const deployed=readSettings(renderEnvironment(input)); console.log(JSON.stringify({direct:direct.matchMode,deployed:deployed.matchMode}));'",
+        "expected": "{\"direct\":\"phrase\",\"deployed\":\"phrase\"}",
+        "actual": "{\"direct\":\"phrase\",\"deployed\":\"all\"}"
+      },
+      "why_missed": "S9(d): direct settings reads suggest the requested mode is supported, but deployment must preserve that value too; matching-mode tests bypass the renderer and renderer tests use older settings only."
+    }
+  ]
+}
