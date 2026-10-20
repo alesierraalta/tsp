@@ -606,6 +606,7 @@ tsp bench run --cases 'bench/cases/*' --model sonnet --runs 1 --max-cost-usd 20
 tsp bench score --case bench/cases/<id> --workspace <ws>     # re-score after grader changes
 tsp bench history                                            # every run, never rewritten
 tsp bench rescore bench/results/<run>                        # re-read a finished run with today's rules
+tsp bench verify-oracle --run bench/results/<kept-run>       # blind, bench-only contract judge (--keep required)
 tsp bench compare bench/results/<before> bench/results/<after>   # per-case reported and caught, side by side
 tsp bench compare --skill-versions <before> <after>          # two skill versions on an otherwise identical instrument
 ```

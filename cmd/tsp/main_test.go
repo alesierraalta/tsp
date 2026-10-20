@@ -44,6 +44,45 @@ func buildCLI(t *testing.T, names ...string) string {
 	return bin
 }
 
+func TestBenchOracleRefusals(t *testing.T) {
+	for _, kind := range []string{"missing", "not-reading", "no-workspace"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			args := []string{"verify-oracle"}
+			if kind != "missing" {
+				args = append(args, "--run", dir)
+			}
+			if kind == "no-workspace" {
+				if err := os.WriteFile(filepath.Join(dir, "aggregate.json"), []byte(`{"cases":[]}`), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f, err := os.CreateTemp(t.TempDir(), "stderr")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			old := os.Stderr
+			os.Stderr = f
+			defer func() { os.Stderr = old }()
+			code := runBench(args)
+			b, err := os.ReadFile(f.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if code != 2 || strings.Count(string(b), "\n") != 1 {
+				t.Fatalf("code=%d stderr=%q", code, b)
+			}
+			if kind == "no-workspace" && !strings.Contains(string(b), "rerun with --keep") {
+				t.Fatalf("stderr=%q", b)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "oracle")); !os.IsNotExist(err) {
+				t.Fatal("wrote on refusal")
+			}
+		})
+	}
+}
+
 func TestBenchSessionsRefuseInvalidCombinationsBeforeWriting(t *testing.T) {
 	bin := buildCLI(t)
 	for _, flags := range [][]string{{"--sessions", "0"}, {"--sessions", "2", "--rounds", "2"}, {"--sessions", "2", "--rounds", "1"}, {"--sessions", "2", "--escalate-model", "other"}} {
