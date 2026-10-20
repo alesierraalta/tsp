@@ -364,6 +364,23 @@ after the benchmark showed most of that skill's cost was ceremony; `tsp check` w
 one such failing test, and `tsp plan` and the Stop gate remain for anyone who keeps a plan.
 The other skills are specialized and invoked by name.
 
+### Track findings between reviews
+
+After a TSP run, run `tsp findings record` before committing the witness tests. At the next
+review, run `tsp findings check`. Both accept `--cwd` and `--timeout`; record also accepts
+`--suite` (Go, pytest or `node --test`). The registry lives outside the repository, under
+TSP's state directory, separately for each branch; detached HEAD is refused.
+
+Check reports `open`, `fixed`, or `regressed`. A weakened test is `test-changed`, a deleted
+test is `missing`, and an unreadable suite is `unknown`; these need review, never count as fixes.
+Its summary counts newly fixed, still open, new and regressed findings. This tracks existing
+witnesses, not instructions for an agent to hunt for more bugs.
+
+Check exits 0 when nothing remains unresolved (including an empty registry), 1 for unresolved
+findings, and 2 when it cannot judge. Record exits 0 for recorded or refreshed witnesses, 1 for
+none, and 2 for errors. Re-recording a failing witness refreshes its body fingerprint rather
+than allocating another id.
+
 `breakcheck` is an explicitly invoked bounded adversarial campaign for one candidate between the Verifier and RDD; it reports evidence and a readiness disposition, not a score.
 
 ## Development
