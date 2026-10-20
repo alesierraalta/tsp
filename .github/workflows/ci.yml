@@ -5,7 +5,7 @@ name: CI
 # This job runs them there.
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
 
 permissions:
