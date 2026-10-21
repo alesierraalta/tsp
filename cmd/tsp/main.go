@@ -927,17 +927,37 @@ func selfDir() string {
 	return filepath.Dir(exe)
 }
 
+func splitPaths(raw string) []string {
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func runCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
 	path := fs.String("path", "", "plan file relative to the repository root")
 	suite := fs.String("suite", "", "command that runs the changed tests when there is no plan (default: their Go packages, pytest on changed .py tests, or node --test on them)")
 	waive := fs.String("no-test-needed", "", "record in "+check.WaiverName+" that the current change needs no new test, with this reason; editing the code again voids it")
+	paths := fs.String("paths", "", "answer only for these comma-separated paths, relative to --cwd: whether they owe a test, ignoring the plan's remaining targets")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
 	}
 	if flagSet(fs, "no-test-needed") && strings.TrimSpace(*waive) == "" {
 		fmt.Fprintln(os.Stderr, "check: --no-test-needed needs a reason")
+		return 2
+	}
+	if flagSet(fs, "paths") && flagSet(fs, "no-test-needed") {
+		fmt.Fprintln(os.Stderr, "check: --paths answers for one change; --no-test-needed records a waiver for the whole change")
+		return 2
+	}
+	named := splitPaths(*paths)
+	if flagSet(fs, "paths") && len(named) == 0 {
+		fmt.Fprintln(os.Stderr, "check: --paths names no path: name one or more comma-separated paths")
 		return 2
 	}
 	if flagSet(fs, "path") {
@@ -946,7 +966,7 @@ func runCheck(args []string) int {
 			return 2
 		}
 	}
-	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive)})
+	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named})
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
 }

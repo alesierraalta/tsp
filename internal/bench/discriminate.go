@@ -54,6 +54,10 @@ func isTestFile(rel string) bool {
 	return !ignoredPathRe.MatchString(rel) && testPathRe.MatchString(rel)
 }
 
+// IsTestFile reports whether a repository-relative path holds a test, for callers outside this package
+// that must tell a change's test apart from its source with the same rules the bench judges by.
+func IsTestFile(rel string) bool { return isTestFile(rel) }
+
 // Discriminate runs the check for one agent workspace against the case's fixed versions.
 func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResult {
 	res := CatchResult{Caught: map[string]bool{}}

@@ -181,24 +181,24 @@ export function isSourcePath(path: string): boolean {
 const isTspPrompt = (prompt: string | undefined): boolean => /\b(tsp|test[- ]strategy)\b/i.test(prompt ?? "");
 
 /**
- * What the repository still owes a test for, or "" when it owes nothing: the offer's whole criterion.
- * The edit list only says the agent touched source; `tsp check` says whether that change needs TSP at all and
- * names what is missing. Exit 0 owes nothing and exit 1 owes, whatever the report's wording: its first line that is
- * not bookkeeping is the reason, and a line naming a plan target still to do outranks one that only reports how far
- * the sweep got. Any other exit is the check failing, and a reply with no line at all is the check
- * unable to speak, so neither yields a criterion and the offer stays silent.
+ * What the source this run touched still owes a test for, or "" when it owes nothing: the offer's whole criterion.
+ * The edit list only says the agent touched source; scoped `tsp check --paths` answers for those paths alone, so a
+ * plan target still open from earlier work is never mistaken for a debt this run created, and a run that changed no
+ * production source is never asked about. Exit 0 owes nothing and exit 1 owes, whatever the report's wording: its
+ * first line that is not bookkeeping is the reason. Any other exit is the check failing, and a reply with no line at
+ * all is the check unable to speak, so neither yields a criterion and the offer stays silent.
  */
-async function owedReason(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp): Promise<string> {
+async function owedReason(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, paths: readonly string[]): Promise<string> {
   let result: ExecResult;
   try {
-    result = await exec(["check", "--cwd", cwd], { cwd, env: { ...env } });
+    result = await exec(["check", "--cwd", cwd, "--paths", paths.join(",")], { cwd, env: { ...env } });
   } catch {
     return "";
   }
   if (result.code !== 1) return "";
   const reply = `${result.stdout}\n${result.stderr}`.split("\n").map((l) => l.trim()).filter((l) => l !== "");
   const owed = reply.filter((l) => !META_LINE.some((meta) => meta.test(l))).filter(hasVisibleText).map(boundReason);
-  return owed.find((l) => PENDING_LINE.test(l)) ?? owed[0] ?? "";
+  return owed[0] ?? "";
 }
 
 /**
@@ -232,9 +232,6 @@ function boundReason(line: string): string {
  * parentheses can be the debt itself (a pending plan target) and must survive to the question.
  */
 const META_LINE = [/^warning: /, /^\d+ production source file\(s\) changed: /, /^\(the names below are read from the plan file\b/];
-
-/** A plan target still to do: it names what the repository owes, where a sweep total only says how far it got. */
-const PENDING_LINE = /^still pending\b/;
 
 export interface OfferOptions {
   optedOut?: (cwd: string) => boolean; // the repo's .no-testing-gate opt-out, shared with the Stop gate
@@ -281,7 +278,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd)) return;
     if (tspRun) return reviewFindings(ctx.cwd, env, exec, (message, type) => ctx.ui.notify(message, type));
     if (fresh.length === 0) return;
-    const owed = await owedReason(ctx.cwd, env, exec);
+    const owed = await owedReason(ctx.cwd, env, exec, fresh);
     if (owed === "") return;
     const answer = await ctx.ui.select(`${OFFER_QUESTION}\n${owed}`, [OFFER_YES, OFFER_NO]);
     if (answer === OFFER_YES) {

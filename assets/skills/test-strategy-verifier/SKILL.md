@@ -1,44 +1,53 @@
 ---
 name: test-strategy-verifier
-description: "Trigger: terminé la implementación, implementation done, ready for review, before RDD, ¿quieres hacer la validación del TSP?, validación del TSP, run the TSP validation, verificar el cambio con TSP, verificar este cambio, TSP validation gate, post-implementation verification. Own TSP verifier: at the end of an implementation it reads the repository to decide whether TSP is owed and over which paths, then runs the full test-strategy flow without asking the human."
+description: "Trigger: terminé la implementación, implementation done, a code change is complete, ready for review, before RDD, ¿quieres hacer la validación del TSP?, validación del TSP, run the TSP validation, verificar el cambio con TSP, verificar este cambio, TSP validation gate, post-implementation verification. Own TSP verifier: after ODD finishes an implementation and before the RDD review, it asks the repository whether THIS work changed production source and owes a test, then runs the full test-strategy flow without asking the human. It never fires after a report, a document or a note, which implement nothing."
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.2.0"
-  requires_tsp: "0.6.6"
+  version: "0.2.1"
+  requires_tsp: "0.6.7"
   scope: [common]
-  auto_invoke: "At the end of an implementation, before the RDD/Gentle review or before declaring done: derive from `tsp check` whether TSP is owed and over which paths, say it in one line, then run the full test-strategy flow when it is owed"
+  auto_invoke: "After ODD finishes an implementation and before the RDD review or declaring done: run `tsp check --paths <the production source this work changed>`, say the verdict in one line, then run the full test-strategy flow when it is owed. No production source from this work means no implementation, so no TSP."
 ---
 
 # TSP Own Verifier
 
 ## Activation Contract
 
-This is TSP's own verifier. It takes over the moment an implementation is finished — before the
-Gentle AI RDD review when RDD is present, and immediately after the implementation when there is
-no RDD. It does not hand the change to Gentle AI's verifier agents; TSP validates its own change
-with its own flow.
+This is TSP's own verifier. It takes its place in one order and only there: **ODD implements, TSP
+verifies the implementation, RDD reviews it with hashes.** So it runs after an implementation is
+finished and before the RDD review when RDD is present, and immediately after the implementation
+when there is no RDD. It does not hand the change to Gentle AI's verifier agents; TSP validates its
+own change with its own flow.
 
-The moment an implementation lands (code or behavior changed, work unit complete, ready for
-review), run the Verification Gate below BEFORE declaring the work done, before the RDD review,
-and before opening a PR or delivering.
+An implementation is production source this work changed. A report, a document, a note, a ledger row
+or a chat answer implements nothing: those runs finish without TSP, and no gate is opened for them
+however much source other work left behind in the tree.
+
+The moment an implementation lands (code or behavior changed by this work, work unit complete,
+ready for review), run the Verification Gate below BEFORE declaring the work done, before the RDD
+review, and before opening a PR or delivering.
 
 ## Verification Gate — the repository answers, not the human
 
 Never ask the human whether to validate, nor what or where to validate. Both answers already live
 in the repository, and a question the agent could answer itself turns a criterion into chat noise.
 
-Run `tsp check` before declaring the work done:
+Run `tsp check --paths <the production source this work changed>` before declaring the work done.
+The paths come from the work itself — the files this work unit edited — never from the whole
+repository, which carries debt older than this work.
 
-- **exit 0**, or a report that no production source changed → TSP is not owed. Say it in one line
-  (`tsp check: nothing to validate`) and continue: no flow, no question.
-- **exit 1** → the report names what is missing, in the check's own wording: the change needs a
-  test beside it, a run still owes breadth, or the plan could not be read. That report is the
-  scope; run the flow over it.
+- **exit 0**, or a report that no production source is changed in those paths → TSP is not owed.
+  Say it in one line (`tsp check: nothing to validate`) and continue: no flow, no question.
+- **exit 1** → the report names what this change is missing, in the check's own wording: it needs a
+  test beside it, or it could not be judged. That report is the scope; run the flow over it.
+- **a plan target still open** is progress through a run's agenda, never this change's debt: the
+  scoped report never asks for one, and neither does this gate. Only an unscoped reading sees them,
+  and that reading is not this gate.
 - **exit 1 that prints nothing**, or **any other non-zero exit** (a usage error is the check
   failing, not a debt) → the check could not answer here. Apply the same criterion by hand:
   an uncommitted change to production source in this work unit is owed; documentation, fixtures
-  and ledger-only edits are not. The Pi host's TSP offer stays silent in exactly these
+  and ledger-only edits are not — which is also why a report-only run never reaches this line. The Pi host's TSP offer stays silent in exactly these
   could-not-answer cases, so that hand rule is the agent's own fallback and the two never
   contradict.
 
