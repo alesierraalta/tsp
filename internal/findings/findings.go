@@ -137,7 +137,7 @@ var unsupportedRunner = errors.New("supported runners: go test, pytest, node --t
 
 // ignored reports whether git refuses to version a path. A witness there proves nothing a later review could
 // find: bench copies and other generated workspaces disappear, and the run then reports a debt it can never
-// settle.
+// settle. Any git failure (exit 128, git missing) reads as not ignored, so an error never causes a prune.
 func ignored(dir, rel string) bool {
 	if rel == "" {
 		return false
@@ -288,9 +288,13 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	}
 	for i := range r.Findings {
 		f := &r.Findings[i]
+		// Pruning needs both: git refuses the path AND the file is gone under the repository root, so a
+		// transient .gitignore line never deletes a witness a review could still judge.
 		if ignored(top, f.File) {
-			dropped = append(dropped, *f)
-			continue
+			if _, e := os.Stat(filepath.Join(top, f.File)); errors.Is(e, os.ErrNotExist) {
+				dropped = append(dropped, *f)
+				continue
+			}
 		}
 		file, fingerprint, _ := locate(top, f.Test, []string{f.File})
 		suffix := ""

@@ -276,6 +276,10 @@ func TestD9CheckDropsAnIgnoredWitnessAlreadyRecorded(t *testing.T) {
 		t.Fatalf("record: exit=%d\n got %q\nwant %q", c, recorded, want)
 	}
 	path := seedIgnoredFinding(t)
+	// The real incident: the bench workspace under results/ is deleted, leaving the recorded witness behind.
+	if e := os.RemoveAll(filepath.Join(d, "results", "run")); e != nil {
+		t.Fatal(e)
+	}
 	out, code := findings.Check(d, wait)
 	want := "review 1 on topic: 0 fixed, 0 open, 1 new, 0 regressed\nF1 open value_test.go example.invalid/sample.TestPromise — Keeps the promise.\nF2 dropped results/run/ws/cmd/asdf/main_test.go example.invalid/sample/results/run/ws/cmd/asdf.TestBats: witness under a git-ignored path\n"
 	if code != 1 || out != want {
@@ -346,12 +350,52 @@ func TestD11ADroppedWitnessIsAnnouncedOnce(t *testing.T) {
 		t.Fatalf("record: %d %q", c, out)
 	}
 	seedIgnoredFinding(t)
+	// The real incident: the bench workspace under results/ is deleted, leaving the recorded witness behind.
+	if e := os.RemoveAll(filepath.Join(d, "results", "run")); e != nil {
+		t.Fatal(e)
+	}
 	out, code := findings.Check(d, wait)
 	if code != 1 || !strings.Contains(out, "F2 dropped ") {
 		t.Fatalf("first check: exit=%d\n got %q", code, out)
 	}
 	if out, code = findings.Check(d, wait); strings.Contains(out, "dropped") {
 		t.Fatalf("the drop was announced twice: exit=%d\n got %q", code, out)
+	}
+}
+
+// TestD13AnIgnoredWitnessStillOnDiskIsKept pins the transient-ignore rule: a .gitignore line appearing while the
+// witness file still exists must not delete a witness a review could still judge. Pruning requires both — git
+// ignores the path and the file is gone (the deleted bench workspace of the real incident).
+func TestD13AnIgnoredWitnessStillOnDiskIsKept(t *testing.T) {
+	d := ignoredRepo(t)
+	put(t, d, "value_test.go", redTest)
+	if out, c := findings.Record(d, "", wait); c != 0 {
+		t.Fatalf("record: %d %q", c, out)
+	}
+	path := seedIgnoredFinding(t)
+	out, code := findings.Check(d, wait)
+	if strings.Contains(out, "dropped") {
+		t.Fatalf("an ignored witness still on disk was announced as dropped: exit=%d\n got %q", code, out)
+	}
+	if !strings.Contains(out, "\nF2 ") {
+		t.Fatalf("the ignored witness still on disk was not judged: exit=%d\n got %q", code, out)
+	}
+	raw, e := os.ReadFile(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var stored registry
+	if e = json.Unmarshal(raw, &stored); e != nil {
+		t.Fatal(e)
+	}
+	kept := false
+	for _, f := range stored.Findings {
+		if f.ID == "F2" {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Fatalf("the ignored witness still on disk was pruned from the registry: %+v", stored.Findings)
 	}
 }
 
