@@ -291,6 +291,14 @@ test("a reason made only of zero-width characters never reaches the UI blank", a
   assert.deepEqual(h.asked.map((a) => a.title), [`¿Quieres hacer TSP?\n${owed}`], "the offer names the debt, not a line nobody can read");
 });
 
+test("a reason of only combining marks is not visible text either", async () => {
+  // Combining marks attach to a base character; alone they paint nothing, like the zero-width family.
+  const owed = "no test was added or changed with it";
+  const h = offerHarness({ check: { stdout: `\u0301\u0301\u0301\n${owed}\n`, stderr: "", code: 1 } });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(h.asked.map((a) => a.title), [`¿Quieres hacer TSP?\n${owed}`], "a line that paints nothing is not a reason");
+});
+
 test("bounded text is not visible text: a long invisible line never becomes the reason", async () => {
   // The cut runs before the visibility test, so a line longer than the cap gains a visible ellipsis it never had.
   const owed = "no test was added or changed with it";

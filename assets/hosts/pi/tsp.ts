@@ -202,13 +202,14 @@ async function owedReason(cwd: string, env: Readonly<Record<string, string | und
 }
 
 /**
- * A line carrying no visible character is not a reason: it would ask the question with a blank line and hide the debt
- * line printed after it. Formatting characters only decide that question, they are never stripped, so text that
- * depends on them keeps rendering as written. This reads the line as the check printed it, before the cut, whose
- * ellipsis would make an invisible line look visible.
+ * A line is a reason only when it carries something that paints: a letter, a digit or punctuation. A line of controls,
+ * formatting characters or bare glyph fillers renders as nothing, and would ask the question with a blank line while
+ * hiding the debt line printed after it. Listing the invisible categories instead always leaves one out, so the test
+ * asks the positive question. It reads the line as the check printed it, before the cut, whose ellipsis would make an
+ * invisible line look visible. The Hangul fillers are letters that paint nothing, so they do not count as paint.
  */
 function hasVisibleText(line: string): boolean {
-  return /[^\p{Cc}\p{Cf}\s]/u.test(line);
+  return /[\p{L}\p{N}\p{P}]/u.test(line.replace(/[\u115F\u1160\u3164\uFFA0]/g, ""));
 }
 
 /**
