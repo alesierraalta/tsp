@@ -28,6 +28,9 @@ func command(t *testing.T, dir string, args ...string) string {
 }
 func put(t *testing.T, dir, name, body string) {
 	t.Helper()
+	if e := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0700); e != nil {
+		t.Fatal(e)
+	}
 	if e := os.WriteFile(filepath.Join(dir, name), []byte(body), 0600); e != nil {
 		t.Fatal(e)
 	}
@@ -237,5 +240,145 @@ func TestD7UnsupportedRunnerRefused(t *testing.T) {
 	entries, _ := os.ReadDir(os.Getenv("TSP_HOME"))
 	if len(entries) != 0 {
 		t.Fatalf("unsupported runner wrote registry: %v", entries)
+	}
+}
+
+// ignoredRepo is the incident: a red test inside a git-ignored bench workspace. The workspace is a copy of
+// another repository, so nothing it proves about itself is a witness of this one.
+func ignoredRepo(t *testing.T) string {
+	t.Helper()
+	d := repo(t)
+	put(t, d, ".gitignore", "results/\n")
+	command(t, d, "git", "add", ".gitignore")
+	command(t, d, "git", "commit", "-qm", "ignore the bench results")
+	put(t, d, "results/run/ws/cmd/asdf/main.go", "package asdf\n\nfunc Main() {}\n")
+	put(t, d, "results/run/ws/cmd/asdf/main_test.go", "package asdf\n\nimport \"testing\"\n\nfunc TestBats(t *testing.T) { t.Fatal(\"the shim is red\") }\n")
+	return d
+}
+
+func TestD8IgnoredWitnessIsNeverRecorded(t *testing.T) {
+	d := ignoredRepo(t)
+	out, code := findings.Record(d, "", wait)
+	want := "skipped results/run/ws/cmd/asdf/main_test.go example.invalid/sample/results/run/ws/cmd/asdf.TestBats: witness under a git-ignored path\nnothing recorded: every witness lives under a path git ignores\n"
+	if code != 1 || out != want {
+		t.Fatalf("ignored witness: exit=%d\n got %q\nwant %q", code, out, want)
+	}
+	if out, code := findings.Check(d, wait); code != 0 || out != "no findings recorded on topic\n" {
+		t.Fatalf("registry: %d %q", code, out)
+	}
+}
+
+func TestD9CheckDropsAnIgnoredWitnessAlreadyRecorded(t *testing.T) {
+	d := ignoredRepo(t)
+	put(t, d, "value_test.go", redTest)
+	recorded, c := findings.Record(d, "", wait)
+	if want := "skipped results/run/ws/cmd/asdf/main_test.go example.invalid/sample/results/run/ws/cmd/asdf.TestBats: witness under a git-ignored path\nF1 recorded value_test.go example.invalid/sample.TestPromise\n"; c != 0 || recorded != want {
+		t.Fatalf("record: exit=%d\n got %q\nwant %q", c, recorded, want)
+	}
+	path := seedIgnoredFinding(t)
+	out, code := findings.Check(d, wait)
+	want := "review 1 on topic: 0 fixed, 0 open, 1 new, 0 regressed\nF1 open value_test.go example.invalid/sample.TestPromise — Keeps the promise.\nF2 dropped results/run/ws/cmd/asdf/main_test.go example.invalid/sample/results/run/ws/cmd/asdf.TestBats: witness under a git-ignored path\n"
+	if code != 1 || out != want {
+		t.Fatalf("drop: exit=%d\n got %q\nwant %q", code, out, want)
+	}
+	raw, e := os.ReadFile(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var stored registry
+	if e = json.Unmarshal(raw, &stored); e != nil {
+		t.Fatal(e)
+	}
+	if len(stored.Findings) != 1 || stored.Findings[0].ID != "F1" {
+		t.Fatalf("registry still carries the ignored witness: %+v", stored.Findings)
+	}
+}
+
+// registry is the on-disk shape record and check share; a test edits it to stand in for a witness an older run left.
+type registry struct {
+	Version    int                `json:"version"`
+	Repository string             `json:"repository"`
+	Branch     string             `json:"branch"`
+	Review     int                `json:"review"`
+	NextID     int                `json:"next_id"`
+	Findings   []findings.Finding `json:"findings"`
+}
+
+// seedIgnoredFinding appends the witness a bench workspace leaves behind: a red test under a path git ignores, recorded
+// by an older run, and returns the registry file so a test can read it back.
+func seedIgnoredFinding(t *testing.T) string {
+	t.Helper()
+	files, _ := filepath.Glob(filepath.Join(os.Getenv("TSP_HOME"), "findings", "*", "topic.json"))
+	if len(files) != 1 {
+		t.Fatal(files)
+	}
+	var stored registry
+	raw, e := os.ReadFile(files[0])
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = json.Unmarshal(raw, &stored); e != nil {
+		t.Fatal(e)
+	}
+	legacy := stored.Findings[0]
+	legacy.ID = "F2"
+	legacy.Test = "example.invalid/sample/results/run/ws/cmd/asdf.TestBats"
+	legacy.File = "results/run/ws/cmd/asdf/main_test.go"
+	legacy.Status = "missing"
+	stored.Findings = append(stored.Findings, legacy)
+	stored.NextID = 3
+	body, e := json.MarshalIndent(stored, "", "  ")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = os.WriteFile(files[0], append(body, '\n'), 0600); e != nil {
+		t.Fatal(e)
+	}
+	return files[0]
+}
+
+// TestD11ADroppedWitnessIsAnnouncedOnce announces the drop the registry performed and then stops, so the report and
+// the registry agree after the first run and the second has nothing left to say.
+func TestD11ADroppedWitnessIsAnnouncedOnce(t *testing.T) {
+	d := ignoredRepo(t)
+	put(t, d, "value_test.go", redTest)
+	if out, c := findings.Record(d, "", wait); c != 0 {
+		t.Fatalf("record: %d %q", c, out)
+	}
+	seedIgnoredFinding(t)
+	out, code := findings.Check(d, wait)
+	if code != 1 || !strings.Contains(out, "F2 dropped ") {
+		t.Fatalf("first check: exit=%d\n got %q", code, out)
+	}
+	if out, code = findings.Check(d, wait); strings.Contains(out, "dropped") {
+		t.Fatalf("the drop was announced twice: exit=%d\n got %q", code, out)
+	}
+}
+
+func TestD10ADeletedTrackedWitnessStaysMissing(t *testing.T) {
+	d := repo(t)
+	put(t, d, "value_test.go", "package sample\n\nimport \"testing\"\n\nfunc TestPromise(t *testing.T) {}\n")
+	command(t, d, "git", "add", "value_test.go")
+	command(t, d, "git", "commit", "-qm", "the witness")
+	put(t, d, "value_test.go", redTest)
+	if out, c := findings.Record(d, "", wait); c != 0 {
+		t.Fatalf("record: %d %q", c, out)
+	}
+	if e := os.Remove(filepath.Join(d, "value_test.go")); e != nil {
+		t.Fatal(e)
+	}
+	review(t, d, 1, "missing", 0, 0, 0, 0, 1, 1)
+}
+
+// A run that finds no red witness keeps the contract it had before this change: the same line, the same exit
+// and no registry write. Only a witness git cannot version produces the new message.
+func TestD12AZeroWitnessRunKeepsTheBaselineExit(t *testing.T) {
+	d := repo(t)
+	put(t, d, "value_test.go", "package sample\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if Value() != 0 { t.Fatal(\"changed\") } }\n")
+	if out, code := findings.Record(d, "", wait); code != 1 || out != "no defect witnesses recorded\n" {
+		t.Fatalf("record exit=%d: %q", code, out)
+	}
+	if out, code := findings.Check(d, wait); code != 0 || out != "no findings recorded on topic\n" {
+		t.Fatalf("a run with no witness wrote a registry entry: exit=%d: %q", code, out)
 	}
 }
