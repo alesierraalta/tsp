@@ -135,6 +135,17 @@ func lockRegistry(path string) (func(), error) {
 
 var unsupportedRunner = errors.New("supported runners: go test, pytest, node --test, jest, vitest run, cargo test")
 
+// ignored reports whether git refuses to version a path. A witness there proves nothing a later review could
+// find: bench copies and other generated workspaces disappear, and the run then reports a debt it can never
+// settle. Any git failure (exit 128, git missing) reads as not ignored, so an error never causes a prune.
+func ignored(dir, rel string) bool {
+	if rel == "" {
+		return false
+	}
+	_, e := git(dir, "check-ignore", "-q", "--", rel)
+	return e == nil
+}
+
 func failure(e error) (string, int) { return "tsp findings: " + e.Error() + "\n", 2 }
 
 // Record records or refreshes precisely the witnesses RedCheck found.
@@ -169,8 +180,13 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if e != nil {
 		return failure(e)
 	}
-	var out strings.Builder
+	var out, skipped strings.Builder
 	for _, name := range rep.Red {
+		file, fingerprint, promise := locate(top, name, rep.TestFiles)
+		if ignored(top, file) {
+			fmt.Fprintf(&skipped, "skipped %s %s: witness under a git-ignored path\n", file, name)
+			continue
+		}
 		index := -1
 		for i := range r.Findings {
 			if r.Findings[i].Test == name {
@@ -184,14 +200,18 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 			index = len(r.Findings) - 1
 		}
 		f := &r.Findings[index]
-		file, fingerprint, promise := locate(top, name, rep.TestFiles)
 		f.File, f.Fingerprint, f.Promise, f.Suite, f.Commit, f.Time = file, fingerprint, promise, rep.Suite, commit, time.Now().UTC()
 		fmt.Fprintf(&out, "%s recorded %s %s\n", f.ID, f.File, f.Test)
+	}
+	// A run with no red witness at all returned above, before locking, exactly as before this change. Reaching
+	// here with nothing recorded means every witness it found lives where git cannot version it.
+	if out.Len() == 0 {
+		return skipped.String() + "nothing recorded: every witness lives under a path git ignores\n", 1
 	}
 	if e = save(r, path); e != nil {
 		return failure(e)
 	}
-	return out.String(), 0
+	return skipped.String() + out.String(), 0
 }
 
 // SetVerdict records a human decision against the current test fingerprint.
@@ -257,6 +277,7 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	runs := map[string]run{}
 	fixed, open, newCount, regressed, need := 0, 0, 0, 0, 0
 	cannotJudge := false
+	var dropped []Finding // witnesses whose path git ignores: pruned from the registry, never reported as debt
 	var lines strings.Builder
 	writeLine := func(f Finding, promise, suffix string) {
 		fmt.Fprintf(&lines, "%s %s %s %s", f.ID, f.Status, f.File, f.Test)
@@ -267,6 +288,14 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	}
 	for i := range r.Findings {
 		f := &r.Findings[i]
+		// Pruning needs both: git refuses the path AND the file is gone under the repository root, so a
+		// transient .gitignore line never deletes a witness a review could still judge.
+		if ignored(top, f.File) {
+			if _, e := os.Stat(filepath.Join(top, f.File)); errors.Is(e, os.ErrNotExist) {
+				dropped = append(dropped, *f)
+				continue
+			}
+		}
 		file, fingerprint, _ := locate(top, f.Test, []string{f.File})
 		suffix := ""
 		if f.Verdict != nil {
@@ -356,7 +385,30 @@ func Check(dir string, timeout time.Duration) (string, int) {
 			}
 		}
 	}
+	var removed []Finding
+	if len(dropped) > 0 {
+		kept := latest.Findings[:0]
+		for _, f := range latest.Findings {
+			gone := false
+			for _, want := range dropped {
+				if f.ID == want.ID && reflect.DeepEqual(f, want) {
+					gone = true
+					break
+				}
+			}
+			if gone {
+				removed = append(removed, f)
+				continue
+			}
+			kept = append(kept, f)
+		}
+		latest.Findings = kept
+	}
 	r = latest
+	// Only what the registry really lost is announced, so the report never claims a drop the registry kept.
+	for _, f := range removed {
+		fmt.Fprintf(&lines, "%s dropped %s %s: witness under a git-ignored path\n", f.ID, f.File, f.Test)
+	}
 	r.Review++
 	report := fmt.Sprintf("review %d on %s: %d fixed, %d open, %d new, %d regressed", r.Review, r.Branch, fixed, open, newCount, regressed)
 	if need > 0 {

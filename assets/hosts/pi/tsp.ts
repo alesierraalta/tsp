@@ -155,12 +155,14 @@ export async function runTppCommand(rawArgs: string, deps: TppDeps): Promise<voi
   }
 }
 
-// The TSP offer. When a run ends after the agent edited source code, Pi asks in the chat whether to run TSP;
-// "Sí" sends "haz el TSP" as if the user typed it, which invokes the test-strategy skill. Only edit and write
-// results are seen, so a change made through a shell command is not noticed. When a TSP run ends, the tests
-// it left failing on HEAD's code are recorded as findings and the review of every finding is shown to the user;
-// the agent is never told about it. A delegated child session (GENTLE_PI_AGENTS_CHILD=1) has nobody to answer,
-// so it gets neither.
+// The TSP offer. When a run ends after the agent edited source code, and the repository still owes that change
+// a test, Pi asks in the chat whether to run TSP; "Sí" sends "haz el TSP" as if the user typed it, which invokes
+// the test-strategy skill. Only edit and write results are seen, so a change made through a shell command is not
+// noticed. `tsp check` is the criterion: the edit list only says source was touched, while the check says whether
+// TSP is owed and names what is missing, so a check that finds nothing owed or cannot run asks nothing.
+// When a TSP run ends, the tests it left failing on HEAD's code are recorded as findings and the review of every
+// finding is shown to the user; the agent is never told about it. A delegated child session
+// (GENTLE_PI_AGENTS_CHILD=1) has nobody to answer, so it gets neither.
 export const OFFER_QUESTION = "¿Quieres hacer TSP?";
 export const OFFER_YES = "Sí";
 export const OFFER_NO = "No";
@@ -177,6 +179,59 @@ export function isSourcePath(path: string): boolean {
 
 /** A run the user started to do TSP: its own edits never trigger another offer. */
 const isTspPrompt = (prompt: string | undefined): boolean => /\b(tsp|test[- ]strategy)\b/i.test(prompt ?? "");
+
+/**
+ * What the source this run touched still owes a test for, or "" when it owes nothing: the offer's whole criterion.
+ * The edit list only says the agent touched source; scoped `tsp check --paths` answers for those paths alone, so a
+ * plan target still open from earlier work is never mistaken for a debt this run created, and a run that changed no
+ * production source is never asked about. Exit 0 owes nothing and exit 1 owes, whatever the report's wording: its
+ * first line that is not bookkeeping is the reason. Any other exit is the check failing, and a reply with no line at
+ * all is the check unable to speak, so neither yields a criterion and the offer stays silent.
+ */
+async function owedReason(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, paths: readonly string[]): Promise<string> {
+  let result: ExecResult;
+  try {
+    result = await exec(["check", "--cwd", cwd, "--paths", paths.join(",")], { cwd, env: { ...env } });
+  } catch {
+    return "";
+  }
+  if (result.code !== 1) return "";
+  const reply = `${result.stdout}\n${result.stderr}`.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+  const owed = reply.filter((l) => !META_LINE.some((meta) => meta.test(l))).filter(hasVisibleText).map(boundReason);
+  return owed[0] ?? "";
+}
+
+/**
+ * A line is a reason only when it carries something that paints: a letter, a digit or punctuation. A line of controls,
+ * formatting characters or bare glyph fillers renders as nothing, and would ask the question with a blank line while
+ * hiding the debt line printed after it. Listing the invisible categories instead always leaves one out, so the test
+ * asks the positive question. It reads the line as the check printed it, before the cut, whose ellipsis would make an
+ * invisible line look visible. The Hangul fillers are letters that paint nothing, so they do not count as paint.
+ */
+function hasVisibleText(line: string): boolean {
+  return /[\p{L}\p{N}\p{P}]/u.test(line.replace(/[\u115F\u1160\u3164\uFFA0]/g, ""));
+}
+
+/**
+ * The reason as it may appear in a UI line: the line can quote plan-file text verbatim, so control characters never
+ * survive it and it is capped at MAX_REASON characters, an ellipsis marking the cut. The cap sits above the longest
+ * line the check itself prints, so its own wording always reaches the human whole; only plan text runs into it.
+ * The cut counts characters, not their UTF-16 halves, so it never leaves a lone surrogate for the UI to render.
+ */
+const MAX_REASON = 300;
+function boundReason(line: string): string {
+  const clean = line.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  const chars = [...clean];
+  return chars.length > MAX_REASON ? chars.slice(0, MAX_REASON - 1).join("") + "…" : clean;
+}
+
+/**
+ * The check's bookkeeping lines: a warning about its own evidence, the count of files that moved, and the aside that
+ * labels plan data. They say why the check can speak and what the agent or the plan did, never what is owed, so the
+ * offer never asks a question about them. The parenthesized one is only that exact marker: any other line fully in
+ * parentheses can be the debt itself (a pending plan target) and must survive to the question.
+ */
+const META_LINE = [/^warning: /, /^\d+ production source file\(s\) changed: /, /^\(the names below are read from the plan file\b/];
 
 export interface OfferOptions {
   optedOut?: (cwd: string) => boolean; // the repo's .no-testing-gate opt-out, shared with the Stop gate
@@ -223,7 +278,9 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd)) return;
     if (tspRun) return reviewFindings(ctx.cwd, env, exec, (message, type) => ctx.ui.notify(message, type));
     if (fresh.length === 0) return;
-    const answer = await ctx.ui.select(OFFER_QUESTION, [OFFER_YES, OFFER_NO]);
+    const owed = await owedReason(ctx.cwd, env, exec, fresh);
+    if (owed === "") return;
+    const answer = await ctx.ui.select(`${OFFER_QUESTION}\n${owed}`, [OFFER_YES, OFFER_NO]);
     if (answer === OFFER_YES) {
       declined.clear();
       pi.sendUserMessage(TSP_PROMPT);

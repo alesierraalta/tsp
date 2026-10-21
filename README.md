@@ -259,7 +259,7 @@ duplicates nothing of Gentle's: ODD, Engram memory, and the review lifecycle rem
 | `tsp repair` | Claude-only: re-syncs the managed skills and re-wires Claude's Stop hook; the Pi extension is untouched. |
 
 Load the extension (`pi --extension <path>/tsp.ts`, or let Pi load it from
-`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks "¿Quieres hacer TSP?" in the chat; "Sí" sends "haz el TSP", which invokes `test-strategy`, and "No" is remembered for those files (details in `assets/hosts/README.md`). Test files never trigger it (`*.test.*`, `*.spec.*`, `x_test.go`, `test_x.py`, `x_test.py`, and anything under `tests/`, `__tests__/`, `testdata/`, `e2e/` or `spec/`), nor does a TSP run, an aborted run, a session without UI, a delegated subagent session (`GENTLE_PI_AGENTS_CHILD=1`), or a repository with `.no-testing-gate`. When a TSP run ends, the extension runs `tsp findings record` and then `tsp findings check`, and shows the review in the chat; the agent is not told about it. Edits made through a shell command are not seen. This was watched in a live Pi 1.3.0 session. `/tsp check` keeps a quoted argument whole, so `/tsp check --suite "npm test"` reaches the CLI as one value. The Pi Stop hook is a separate,
+`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks "¿Quieres hacer TSP?" in the chat, and only when `tsp check --paths` says the source that run touched still owes a test — a plan target open from earlier work, or a run that only wrote a report, asks nothing; "Sí" sends "haz el TSP", which invokes `test-strategy`, and "No" is remembered for those files (details in `assets/hosts/README.md`). Test files never trigger it (`*.test.*`, `*.spec.*`, `x_test.go`, `test_x.py`, `x_test.py`, and anything under `tests/`, `__tests__/`, `testdata/`, `e2e/` or `spec/`), nor does a TSP run, an aborted run, a session without UI, a delegated subagent session (`GENTLE_PI_AGENTS_CHILD=1`), or a repository with `.no-testing-gate`. When a TSP run ends, the extension runs `tsp findings record` and then `tsp findings check`, and shows the review in the chat; the agent is not told about it. Edits made through a shell command are not seen. This was watched in a live Pi 1.3.0 session. `/tsp check` keeps a quoted argument whole, so `/tsp check --suite "npm test"` reaches the CLI as one value. The Pi Stop hook is a separate,
 **not verified** surface: its payload contract was read from the pi-hooks package and nobody has
 watched it fire here, so merging `assets/hosts/pi/settings.stop-hook.json` into Pi's settings is
 ready to test, not working.
@@ -493,6 +493,7 @@ serve more than one agent, and it is why `check` exists:
 tsp check          # exit 1 and say what this repository owes: plan gaps, or without a plan a new test failing on HEAD
 tsp check --suite "npm test"   # the command that runs the changed tests, when it cannot be inferred
 tsp check --no-test-needed "comment-only change"   # waive this change, with a reason a reviewer can read
+tsp check --paths src/retry.go   # answer for the source this work touched, not for the whole repository
 ```
 
 Without a plan, changed production source is settled by a new test that fails on HEAD's code (the
@@ -505,6 +506,12 @@ tests is inferred for Go (`go test` on their packages), Python (`python3 -m pyte
 `jest` or `vitest` (optionally through `npx`), infer `npx jest` or `npx vitest run`
 on the changed files instead. Other runners, including Cargo, need `--suite`. When the tests cannot be run one
 by one, check fails instead of guessing.
+
+`--paths` answers the question a host asks after a run ends: does the production source this work
+touched owe a test? It reads the tree instead of running the suite, so a test file changed beside the
+source settles the debt, and a path that is not production source — a report, a document, a note —
+owes nothing. A plan's remaining targets stay out of that answer: how much of a run's agenda is still
+open is progress, not this change's debt.
 
 It reads no hook payload, no transcript and no host configuration, so anything that can run a
 command can use it: another agent, a Makefile, a pre-push script, CI. What a host integration adds
