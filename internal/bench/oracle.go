@@ -47,6 +47,9 @@ type OracleFile struct {
 	Tests   []OracleTest `json:"tests"`
 	CostUSD float64      `json:"cost_usd"`
 	Turns   int          `json:"turns"`
+	// AnswerRejected marks a file whose answer this run's prompt produced but the parser refused;
+	// its tests are kept unclear, and the summary counts them as such instead of as legacy.
+	AnswerRejected bool `json:"answer_rejected,omitempty"`
 }
 
 type OracleReport struct {
@@ -65,11 +68,18 @@ type OracleReport struct {
 	UnjudgedCases      []string       `json:"unjudged_cases,omitempty"`
 	Attributed         int            `json:"runs_with_recalled_red_tests"`
 	UnattributedBroken int            `json:"red_tests_without_recorded_names"`
+	// Unparseable counts the tests this run kept because its own judge answer was rejected, so the
+	// report can separate them from the unclear verdicts an older prompt wrote.
+	Unparseable int `json:"tests_kept_from_unparseable_answers,omitempty"`
 }
 
 func (r OracleReport) Summary() string {
 	verdicts := fmt.Sprintf("Verdicts: contract %d; invented %d.", r.Verdicts["contract"], r.Verdicts["invented"])
-	if legacy := r.Verdicts["unclear"]; legacy > 0 {
+	if rejected := r.Unparseable; rejected > 0 {
+		verdicts += fmt.Sprintf(" Unparseable answers of this run: %d tests kept unclear.", rejected)
+	}
+	// Whatever unclear verdicts an answer this run gave up remain those of an older prompt's reading.
+	if legacy := r.Verdicts["unclear"] - r.Unparseable; legacy > 0 {
 		verdicts += fmt.Sprintf(" Legacy unclear %d (kept, judged by an older prompt).", legacy)
 	}
 	unjudged := fmt.Sprintf("Cases without a contract, unjudged in both views: %d.", r.Unjudged)
@@ -216,9 +226,18 @@ func VerifyOracle(run string, opts Options) (OracleReport, error) {
 		return report, nil
 	}
 	if len(tasks) == 0 && kept > 0 {
-		// Nothing was judged, so the run measured nothing: publishing would replace a report that did measure
-		// something with an empty one that reads like a real result.
-		return report, fmt.Errorf("no case produced a contract: %d kept run(s) unjudged; the previous report is unchanged", kept)
+		// Nothing was judged. Publishing is refused only when a contract was what every kept run lacked: then
+		// the run measured nothing, and an empty report would replace one that did. A kept run with no added or
+		// changed test file has nothing to judge for a reason of its own, so it publishes an unchanged view.
+		contractless := 0
+		for i, r := range agg.Cases {
+			if workspaces[i] != "" && unjudged[r.Case] {
+				contractless++
+			}
+		}
+		if contractless == kept {
+			return report, fmt.Errorf("no kept run could be judged: %d kept run(s) without a contract; the previous report is unchanged", kept)
+		}
 	}
 	// Each call gets its own directory and config; no test or implementation is shared between judges.
 	realAgent := opts.Agent == nil
@@ -238,6 +257,8 @@ func VerifyOracle(run string, opts Options) (OracleReport, error) {
 				f.Turns = res.Turns
 				if e == nil {
 					f.Tests, e = oracleParse(ar.Result, task.names)
+					// The answer was this run's own, so the kept tests are a rejected answer, not a legacy verdict.
+					f.AnswerRejected = e != nil
 				}
 				if e != nil {
 					for _, name := range task.names {
@@ -261,9 +282,19 @@ func VerifyOracle(run string, opts Options) (OracleReport, error) {
 		}
 		for _, test := range f.Tests {
 			report.Verdicts[test.Verdict]++
+			// A judged name carries a verdict only while every answer on it was invented: one contract or
+			// unclear verdict on the same name, from another file or run of this case, keeps it, and false
+			// wins over true so the order the files were judged in cannot decide.
 			if test.Verdict == "invented" {
-				rejected[i][test.Name] = true
+				if _, seen := rejected[i][test.Name]; !seen {
+					rejected[i][test.Name] = true
+				}
+			} else {
+				rejected[i][test.Name] = false
 			}
+		}
+		if f.AnswerRejected {
+			report.Unparseable += len(f.Tests)
 		}
 		report.CostUSD += f.CostUSD
 		report.Turns += f.Turns
@@ -310,15 +341,22 @@ func oracleAttribute(caseDir, ws string, stored CatchResult, timeout time.Durati
 	return got, true
 }
 
-// oracleRejected says whether a verdict names this red test. The judge names a test the way its file
-// defines it, while the runner may report a subtest or a package-qualified name.
+// oracleRejected says whether this red test is explained away by invented verdicts. The judge names a
+// test the way its file defines it, while the runner may report a subtest or a package-qualified name,
+// so a name is matched loosely; but a red test is dropped only when every judged name it matches was
+// judged invented. A bare name such as TestParse is defined by every package that has one, so a match
+// to a name another file of the same run judged contract or unclear keeps the red test.
 func oracleRejected(name string, rejected map[string]bool) bool {
-	for judge := range rejected {
+	dropped := false
+	for judge, invented := range rejected {
 		if judge == name || oracleNameMatches(name, judge) || oracleNameMatches(judge, name) || strings.HasPrefix(name, judge+"/") {
-			return true
+			if !invented {
+				return false
+			}
+			dropped = true
 		}
 	}
-	return false
+	return dropped
 }
 
 func oracleCheckOutput(run string) error {
@@ -883,6 +921,8 @@ func oracleRecount(c CatchResult, rejected map[string]bool) (OracleCounts, Oracl
 		names := c.CaughtBy[defect]
 		kept := len(names) == 0
 		for _, name := range names {
+			// A caught defect is named exactly as the reading recorded it, so this lookup cannot borrow
+			// another file's verdict through a suffix; a name kept by a contract verdict reads as unjudged.
 			if !rejected[name] {
 				kept = true
 			}
