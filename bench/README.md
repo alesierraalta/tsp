@@ -36,7 +36,9 @@ Unkept runs remain unchanged in both views. Catch records now name the tests red
 fixed code. A reading built before they did is re-checked from its own kept workspace, and
 only when the re-check reproduces the recorded counts; `--suite-timeout` caps that suite run.
 A red test the re-check cannot name, or a re-check that disagrees with the reading, stays
-unattributed and kept rather than guessing which test failed.
+unattributed and kept rather than guessing which test failed. A case whose contract cannot be
+built stays unjudged in both views and is named in the summary, so one case whose dependencies
+are unavailable offline cannot void a whole reading.
 
 This judge is **uncalibrated**, not evidence of correctness. No real-model evaluation
 or product integration is implied. Before using the labels as a gate, human-label a

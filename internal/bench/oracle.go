@@ -61,6 +61,8 @@ type OracleReport struct {
 	CostUSD            float64        `json:"cost_usd"`
 	Turns              int            `json:"turns"`
 	Skipped            int            `json:"runs_without_workspace"`
+	Unjudged           int            `json:"cases_without_contract"`
+	UnjudgedCases      []string       `json:"unjudged_cases,omitempty"`
 	Attributed         int            `json:"runs_with_recalled_red_tests"`
 	UnattributedBroken int            `json:"red_tests_without_recorded_names"`
 }
@@ -70,7 +72,11 @@ func (r OracleReport) Summary() string {
 	if legacy := r.Verdicts["unclear"]; legacy > 0 {
 		verdicts += fmt.Sprintf(" Legacy unclear %d (kept, judged by an older prompt).", legacy)
 	}
-	return fmt.Sprintf("# Oracle verification\n\n| View | Caught defect-runs | Tests red on fixed code | Runs without witness |\n| --- | ---: | ---: | ---: |\n| As recorded | %d | %d | %d |\n| Dropping invented | %d | %d | %d |\n\n%s\nVerifier: %s / %s; cost $%.6f; turns %d.\nRuns without kept workspaces: %d (unchanged in both views). Runs whose red test names were recovered from the kept workspace: %d. Red tests without recorded names: %d (kept, cannot filter reliably).\n\nUncalibrated bench-only judge; no product gate claimed. Preregistered T3 gate: hard23 + real35 held-out, gpt-6-luna, same window and valid pairs; halve tests red on fixed code while losing at most 2 caught defect-runs per 100.\n", r.Recorded.Caught, r.Recorded.Broken, r.Recorded.NoWitness, r.Filtered.Caught, r.Filtered.Broken, r.Filtered.NoWitness, verdicts, r.Runner, r.Model, r.CostUSD, r.Turns, r.Skipped, r.Attributed, r.UnattributedBroken)
+	unjudged := fmt.Sprintf("Cases without a contract, unjudged in both views: %d.", r.Unjudged)
+	if len(r.UnjudgedCases) > 0 {
+		unjudged += " " + strings.Join(r.UnjudgedCases, ", ")
+	}
+	return fmt.Sprintf("# Oracle verification\n\n| View | Caught defect-runs | Tests red on fixed code | Runs without witness |\n| --- | ---: | ---: | ---: |\n| As recorded | %d | %d | %d |\n| Dropping invented | %d | %d | %d |\n\n%s\nVerifier: %s / %s; cost $%.6f; turns %d.\n%s\nRuns without kept workspaces: %d (unchanged in both views). Runs whose red test names were recovered from the kept workspace: %d. Red tests without recorded names: %d (kept, cannot filter reliably).\n\nUncalibrated bench-only judge; no product gate claimed. Preregistered T3 gate: hard23 + real35 held-out, gpt-6-luna, same window and valid pairs; halve tests red on fixed code while losing at most 2 caught defect-runs per 100.\n", r.Recorded.Caught, r.Recorded.Broken, r.Recorded.NoWitness, r.Filtered.Caught, r.Filtered.Broken, r.Filtered.NoWitness, verdicts, r.Runner, r.Model, r.CostUSD, r.Turns, unjudged, r.Skipped, r.Attributed, r.UnattributedBroken)
 }
 
 // VerifyOracle never rescaffolds or executes tests and never rewrites the reading's artifacts.
@@ -139,6 +145,7 @@ func VerifyOracle(run string, opts Options) (OracleReport, error) {
 		file         OracleFile
 	}
 	var tasks []task
+	unjudged := map[string]bool{}
 	for i, r := range agg.Cases {
 		if workspaces[i] == "" {
 			report.Skipped++
@@ -178,7 +185,15 @@ func VerifyOracle(run string, opts Options) (OracleReport, error) {
 		}
 		contract, e := oracleContract(caseDir, opts.Timeout)
 		if e != nil {
-			return report, e
+			// Without a complete contract a verdict would silently judge part of a case. The case is left
+			// unjudged and named in the report, so one offline case cannot void a whole reading.
+			if !unjudged[r.Case] {
+				unjudged[r.Case] = true
+				report.Unjudged++
+				report.UnjudgedCases = append(report.UnjudgedCases, r.Case)
+			}
+			fmt.Fprintf(logOf(opts), "verify-oracle: %s: no contract, unjudged: %v\n", r.Case, e)
+			continue
 		}
 		files, e := agentTestFiles(fixture, workspaces[i])
 		if e != nil {
