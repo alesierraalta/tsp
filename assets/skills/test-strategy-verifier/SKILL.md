@@ -7,7 +7,7 @@ metadata:
   version: "0.2.1"
   requires_tsp: "0.6.7"
   scope: [common]
-  auto_invoke: "After ODD finishes an implementation and before the RDD review or declaring done: run `tsp check --paths <the production source this work changed>`, say the verdict in one line, then run the full test-strategy flow when it is owed. No production source from this work means no implementation, so no TSP."
+  auto_invoke: "After ODD finishes an implementation and before the RDD review or declaring done: run `tsp check` with one `--paths` per changed production source path (e.g. `tsp check --paths a.go --paths b.go`), say the verdict in one line, then run the full test-strategy flow when it is owed. No production source from this work means no implementation, so no TSP."
 ---
 
 # TSP Own Verifier
@@ -33,7 +33,8 @@ review, and before opening a PR or delivering.
 Never ask the human whether to validate, nor what or where to validate. Both answers already live
 in the repository, and a question the agent could answer itself turns a criterion into chat noise.
 
-Run `tsp check --paths <the production source this work changed>` before declaring the work done.
+Run `tsp check` with one `--paths` per changed production source path (e.g.
+`tsp check --paths a.go --paths b.go`) before declaring the work done.
 The paths come from the work itself — the files this work unit edited — never from the whole
 repository, which carries debt older than this work.
 

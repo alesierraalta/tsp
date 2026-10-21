@@ -191,7 +191,9 @@ const isTspPrompt = (prompt: string | undefined): boolean => /\b(tsp|test[- ]str
 async function owedReason(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, paths: readonly string[]): Promise<string> {
   let result: ExecResult;
   try {
-    result = await exec(["check", "--cwd", cwd, "--paths", paths.join(",")], { cwd, env: { ...env } });
+    // One --paths per path: a file name may itself carry a comma, and the check takes the flag whole
+    // rather than splitting it, so folding the list into one value would hide exactly that file.
+    result = await exec(["check", "--cwd", cwd, ...paths.flatMap((p) => ["--paths", p])], { cwd, env: { ...env } });
   } catch {
     return "";
   }

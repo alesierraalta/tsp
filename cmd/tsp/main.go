@@ -927,23 +927,22 @@ func selfDir() string {
 	return filepath.Dir(exe)
 }
 
-func splitPaths(raw string) []string {
-	var out []string
-	for _, p := range strings.Split(raw, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 func runCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
 	path := fs.String("path", "", "plan file relative to the repository root")
 	suite := fs.String("suite", "", "command that runs the changed tests when there is no plan (default: their Go packages, pytest on changed .py tests, or node --test on them)")
 	waive := fs.String("no-test-needed", "", "record in "+check.WaiverName+" that the current change needs no new test, with this reason; editing the code again voids it")
-	paths := fs.String("paths", "", "answer only for these comma-separated paths, relative to --cwd: whether they owe a test, ignoring the plan's remaining targets")
+	// One path per occurrence, never a comma-split list: a changed file may itself carry a comma in
+	// its name, and folding it into a joined value would name paths that do not exist — the check
+	// would then answer "nothing to check" while the change really owes a test.
+	var named []string
+	fs.Func("paths", "answer only for these paths, one --paths per path (never a comma-separated list), relative to --cwd: whether they owe a test, ignoring the plan's remaining targets", func(v string) error {
+		if p := strings.TrimSpace(v); p != "" {
+			named = append(named, p)
+		}
+		return nil
+	})
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
 	}
@@ -955,9 +954,8 @@ func runCheck(args []string) int {
 		fmt.Fprintln(os.Stderr, "check: --paths answers for one change; --no-test-needed records a waiver for the whole change")
 		return 2
 	}
-	named := splitPaths(*paths)
 	if flagSet(fs, "paths") && len(named) == 0 {
-		fmt.Fprintln(os.Stderr, "check: --paths names no path: name one or more comma-separated paths")
+		fmt.Fprintln(os.Stderr, "check: --paths names no path: pass one --paths per path")
 		return 2
 	}
 	if flagSet(fs, "path") {
