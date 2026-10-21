@@ -168,17 +168,14 @@ const noWitnessDebt = "no test was added or changed with it: run the testing dis
 // names its paths from the directory it asked about, and a path outside the repository is refused
 // rather than answered, because "it did not change" would read as "this change owes nothing".
 func scopedVerdict(cwd, root string, changed, all []string, d Deps) Result {
-	// The caller spells its paths from the directory it asked about: an absolute --cwd is the place git
-	// resolved the root from, and a relative one is read from the repository root, where a bare command
-	// runs. The prefix is that directory's own path inside the root.
+	// The caller spells its paths from the directory it asked about, and --cwd keeps its default "."
+	// there: a relative value is relative to where the process stands, never to the repository root.
+	// Making it absolute first is what keeps a caller standing in a subdirectory from having its paths
+	// read as root-relative, which would answer "nothing to check" for a file it just named.
 	prefix := ""
-	if c := filepath.Clean(cwd); c != "." && c != string(filepath.Separator) {
-		if filepath.IsAbs(c) {
-			if rel, err := filepath.Rel(root, c); err == nil && !outside(rel) {
-				prefix = rel
-			}
-		} else if !outside(c) {
-			prefix = c
+	if abs, err := filepath.Abs(filepath.Clean(cwd)); err == nil {
+		if rel, err := filepath.Rel(root, abs); err == nil && !outside(rel) {
+			prefix = rel
 		}
 	}
 	named := make(map[string]bool, len(d.Paths))

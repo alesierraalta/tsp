@@ -955,6 +955,10 @@ func runCheck(args []string) int {
 		fmt.Fprintln(os.Stderr, "check: --paths answers for one change; --no-test-needed records a waiver for the whole change")
 		return 2
 	}
+	if flagSet(fs, "paths") && flagSet(fs, "suite") {
+		fmt.Fprintln(os.Stderr, "check: --paths answers for one change; --suite runs the changed tests for the whole change")
+		return 2
+	}
 	named := splitPaths(*paths)
 	if flagSet(fs, "paths") && len(named) == 0 {
 		fmt.Fprintln(os.Stderr, "check: --paths names no path: name one or more comma-separated paths")
