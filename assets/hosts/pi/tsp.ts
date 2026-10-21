@@ -197,32 +197,36 @@ async function owedReason(cwd: string, env: Readonly<Record<string, string | und
   }
   if (result.code !== 1) return "";
   const reply = `${result.stdout}\n${result.stderr}`.split("\n").map((l) => l.trim()).filter((l) => l !== "");
-  const owed = reply.filter((l) => !META_LINE.some((meta) => meta.test(l))).filter(hasVisibleText).map(boundReason);
+  const owed = reply.filter((l) => !META_LINE.some((meta) => meta.test(l))).map(reasonOf).filter((l) => l !== "");
   return owed[0] ?? "";
 }
 
 /**
- * A line is a reason only when it carries something that paints: a letter, a digit or punctuation. A line of controls,
- * formatting characters or bare glyph fillers renders as nothing, and would ask the question with a blank line while
- * hiding the debt line printed after it. Listing the invisible categories instead always leaves one out, so the test
- * asks the positive question. It reads the line as the check printed it, before the cut, whose ellipsis would make an
- * invisible line look visible. The Hangul fillers are letters that paint nothing, so they do not count as paint.
+ * The reason the question shows, or an empty string when it would show nothing. The line can quote plan-file text
+ * verbatim, so it is stripped of control characters and cut at MAX_REASON characters, an ellipsis marking the cut; the
+ * cap sits above the longest line the check prints, so its own wording reaches the human whole and only plan text runs
+ * into it. The cut counts characters, not their UTF-16 halves, so it never leaves a lone surrogate to render.
+ *
+ * The visibility question is asked last, on the very text that will be shown. Asking it of the line as printed lets
+ * the cut delete the only character that painted, or add an ellipsis that fakes paint, and either way the question
+ * would name a line nobody can read while hiding the debt printed after it.
  */
-function hasVisibleText(line: string): boolean {
-  return /[\p{L}\p{N}\p{P}]/u.test(line.replace(/[\u115F\u1160\u3164\uFFA0]/g, ""));
+const MAX_REASON = 300;
+function reasonOf(line: string): string {
+  const chars = [...line.replace(/[\u0000-\u001f\u007f-\u009f]/g, "")];
+  const cut = chars.length > MAX_REASON;
+  const kept = (cut ? chars.slice(0, MAX_REASON - 1) : chars).join("");
+  if (!paints(kept)) return "";
+  return cut ? `${kept}…` : kept;
 }
 
 /**
- * The reason as it may appear in a UI line: the line can quote plan-file text verbatim, so control characters never
- * survive it and it is capped at MAX_REASON characters, an ellipsis marking the cut. The cap sits above the longest
- * line the check itself prints, so its own wording always reaches the human whole; only plan text runs into it.
- * The cut counts characters, not their UTF-16 halves, so it never leaves a lone surrogate for the UI to render.
+ * Text paints when it carries a letter, a digit or punctuation. A line of controls, formatting characters or bare
+ * glyph shapes renders as nothing, and listing the invisible categories to exclude always leaves one out, so the
+ * question is asked the positive way. The Hangul fillers are letters that paint nothing, so they are not paint.
  */
-const MAX_REASON = 300;
-function boundReason(line: string): string {
-  const clean = line.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
-  const chars = [...clean];
-  return chars.length > MAX_REASON ? chars.slice(0, MAX_REASON - 1).join("") + "…" : clean;
+function paints(line: string): boolean {
+  return /[\p{L}\p{N}\p{P}]/u.test(line.replace(/[\u115F\u1160\u3164\uFFA0]/g, ""));
 }
 
 /**
