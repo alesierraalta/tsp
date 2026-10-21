@@ -159,6 +159,25 @@ func TestCheckPathsAcceptsBothNamesOfAStagedRename(t *testing.T) {
 	}
 }
 
+// A repository reached through a symlink is still that repository. A host such as the Pi offer
+// passes the absolute path its editor reported, spelled through the link, while git reports the
+// physical root: that path names a file inside the repository and must be answered, not refused.
+func TestCheckPathsReadsAnAbsolutePathThroughASymlinkedRepository(t *testing.T) {
+	dir := pathsRepo(t, "a.go")
+	writeIn(t, dir, "a.go", "package sample\n\nfunc A() int { return 1 }\n")
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runCheckCapturing(t, "--cwd", link, "--paths", filepath.Join(link, "a.go"))
+	if strings.Contains(out+errOut, "must be inside the repository") {
+		t.Fatalf("a path spelled through the link that reached the repository is inside it:\n%s\n%s", out, errOut)
+	}
+	if code != 1 || !strings.Contains(out, "a.go") {
+		t.Fatalf("a.go came with no test, so the answer still owes one: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+}
+
 // A tracked symlink whose target is gone is still a name in the repository. Asking whether the
 // name exists must not follow the link and report the missing target as a missing name.
 func TestCheckPathsKeepsATrackedSymlinkWithAMissingTarget(t *testing.T) {

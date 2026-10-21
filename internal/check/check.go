@@ -202,8 +202,8 @@ func scopedVerdict(cwd, root string, changed, all, deleted []string, d Deps) Res
 		given := p
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(prefix, p)
-		} else if rel, err := filepath.Rel(root, p); err == nil {
-			p = rel
+		} else {
+			p = repositoryRelative(root, p)
 		}
 		if outside(p) {
 			return Result{Exit: 2, Text: given + ": a named path must be inside the repository at " + root}
@@ -250,6 +250,43 @@ func scopedVerdict(cwd, root string, changed, all, deleted []string, d Deps) Res
 func outside(rel string) bool {
 	rel = filepath.Clean(rel)
 	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel)
+}
+
+// repositoryRelative is an absolute --paths value as a repository-relative path, read the way git
+// reads the root: physically. A host passes the path its editor reported, which may be spelled
+// through a link that reached the repository, while git reports the root with every link resolved;
+// compared as spelled, a file inside the repository reads as outside it and is refused. Only the
+// directory is resolved: the named file itself may be a tracked symlink, and following it would
+// answer for its target instead. The directory may be gone with a deleted file, so its nearest
+// existing ancestor is resolved and the rest kept as written. A root that cannot be resolved
+// leaves the lexical reading, which is all a path that names nothing on disk can be compared by.
+func repositoryRelative(root, abs string) string {
+	abs = filepath.Clean(abs)
+	lexical := func() string {
+		if rel, err := filepath.Rel(root, abs); err == nil {
+			return rel
+		}
+		return abs
+	}
+	base, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return lexical()
+	}
+	dir, rest := filepath.Dir(abs), filepath.Base(abs)
+	for {
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			if rel, err := filepath.Rel(base, filepath.Join(real, rest)); err == nil {
+				return rel
+			}
+			return lexical()
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return lexical()
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+	}
 }
 
 // repositoryPrefix is --cwd as a repository-relative directory, read the way git reads the root and the
