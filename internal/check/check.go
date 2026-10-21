@@ -31,6 +31,10 @@ type Deps struct {
 	RedCheck func(root string) (Witness, error)
 	// Waive, when not empty, records that the current change needs no new test, with this reason.
 	Waive string
+	// Paths, when not empty, answers for those paths alone: whether the production source this work
+	// touched still owes a test. The plan's remaining targets never reach that answer, because how much
+	// of a run's agenda is open is progress, not this change's debt.
+	Paths []string
 }
 
 // WaiverName is the file a no-test-needed waiver is recorded in, at the repository root.
@@ -128,6 +132,13 @@ func Run(cwd string, d Deps) Result {
 		res.Text = warn + changedLine(files) + "\n" + res.Text
 		return res
 	}
+	// A scoped question is answered before the plan's verdict: the remaining targets are the run's
+	// agenda, so they say nothing about what the paths this work touched still owe.
+	if len(d.Paths) > 0 {
+		res := scopedVerdict(root, files, gate.ParsePorcelain(statusOut), d)
+		res.Text = warn + res.Text
+		return res
+	}
 	// The verdict is scoped to the declared run when one is declared: GapsForRun counts only the
 	// rows that run owns, so another run's pending rows are never this run's debt and another run's
 	// finished rows are never this run's proof of completion. With no run declared the run is empty
@@ -149,6 +160,57 @@ func Run(cwd string, d Deps) Result {
 	return Result{Exit: 1, Files: files, Text: warn + changedLine(files) + "\n" + gaps.Report()}
 }
 
+// noWitnessDebt is what a change owes when no test came with it: one sentence, because it reaches the
+// model as an instruction and the human as the reason nothing was verified.
+const noWitnessDebt = "no test was added or changed with it: run the testing discipline (\"haz el TSP\"), record tsp check --no-test-needed \"<reason>\" when this change warrants no test, or add " + optOutName + " when this repository does not warrant it"
+
+// scopedVerdict answers for the named paths only: what they owe a test. It reads the tree, so a test
+// file changed with the source settles the debt without re-running anything, and the plan is never
+// consulted: how much of a run's agenda is still open is progress, not this change's debt.
+func scopedVerdict(root string, changed, all []string, d Deps) Result {
+	named := make(map[string]bool, len(d.Paths))
+	for _, p := range d.Paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if filepath.IsAbs(p) {
+			if rel, err := filepath.Rel(root, p); err == nil {
+				p = rel
+			}
+		}
+		named[filepath.ToSlash(filepath.Clean(p))] = true
+	}
+	var in []string
+	for _, p := range changed {
+		if named[p] {
+			in = append(in, p)
+		}
+	}
+	if len(in) == 0 {
+		return Result{Text: "no production source in the named paths is changed: nothing to check"}
+	}
+	sort.Strings(in)
+	line := changedLine(in)
+	if _, err := d.ReadFile(filepath.Join(root, optOutName)); err == nil {
+		return Result{Files: in, Text: line + "\n" + optOutName + " is present: this repository opted out of the testing check"}
+	}
+	if reason, ok := waived(root, in, d); ok {
+		return Result{Files: in, Text: line + "\nthis change needs no new test (waived: " + reason + ")"}
+	}
+	var tests []string
+	for _, p := range all {
+		if bench.IsTestFile(p) {
+			tests = append(tests, p)
+		}
+	}
+	if len(tests) == 0 {
+		return Result{Exit: 1, Files: in, Text: line + "\n" + noWitnessDebt}
+	}
+	sort.Strings(tests)
+	return Result{Files: in, Text: line + "\n" + "a test was added or changed with it: " + strings.Join(tests, ", ")}
+}
+
 // witnessVerdict is the reading without a plan: test-strategy 0.7 writes none, so the tests are what the
 // tree can corroborate. A change is settled when at least one new test fails on HEAD's code, or when the
 // repository opted out with .no-testing-gate. A suite that cannot be judged fails closed.
@@ -164,7 +226,7 @@ func witnessVerdict(root string, files []string, d Deps) Result {
 		return Result{Exit: 1, Text: "the new tests could not be judged: " + err.Error()}
 	}
 	if len(w.TestFiles) == 0 {
-		return Result{Exit: 1, Text: "no test was added or changed with it: run the testing discipline (\"haz el TSP\"), record tsp check --no-test-needed \"<reason>\" when this change warrants no test, or add " + optOutName + " when this repository does not warrant it"}
+		return Result{Exit: 1, Text: noWitnessDebt}
 	}
 	if len(w.Red) == 0 {
 		return Result{Exit: 1, Text: "no new test fails on HEAD's code, so none of them pins a defect: change the input or setup until a test fails for the reason the contract names, or run tsp redcheck to see each test"}
