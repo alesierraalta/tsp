@@ -291,6 +291,14 @@ test("a reason made only of zero-width characters never reaches the UI blank", a
   assert.deepEqual(h.asked.map((a) => a.title), [`¿Quieres hacer TSP?\n${owed}`], "the offer names the debt, not a line nobody can read");
 });
 
+test("bounded text is not visible text: a long invisible line never becomes the reason", async () => {
+  // The cut runs before the visibility test, so a line longer than the cap gains a visible ellipsis it never had.
+  const owed = "no test was added or changed with it";
+  const h = offerHarness({ check: { stdout: `${"\u200b".repeat(400)}\n${owed}\n`, stderr: "", code: 1 } });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(h.asked.map((a) => a.title), [`¿Quieres hacer TSP?\n${owed}`], "an ellipsis the cut added is not a reason");
+});
+
 test("no C1 control character reaches the UI question either", async () => {
   // U+009B is the 8-bit control sequence introducer: a terminal treats it like ESC [.
   const h = offerHarness({ check: { stdout: "still pending: a\u009b31mred\n", stderr: "", code: 1 } });

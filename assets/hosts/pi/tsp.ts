@@ -197,14 +197,15 @@ async function owedReason(cwd: string, env: Readonly<Record<string, string | und
   }
   if (result.code !== 1) return "";
   const reply = `${result.stdout}\n${result.stderr}`.split("\n").map((l) => l.trim()).filter((l) => l !== "");
-  const owed = reply.filter((l) => !META_LINE.some((meta) => meta.test(l))).map(boundReason).filter(hasVisibleText);
+  const owed = reply.filter((l) => !META_LINE.some((meta) => meta.test(l))).filter(hasVisibleText).map(boundReason);
   return owed.find((l) => PENDING_LINE.test(l)) ?? owed[0] ?? "";
 }
 
 /**
  * A line carrying no visible character is not a reason: it would ask the question with a blank line and hide the debt
  * line printed after it. Formatting characters only decide that question, they are never stripped, so text that
- * depends on them keeps rendering as written.
+ * depends on them keeps rendering as written. This reads the line as the check printed it, before the cut, whose
+ * ellipsis would make an invisible line look visible.
  */
 function hasVisibleText(line: string): boolean {
   return /[^\p{Cc}\p{Cf}\s]/u.test(line);
