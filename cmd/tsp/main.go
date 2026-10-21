@@ -955,6 +955,10 @@ func runCheck(args []string) int {
 		fmt.Fprintln(os.Stderr, "check: --paths answers for one change; --no-test-needed records a waiver for the whole change")
 		return 2
 	}
+	if flagSet(fs, "paths") && flagSet(fs, "suite") {
+		fmt.Fprintln(os.Stderr, "check: --paths answers for one change; --suite runs the changed tests for the whole change")
+		return 2
+	}
 	named := splitPaths(*paths)
 	if flagSet(fs, "paths") && len(named) == 0 {
 		fmt.Fprintln(os.Stderr, "check: --paths names no path: name one or more comma-separated paths")
@@ -965,6 +969,15 @@ func runCheck(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 2
 		}
+	}
+	// A --cwd that cannot be read hands git a directory it cannot stand in, and git's failure is
+	// answered "not a git repository: nothing to check" at exit 0 — a false diagnosis and, worse, the
+	// exit the verifier reads as "this change owes no test" for a tree that may well be changed. So
+	// the directory is validated here, before git is asked about a tree it never stood in. A directory
+	// that exists but is not a repository keeps its answer: there, git was read and found nothing.
+	if info, err := os.Stat(*cwd); err != nil || !info.IsDir() {
+		fmt.Fprintf(os.Stderr, "check: --cwd %s is not a directory: name an existing directory inside the repository\n", *cwd)
+		return 2
 	}
 	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named})
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
