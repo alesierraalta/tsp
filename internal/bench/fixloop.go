@@ -179,7 +179,10 @@ func runFixLoop(caseDir, ws string, key Key, runOpts, opts Options) *FixLoop {
 		return loop
 	}
 	if len(paths) == 0 {
+		// Both arms would measure round 1's unfixed code, so neither is paid for.
 		loop.Fix.Reason = joinReason(loop.Fix.Reason, "the fix changed no non-test path, so HEAD still holds round 1's code")
+		loop.Reason = joinReason(loop.Reason, loop.Fix.Reason)
+		return loop
 	}
 	// D5: the registry is keyed by the repository's location, so the check runs in the fixed workspace itself,
 	// before the fork, and its report is what the registry arm is told.
@@ -468,8 +471,12 @@ func runTsp(dir string, env []string, opts Options, args ...string) (string, int
 		return buf.String(), 0, nil
 	}
 	var ee *exec.ExitError
-	if errors.As(err, &ee) {
+	// A process killed by its deadline or a signal never answered: its partial output is not a report.
+	if errors.As(err, &ee) && ctx.Err() == nil && ee.ExitCode() >= 0 {
 		return buf.String(), ee.ExitCode(), nil
+	}
+	if ctx.Err() != nil {
+		return buf.String(), -1, fmt.Errorf("no answer within %s", 4*opts.SuiteTimeout)
 	}
 	return buf.String(), -1, err
 }

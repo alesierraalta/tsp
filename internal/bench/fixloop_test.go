@@ -31,6 +31,7 @@ type fixLoopAgent struct {
 	prompts []string
 	base    string // the bench prompt the arms must reproduce
 	round1  string // the test file round 1 leaves
+	noFix   bool   // the fix step only rewrites a test file and changes no source
 }
 
 func (a *fixLoopAgent) run(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
@@ -44,6 +45,9 @@ func (a *fixLoopAgent) run(ctx context.Context, ws string, key Key, opts Options
 	case 1:
 		return res, writeTestFile(filepath.Join(ws, "model", "agent_test.go"), a.round1)
 	case 2:
+		if a.noFix {
+			return res, writeTestFile(filepath.Join(ws, "model", "agent_test.go"), fixWroteTest)
+		}
 		if err := writeTestFile(filepath.Join(ws, "model", "model.go"), fixedOrderSource); err != nil {
 			return res, err
 		}
@@ -82,12 +86,17 @@ func tspBinary(t *testing.T) string {
 
 func runFixLoopReading(t *testing.T, round1 string, keep bool) (Aggregate, int, *fixLoopAgent, string, string, Key) {
 	t.Helper()
+	return runFixLoopWith(t, &fixLoopAgent{round1: round1}, keep)
+}
+
+func runFixLoopWith(t *testing.T, agent *fixLoopAgent, keep bool) (Aggregate, int, *fixLoopAgent, string, string, Key) {
+	t.Helper()
 	dir := sessionCase(t)
 	key, err := LoadKey(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent := &fixLoopAgent{base: agentPrompt(key, Options{}), round1: round1}
+	agent.base = agentPrompt(key, Options{})
 	out, benchDir := filepath.Join(t.TempDir(), "results"), t.TempDir()
 	agg, code := Run(Options{CasesGlob: dir, Runs: 1, Model: "m", FixLoop: true, TspPath: tspBinary(t),
 		Timeout: 2 * time.Minute, SuiteTimeout: 2 * time.Minute, Out: out, BenchDir: benchDir, Agent: agent.run, Keep: keep})
@@ -201,6 +210,44 @@ func TestFixLoopSkipsARunThatPinnedNothing(t *testing.T) {
 	}
 	if s := Summary(agg); !strings.Contains(s, "fix loop") || !strings.Contains(s, "skipped") {
 		t.Errorf("summary does not report the skipped loop:\n%s", s)
+	}
+}
+
+// A fix that lands no source change leaves HEAD on round 1's code, so a second pass would measure the unfixed code:
+// the loop is not valid and no arm is paid for.
+func TestFixLoopWithoutASourceChangeIsNotValid(t *testing.T) {
+	agg, code, agent, _, _, _ := runFixLoopWith(t, &fixLoopAgent{round1: witnessTest, noFix: true}, false)
+	if code != 0 || len(agg.Cases) != 1 {
+		t.Fatalf("code %d cases %d", code, len(agg.Cases))
+	}
+	if len(agent.prompts) != 2 {
+		t.Fatalf("agent calls = %d, want round 1 and the fix only", len(agent.prompts))
+	}
+	loop := agg.Cases[0].FixLoop
+	if loop == nil || loop.Valid || !strings.Contains(loop.Reason, "no non-test path") || len(loop.Arms) != 0 {
+		t.Fatalf("loop = %+v, want an invalid loop naming the missing fix", loop)
+	}
+	if agg.FixLoop == nil || agg.FixLoop.ValidRuns != 0 {
+		t.Fatalf("aggregate fix loop = %+v", agg.FixLoop)
+	}
+}
+
+// A tsp step killed by a signal or by its deadline never answered: its partial output is not a report.
+func TestRunTspRefusesAKilledProcess(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "tsp")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho partial\nkill -9 $$\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code, err := runTsp(t.TempDir(), os.Environ(), Options{TspPath: script, SuiteTimeout: time.Minute}, "findings", "check")
+	if err == nil {
+		t.Fatalf("killed process accepted: code %d output %q", code, out)
+	}
+	slow := filepath.Join(t.TempDir(), "tsp")
+	if err := os.WriteFile(slow, []byte("#!/bin/sh\necho partial\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runTsp(t.TempDir(), os.Environ(), Options{TspPath: slow, SuiteTimeout: 50 * time.Millisecond}, "findings", "check"); err == nil {
+		t.Fatal("process past its deadline accepted")
 	}
 }
 
