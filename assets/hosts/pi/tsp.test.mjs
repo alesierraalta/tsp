@@ -218,9 +218,16 @@ function offerHarness(opts = {}) {
 test("a run that edits source code ends with the TSP question, and Sí sends haz el TSP", async () => {
   const h = offerHarness();
   await h.run("add a retry limit", [["edit", "internal/retry/retry.go"], ["write", "src/new.ts"]]);
-  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo", "--paths", "internal/retry/retry.go,src/new.ts"], cwd: "/repo" }], "the check is scoped to the source this run touched, never to the whole repository");
+  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo", "--paths", "internal/retry/retry.go", "--paths", "src/new.ts"], cwd: "/repo" }], "the check is scoped to the source this run touched, one --paths per path, never to the whole repository");
   assert.deepEqual(h.asked, [{ title: "¿Quieres hacer TSP?\nrun m1: layers swept: 1 of 3", options: ["Sí", "No"] }]);
   assert.deepEqual(h.sent, ["haz el TSP"]);
+});
+
+test("a changed path carrying a comma is asked for as its own path, never folded into a list", async () => {
+  const h = offerHarness();
+  await h.run("rename the record type", [["edit", "internal/a,b/a,b.go"], ["edit", "src/new.ts"]]);
+  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo", "--paths", "internal/a,b/a,b.go", "--paths", "src/new.ts"], cwd: "/repo" }], "the check splits its list on commas, so a path containing one has to travel in its own --paths");
+  assert.equal(h.asked.length, 1, "a comma in a filename must not hide the debt");
 });
 
 test("the offer names the debt under the check's intro lines: a warning and the changed-file line never become the question", async () => {

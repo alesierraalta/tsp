@@ -23,6 +23,7 @@ type fakeRepo struct {
 	planErr  bool
 	ignored  bool
 	optOut   bool
+	existing []string
 	witness  Witness
 	judgeErr error
 	judged   int
@@ -49,6 +50,15 @@ func (f *fakeRepo) deps() Deps {
 		RedCheck: func(root string) (Witness, error) {
 			f.judged++
 			return f.witness, f.judgeErr
+		},
+		Exists: func(root, rel string) bool {
+			rel = filepath.ToSlash(filepath.Clean(rel))
+			for _, e := range f.existing {
+				if filepath.ToSlash(filepath.Clean(e)) == rel {
+					return true
+				}
+			}
+			return false
 		},
 		ReadFile: func(path string) (string, error) {
 			if path == f.root+"/"+optOutName {

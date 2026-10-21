@@ -33,8 +33,13 @@ type Deps struct {
 	Waive string
 	// Paths, when not empty, answers for those paths alone: whether the production source this work
 	// touched still owes a test. The plan's remaining targets never reach that answer, because how much
-	// of a run's agenda is open is progress, not this change's debt.
+	// of a run's agenda is open is progress, not this change's debt. One path per element, never split
+	// on commas.
 	Paths []string
+	// Exists reports whether a --paths name is present in the working tree, resolved against the
+	// repository root. Injected so the scoped guard is testable without a filesystem; Run defaults it
+	// to an os.Lstat under the root, so a tracked symlink counts as present whatever it points at.
+	Exists func(root, rel string) bool
 }
 
 // WaiverName is the file a no-test-needed waiver is recorded in, at the repository root.
@@ -68,6 +73,9 @@ func Run(cwd string, d Deps) Result {
 	}
 	if d.ReadFile == nil {
 		d.ReadFile = readFile
+	}
+	if d.Exists == nil {
+		d.Exists = func(root, rel string) bool { _, err := os.Lstat(filepath.Join(root, rel)); return err == nil }
 	}
 	if d.RedCheck == nil {
 		suite := d.Suite
@@ -121,7 +129,7 @@ func Run(cwd string, d Deps) Result {
 		return Result{Exit: 2, Files: files, Text: warn + "--no-test-needed applies only without a plan: " + planRelPath + " is this change's record"}
 	}
 	if len(d.Paths) > 0 {
-		res := scopedVerdict(cwd, root, files, gate.ParsePorcelain(statusOut), d)
+		res := scopedVerdict(cwd, root, files, gate.ParsePorcelain(statusOut), deletedPaths(statusOut), d)
 		res.Text = warn + res.Text
 		return res
 	}
@@ -166,8 +174,10 @@ const noWitnessDebt = "no test was added or changed with it: run the testing dis
 // file changed with the source settles the debt without re-running anything, and the plan is never
 // consulted: how much of a run's agenda is still open is progress, not this change's debt. A caller
 // names its paths from the directory it asked about, and a path outside the repository is refused
-// rather than answered, because "it did not change" would read as "this change owes nothing".
-func scopedVerdict(cwd, root string, changed, all []string, d Deps) Result {
+// rather than answered, because "it did not change" would read as "this change owes nothing". A name
+// that is neither a file nor a changed path is refused the same way: it is a mistake, and answering
+// "nothing to check" for it would hide the debt the caller asked about.
+func scopedVerdict(cwd, root string, changed, all, deleted []string, d Deps) Result {
 	// The caller spells its paths from the directory it asked about, and --cwd keeps its default "."
 	// there: a relative value is relative to where the process stands, never to the repository root.
 	// Making it absolute first is what keeps a caller standing in a subdirectory from having its paths
@@ -176,6 +186,12 @@ func scopedVerdict(cwd, root string, changed, all []string, d Deps) Result {
 	prefix, placed := repositoryPrefix(cwd, root)
 	if !placed {
 		return Result{Exit: 2, Text: cwd + ": --cwd must be a directory inside the repository at " + root}
+	}
+	// A deleted file is still part of this change: git status carries its name even though nothing is
+	// left on disk to stat, and ParsePorcelain drops deletions on purpose, so they are read here.
+	inStatus := map[string]bool{}
+	for _, p := range append(append([]string(nil), all...), deleted...) {
+		inStatus[filepath.ToSlash(filepath.Clean(p))] = true
 	}
 	named := make(map[string]bool, len(d.Paths))
 	for _, p := range d.Paths {
@@ -192,7 +208,11 @@ func scopedVerdict(cwd, root string, changed, all []string, d Deps) Result {
 		if outside(p) {
 			return Result{Exit: 2, Text: given + ": a named path must be inside the repository at " + root}
 		}
-		named[filepath.ToSlash(filepath.Clean(p))] = true
+		clean := filepath.ToSlash(filepath.Clean(p))
+		if !d.Exists(root, p) && !inStatus[clean] {
+			return Result{Exit: 2, Text: "check: --paths names " + given + ", which is neither a file nor a changed path"}
+		}
+		named[clean] = true
 	}
 	var in []string
 	for _, p := range changed {
@@ -265,6 +285,29 @@ func repositoryPrefix(cwd, root string) (string, bool) {
 		return "", false
 	}
 	return rel, true
+}
+
+// deletedPaths reads the names `git status --porcelain -z -uall` reports as gone from the tree,
+// which gate.ParsePorcelain drops: deletions, and the source of a rename or copy, which -z prints as
+// the field after its entry. Such a name has nothing on disk, but a --paths value that spells one
+// names part of this change, not a mistyped path.
+func deletedPaths(raw string) []string {
+	var out []string
+	fields := strings.Split(raw, "\x00")
+	for i := 0; i < len(fields); i++ {
+		entry := fields[i]
+		if len(entry) < 4 {
+			continue
+		}
+		if strings.ContainsRune(entry[:2], 'D') {
+			out = append(out, entry[3:])
+		}
+		if strings.ContainsAny(entry[:2], "RC") && i+1 < len(fields) {
+			i++
+			out = append(out, fields[i])
+		}
+	}
+	return out
 }
 
 // witnessVerdict is the reading without a plan: test-strategy 0.7 writes none, so the tests are what the

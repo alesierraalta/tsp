@@ -12,6 +12,7 @@ func TestCheckScopedPathsIgnoreThePlanTargets(t *testing.T) {
 	cases := []struct {
 		name     string
 		status   string
+		existing []string
 		paths    []string
 		wantExit int
 		wantOut  string
@@ -38,13 +39,14 @@ func TestCheckScopedPathsIgnoreThePlanTargets(t *testing.T) {
 		{
 			name:     "a named path that did not change owes nothing",
 			status:   porcelain(" M src/app.js"),
+			existing: []string{"src/other.js"},
 			paths:    []string{"src/other.js"},
 			wantExit: 0, wantOut: "no production source in the named paths is changed",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			repo := &fakeRepo{root: "/r", status: tc.status, plan: owing}
+			repo := &fakeRepo{root: "/r", status: tc.status, plan: owing, existing: tc.existing}
 			unscoped := Run(".", repo.deps())
 			if unscoped.Exit != 1 || !strings.Contains(unscoped.Text, "layers swept") {
 				t.Fatalf("the plan should owe a target for this test to mean anything: exit %d\n%s", unscoped.Exit, unscoped.Text)
@@ -65,6 +67,41 @@ func TestCheckScopedPathsIgnoreThePlanTargets(t *testing.T) {
 				t.Fatalf("the scoped answer re-ran the changed tests %d time(s): it reads the tree, it does not run it", repo.judged)
 			}
 		})
+	}
+}
+
+// A --paths name that is neither a file in the working tree nor a path git status shows is a
+// mistake, and answering "nothing to check" for it would hide the very debt the caller asked
+// about: the check refuses it by name instead. A legacy comma-joined value reaches this guard and
+// fails loudly, because "a.go,b.go" is neither a file nor a changed path.
+func TestCheckScopedPathsRefuseANameThatNeitherExistsNorChanged(t *testing.T) {
+	for _, named := range []string{"src/typo.js", "a.go,b.go"} {
+		t.Run(named, func(t *testing.T) {
+			repo := &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), plan: owing}
+			deps := repo.deps()
+			deps.Paths = []string{named}
+			res := Run(".", deps)
+			if res.Exit != 2 {
+				t.Fatalf("exit = %d, want 2: %s", res.Exit, res.Text)
+			}
+			for _, want := range []string{"--paths", named, "neither a file nor a changed path"} {
+				if !strings.Contains(res.Text, want) {
+					t.Fatalf("text missing %q:\n%s", want, res.Text)
+				}
+			}
+		})
+	}
+}
+
+// An existing file that did not change is a legitimate scope that owes nothing, not a refusal: the
+// guard exists to catch names that spell nothing, not quiet scopes.
+func TestCheckScopedPathsKeepANameForAnExistingFileUnchanged(t *testing.T) {
+	repo := &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), plan: owing, existing: []string{"src/other.js"}}
+	deps := repo.deps()
+	deps.Paths = []string{"src/other.js"}
+	res := Run(".", deps)
+	if res.Exit != 0 || !strings.Contains(res.Text, "no production source in the named paths is changed") {
+		t.Fatalf("exit = %d, want 0 for an existing unchanged file: %s", res.Exit, res.Text)
 	}
 }
 
