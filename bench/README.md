@@ -22,17 +22,30 @@ copied into its temporary input directory. Test discovery matches the catch chec
 `--dry-run` validates/discovers inputs without invoking an agent or writing oracle artifacts.
 The case corpus must remain available under `bench/cases` (source cases use the case cache).
 
-The strict JSON answer labels each named test `contract`, `invented`, or `unclear`.
-Malformed, truncated, incomplete, or failed answers become `unclear`, never rejection.
-Only `invented` witnesses are dropped. `<reading>/oracle/verdicts.json` records labels,
+The strict JSON answer labels each named test `contract` or `invented`: a test may
+only assert what the contract demands, so an undecidable test is invented, and the
+judge cannot abstain. Malformed, truncated, incomplete, or failed answers keep their
+tests under the label `unclear`, never rejection, and `summary.md` states how many tests
+this run's rejected answers kept, so a reading that lost verdicts to unparseable answers
+is not mistaken for one judged by an older prompt; the same label is what readings judged
+before this prompt carry. Only `invented` verdicts are dropped, and a red test is dropped
+only when every judged name it matches was judged invented: a name another file of the
+same run judged `contract` or `unclear` keeps it. `<reading>/oracle/verdicts.json` records labels,
 reasons, per-file invocation costs/turns, runner/model, fixed-prompt SHA-256 and scorer
 revision; `summary.md` compares recorded and filtered caught defect-runs, red-on-fixed
 tests and runs without witnesses. The original reading files are not rewritten. Oracle output symlinks (including the
 output directory itself) are refused before invoking a judge; output files are replaced
 without following existing file symlinks.
-Unkept runs remain unchanged in both views. Old catch records do not name every red
-on-fixed test: only named inverted tests can then be subtracted reliably; unattributed
-red tests are explicitly counted and kept, rather than guessing which test failed.
+Unkept runs remain unchanged in both views. Catch records now name the tests red on the
+fixed code. A reading built before they did is re-checked from its own kept workspace, and
+only when the re-check reproduces the recorded counts; `--suite-timeout` caps that suite run.
+A red test the re-check cannot name, or a re-check that disagrees with the reading, stays
+unattributed and kept rather than guessing which test failed. A case whose contract cannot be
+built stays unjudged in both views and is named in the summary, so one case whose dependencies
+are unavailable offline cannot void a whole reading. A run whose every kept run belongs to a case
+with no contract publishes nothing, so an empty measurement never replaces the report a previous
+run wrote; a kept run that has no added or changed test file (nothing to judge, but a contract
+present) publishes a report whose two views are equal.
 
 This judge is **uncalibrated**, not evidence of correctness. No real-model evaluation
 or product integration is implied. Before using the labels as a gate, human-label a
