@@ -198,15 +198,27 @@ async function owedReason(cwd: string, env: Readonly<Record<string, string | und
   if (result.code !== 1) return "";
   const reply = `${result.stdout}\n${result.stderr}`.split("\n").map((l) => l.trim()).filter((l) => l !== "");
   const owed = reply.filter((l) => !META_LINE.some((meta) => meta.test(l)));
-  return owed.find((l) => PENDING_LINE.test(l)) ?? owed[0] ?? "";
+  return boundReason(owed.find((l) => PENDING_LINE.test(l)) ?? owed[0] ?? "");
+}
+
+/**
+ * The reason as it may appear in a UI line: the line can quote plan-file text verbatim, so control characters never
+ * survive it and it is capped at MAX_REASON characters, an ellipsis marking the cut. The cap sits above the longest
+ * line the check itself prints, so its own wording always reaches the human whole; only plan text runs into it.
+ */
+const MAX_REASON = 300;
+function boundReason(line: string): string {
+  const clean = line.replace(/[\u0000-\u001f\u007f]/g, "");
+  return clean.length > MAX_REASON ? clean.slice(0, MAX_REASON - 1) + "…" : clean;
 }
 
 /**
  * The check's bookkeeping lines: a warning about its own evidence, the count of files that moved, and the aside that
  * labels plan data. They say why the check can speak and what the agent or the plan did, never what is owed, so the
- * offer never asks a question about them.
+ * offer never asks a question about them. The parenthesized one is only that exact marker: any other line fully in
+ * parentheses can be the debt itself (a pending plan target) and must survive to the question.
  */
-const META_LINE = [/^warning: /, /^\d+ production source file\(s\) changed: /, /^\(.*\)$/];
+const META_LINE = [/^warning: /, /^\d+ production source file\(s\) changed: /, /^\(the names below are read from the plan file\b/];
 
 /** A plan target still to do: it names what the repository owes, where a sweep total only says how far it got. */
 const PENDING_LINE = /^still pending\b/;

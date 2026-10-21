@@ -247,6 +247,32 @@ test("the offer names the pending plan target, never the sweep's own progress", 
   assert.match(title, /still pending/, "the pending plan target is the debt the question names");
 });
 
+test("only the plan data marker is parenthesized bookkeeping: any other parenthesized line is the debt", async () => {
+  // `/^\(.*\)$/` once suppressed every parenthesized line; the only bookkeeping line of that
+  // shape is the plan data marker, so a different parenthesized line is what the offer must show.
+  const h = offerHarness({ check: {
+    stdout: "1 production source file(s) changed: m1.go\n(plan m1 still owes 2 targets)\n",
+    stderr: "",
+    code: 1,
+  } });
+  await h.run("change a", [["edit", "m1.go"]]);
+  assert.deepEqual(h.asked, [{ title: "¿Quieres hacer TSP?\n(plan m1 still owes 2 targets)", options: ["Sí", "No"] }]);
+});
+
+test("the reason reaching the UI is bounded: control characters stripped, cut at 300 with an ellipsis", async () => {
+  // The reason can be plan-file text quoted verbatim into a UI question, so it is bounded
+  // before it gets there: no control characters survive, and a long line is cut short.
+  const long = `still pending: ${"x".repeat(280)}\u001b[31mred\u001b[0m`;
+  const h = offerHarness({ check: { stdout: `1 production source file(s) changed: a.go\n${long}\n`, stderr: "", code: 1 } });
+  await h.run("change a", [["edit", "a.go"]]);
+  const title = h.asked[0]?.title ?? "";
+  const reason = title.slice("¿Quieres hacer TSP?\n".length);
+  assert.match(reason, /^still pending/, "the reason is still the pending line the check printed");
+  assert.doesNotMatch(reason, /[\u0000-\u001f\u007f]/, "no control character ever reaches the UI question");
+  assert.ok(reason.length <= 300, `the reason is capped at 300 characters, got ${reason.length}`);
+  assert.ok(reason.endsWith("…"), "a cut reason ends with an ellipsis");
+});
+
 test("a check that exits 1 with no line at all asks nothing: an empty reply is no criterion", async () => {
   const h = offerHarness({ check: { stdout: "", stderr: "", code: 1 } });
   await h.run("change a", [["edit", "a.go"]]);

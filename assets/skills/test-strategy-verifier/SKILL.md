@@ -38,7 +38,9 @@ Run `tsp check` before declaring the work done:
 - **exit 1 that prints nothing**, or **any other non-zero exit** (a usage error is the check
   failing, not a debt) → the check could not answer here. Apply the same criterion by hand:
   an uncommitted change to production source in this work unit is owed; documentation, fixtures
-  and ledger-only edits are not.
+  and ledger-only edits are not. The Pi host's TSP offer stays silent in exactly these
+  could-not-answer cases, so that hand rule is the agent's own fallback and the two never
+  contradict.
 
 An explicit human instruction to skip TSP for this change is honored for that change alone: record
 it in one line and proceed. That is a decision the human already made, not a question to ask.
