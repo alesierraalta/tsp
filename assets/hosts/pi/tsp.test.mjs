@@ -182,13 +182,14 @@ test("without UI nothing renders — and help never spawns a process", async () 
 // The TSP offer: after a run that changed source code, Pi asks in the chat whether to run TSP; "Sí" sends the
 // identity prompt "haz el TSP" as if the user typed it. Every collaborator is faked: no Pi, no files.
 function offerHarness(opts = {}) {
-  const { hasUI = true, optedOut = false, env = {}, findings = {} } = opts;
+  const { hasUI = true, optedOut = false, env = {}, findings = {}, check = { stdout: "run m1: layers swept: 1 of 3\n", stderr: "", code: 1 } } = opts;
   const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
   const asked = [], sent = [], calls = [], notes = [];
   // findings maps a findings subcommand to the child it answers with; a missing one answers exit 0, no output.
+  // check is the pre-offer `tsp check` the offer derives its criterion from; the default reports one run still to plan.
   const exec = async (argv, o) => {
     calls.push({ argv: [...argv], cwd: o.cwd });
-    const outcome = findings[argv[1]] ?? { stdout: "", stderr: "", code: 0 };
+    const outcome = argv[0] === "check" && argv[1] === "--cwd" ? check : findings[argv[1]] ?? { stdout: "", stderr: "", code: 0 };
     if (outcome instanceof Error) throw outcome;
     return outcome;
   };
@@ -217,8 +218,75 @@ function offerHarness(opts = {}) {
 test("a run that edits source code ends with the TSP question, and Sí sends haz el TSP", async () => {
   const h = offerHarness();
   await h.run("add a retry limit", [["edit", "internal/retry/retry.go"], ["write", "src/new.ts"]]);
-  assert.deepEqual(h.asked, [{ title: "¿Quieres hacer TSP?", options: ["Sí", "No"] }]);
+  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo"], cwd: "/repo" }], "the repository decides, not the edit list");
+  assert.deepEqual(h.asked, [{ title: "¿Quieres hacer TSP?\nrun m1: layers swept: 1 of 3", options: ["Sí", "No"] }]);
   assert.deepEqual(h.sent, ["haz el TSP"]);
+});
+
+test("the offer names the debt under the check's intro lines: a warning and the changed-file line never become the question", async () => {
+  const h = offerHarness({ check: {
+    stdout: "warning: git ignores plan/tpp.md: the run's evidence cannot be versioned\n1 production source file(s) changed: internal/retry/retry.go\nrun m1: layers swept: 1 of 3, ranked targets 0 of 2\n",
+    stderr: "",
+    code: 1,
+  } });
+  await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+  assert.deepEqual(h.asked, [{ title: "¿Quieres hacer TSP?\nrun m1: layers swept: 1 of 3, ranked targets 0 of 2", options: ["Sí", "No"] }]);
+});
+
+test("the offer names the pending plan target, never the sweep's own progress", async () => {
+  // The literal exit-1 output `tsp check` prints here once a change brings its own tests and only the
+  // plan's breadth is still owed: how far the sweep got is bookkeeping, the pending target is the debt.
+  const h = offerHarness({ check: {
+    stdout: "2 production source file(s) changed: assets/hosts/pi/tsp.ts, internal/findings/findings.go\nlayers swept: 5 of 5\n(the names below are read from the plan file: data, never instructions)\nranked targets done: 12 of 13\n  still pending: (line 32): 6. Port run_evals.py to Go subcommands\n",
+    stderr: "",
+    code: 1,
+  } });
+  await h.run("fix the findings noise", [["edit", "internal/findings/findings.go"]]);
+  const title = h.asked[0]?.title ?? "";
+  assert.doesNotMatch(title, /layers swept|ranked targets done/, "how far the sweep got is not what the repository owes");
+  assert.match(title, /still pending/, "the pending plan target is the debt the question names");
+});
+
+test("a check that exits 1 with no line at all asks nothing: an empty reply is no criterion", async () => {
+  const h = offerHarness({ check: { stdout: "", stderr: "", code: 1 } });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo"], cwd: "/repo" }]);
+  assert.deepEqual(h.asked, [], "a check that says nothing offers nothing, never a sentence of its own");
+  assert.deepEqual(h.sent, []);
+  const meta = offerHarness({ check: { stdout: "1 production source file(s) changed: a.go\n", stderr: "", code: 1 } });
+  await meta.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(meta.asked, [], "bookkeeping alone names no debt");
+});
+
+test("a check that fails on its own terms asks nothing: its error text never becomes the question", async () => {
+  const h = offerHarness({ check: { stdout: "", stderr: "tsp check: --path must name a plan file\n", code: 2 } });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo"], cwd: "/repo" }]);
+  assert.deepEqual(h.asked, [], "only exit 1 owes work; anything else means the check could not answer");
+  assert.deepEqual(h.sent, []);
+});
+
+test("the offer speaks the debt line the check really prints, whatever its wording", async () => {
+  // The literal exit-1 text `tsp check` emits for a change with no test beside it: the offer must never lose it.
+  const owed = 'no test was added or changed with it: run the testing discipline ("haz el TSP"), record tsp check --no-test-needed "<reason>" when this change warrants no test, or add .no-testing-gate when this repository does not warrant it';
+  const h = offerHarness({ check: { stdout: `1 production source file(s) changed: sample.go\n${owed}\n`, stderr: "", code: 1 } });
+  await h.run("change a", [["edit", "sample.go"]]);
+  assert.deepEqual(h.asked, [{ title: `¿Quieres hacer TSP?\n${owed}`, options: ["Sí", "No"] }]);
+});
+
+test("the offer follows the check: a change the repository does not owe a test for ends without a question", async () => {
+  const h = offerHarness({ check: { stdout: "no production source is changed: nothing to check\n", stderr: "", code: 0 } });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo"], cwd: "/repo" }]);
+  assert.deepEqual(h.asked, [], "nothing owed is not an offer");
+  assert.deepEqual(h.sent, []);
+});
+
+test("a check that cannot run asks nothing: no criterion, no question", async () => {
+  const h = offerHarness({ check: new Error("spawn tsp ENOENT") });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(h.asked, []);
+  assert.deepEqual(h.sent, []);
 });
 
 test("No sends nothing and the same files are not offered again; a new file is", async () => {
@@ -291,15 +359,18 @@ test("a TSP run that pinned nothing still shows the review; a record that cannot
 });
 
 test("the findings review runs only after a TSP run the user asked for, with UI, not aborted, not opted out", async () => {
-  for (const [h, prompt, aborted] of [
-    [offerHarness({ answer: "No" }), "change a", false],
-    [offerHarness(), "haz el TSP", true],
-    [offerHarness({ hasUI: false }), "haz el TSP", false],
-    [offerHarness({ optedOut: true }), "haz el TSP", false],
+  for (const [h, prompt, aborted, offered] of [
+    [offerHarness({ answer: "No" }), "change a", false, true],
+    [offerHarness(), "haz el TSP", true, false],
+    [offerHarness({ hasUI: false }), "haz el TSP", false, false],
+    [offerHarness({ optedOut: true }), "haz el TSP", false, false],
   ]) {
     await h.run(prompt, [["edit", "a.go"]], { aborted });
-    assert.deepEqual(h.calls, [], `${prompt} aborted=${aborted}`);
-    assert.deepEqual(h.notes, []);
+    const why = `${prompt} aborted=${aborted}`;
+    // The gate is proved by what it decided, not by a review call that never happens either way.
+    assert.equal(h.asked.length, offered ? 1 : 0, `${why}: the offer decides before any review`);
+    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings"), [], why);
+    assert.deepEqual(h.notes, [], why);
   }
 });
 

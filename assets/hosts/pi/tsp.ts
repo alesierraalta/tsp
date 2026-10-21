@@ -155,12 +155,14 @@ export async function runTppCommand(rawArgs: string, deps: TppDeps): Promise<voi
   }
 }
 
-// The TSP offer. When a run ends after the agent edited source code, Pi asks in the chat whether to run TSP;
-// "Sí" sends "haz el TSP" as if the user typed it, which invokes the test-strategy skill. Only edit and write
-// results are seen, so a change made through a shell command is not noticed. When a TSP run ends, the tests
-// it left failing on HEAD's code are recorded as findings and the review of every finding is shown to the user;
-// the agent is never told about it. A delegated child session (GENTLE_PI_AGENTS_CHILD=1) has nobody to answer,
-// so it gets neither.
+// The TSP offer. When a run ends after the agent edited source code, and the repository still owes that change
+// a test, Pi asks in the chat whether to run TSP; "Sí" sends "haz el TSP" as if the user typed it, which invokes
+// the test-strategy skill. Only edit and write results are seen, so a change made through a shell command is not
+// noticed. `tsp check` is the criterion: the edit list only says source was touched, while the check says whether
+// TSP is owed and names what is missing, so a check that finds nothing owed or cannot run asks nothing.
+// When a TSP run ends, the tests it left failing on HEAD's code are recorded as findings and the review of every
+// finding is shown to the user; the agent is never told about it. A delegated child session
+// (GENTLE_PI_AGENTS_CHILD=1) has nobody to answer, so it gets neither.
 export const OFFER_QUESTION = "¿Quieres hacer TSP?";
 export const OFFER_YES = "Sí";
 export const OFFER_NO = "No";
@@ -177,6 +179,37 @@ export function isSourcePath(path: string): boolean {
 
 /** A run the user started to do TSP: its own edits never trigger another offer. */
 const isTspPrompt = (prompt: string | undefined): boolean => /\b(tsp|test[- ]strategy)\b/i.test(prompt ?? "");
+
+/**
+ * What the repository still owes a test for, or "" when it owes nothing: the offer's whole criterion.
+ * The edit list only says the agent touched source; `tsp check` says whether that change needs TSP at all and
+ * names what is missing. Exit 0 owes nothing and exit 1 owes, whatever the report's wording: its first line that is
+ * not bookkeeping is the reason, and a line naming a plan target still to do outranks one that only reports how far
+ * the sweep got. Any other exit is the check failing, and a reply with no line at all is the check
+ * unable to speak, so neither yields a criterion and the offer stays silent.
+ */
+async function owedReason(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp): Promise<string> {
+  let result: ExecResult;
+  try {
+    result = await exec(["check", "--cwd", cwd], { cwd, env: { ...env } });
+  } catch {
+    return "";
+  }
+  if (result.code !== 1) return "";
+  const reply = `${result.stdout}\n${result.stderr}`.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+  const owed = reply.filter((l) => !META_LINE.some((meta) => meta.test(l)));
+  return owed.find((l) => PENDING_LINE.test(l)) ?? owed[0] ?? "";
+}
+
+/**
+ * The check's bookkeeping lines: a warning about its own evidence, the count of files that moved, and the aside that
+ * labels plan data. They say why the check can speak and what the agent or the plan did, never what is owed, so the
+ * offer never asks a question about them.
+ */
+const META_LINE = [/^warning: /, /^\d+ production source file\(s\) changed: /, /^\(.*\)$/];
+
+/** A plan target still to do: it names what the repository owes, where a sweep total only says how far it got. */
+const PENDING_LINE = /^still pending\b/;
 
 export interface OfferOptions {
   optedOut?: (cwd: string) => boolean; // the repo's .no-testing-gate opt-out, shared with the Stop gate
@@ -223,7 +256,9 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd)) return;
     if (tspRun) return reviewFindings(ctx.cwd, env, exec, (message, type) => ctx.ui.notify(message, type));
     if (fresh.length === 0) return;
-    const answer = await ctx.ui.select(OFFER_QUESTION, [OFFER_YES, OFFER_NO]);
+    const owed = await owedReason(ctx.cwd, env, exec);
+    if (owed === "") return;
+    const answer = await ctx.ui.select(`${OFFER_QUESTION}\n${owed}`, [OFFER_YES, OFFER_NO]);
     if (answer === OFFER_YES) {
       declined.clear();
       pi.sendUserMessage(TSP_PROMPT);
