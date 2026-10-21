@@ -171,12 +171,11 @@ func scopedVerdict(cwd, root string, changed, all []string, d Deps) Result {
 	// The caller spells its paths from the directory it asked about, and --cwd keeps its default "."
 	// there: a relative value is relative to where the process stands, never to the repository root.
 	// Making it absolute first is what keeps a caller standing in a subdirectory from having its paths
-	// read as root-relative, which would answer "nothing to check" for a file it just named.
-	prefix := ""
-	if abs, err := filepath.Abs(filepath.Clean(cwd)); err == nil {
-		if rel, err := filepath.Rel(root, abs); err == nil && !outside(rel) {
-			prefix = rel
-		}
+	// read as root-relative, which would answer "nothing to check" for a file it just named. A --cwd
+	// no prefix can be read from is refused, never answered from the root in its place.
+	prefix, placed := repositoryPrefix(cwd, root)
+	if !placed {
+		return Result{Exit: 2, Text: cwd + ": --cwd must be a directory inside the repository at " + root}
 	}
 	named := make(map[string]bool, len(d.Paths))
 	for _, p := range d.Paths {
@@ -231,6 +230,41 @@ func scopedVerdict(cwd, root string, changed, all []string, d Deps) Result {
 func outside(rel string) bool {
 	rel = filepath.Clean(rel)
 	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel)
+}
+
+// repositoryPrefix is --cwd as a repository-relative directory, read the way git reads the root and the
+// changed files it reports. Both sides are resolved through their links because git reports physical
+// paths: a --cwd reached through a symlink, kept under the link's own spelling, prefixes the named
+// paths with a place git never reported, so the file the caller named answers "nothing to check". A
+// --cwd that is not a directory inside the repository — outside it, absent, or a file — earns the
+// refusal its caller returns instead: with no prefix, the named paths are read root-relative, which
+// accuses a file the caller never named or clears the one it did. A root that cannot itself be
+// resolved leaves no physical root to read --cwd against, and the lexical reading stands.
+func repositoryPrefix(cwd, root string) (string, bool) {
+	abs, err := filepath.Abs(filepath.Clean(cwd))
+	if err != nil {
+		return "", false
+	}
+	base, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		rel, err := filepath.Rel(root, abs)
+		if err != nil || outside(rel) {
+			return "", true
+		}
+		return rel, true
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", false
+	}
+	if info, err := os.Stat(real); err != nil || !info.IsDir() {
+		return "", false
+	}
+	rel, err := filepath.Rel(base, real)
+	if err != nil || outside(rel) {
+		return "", false
+	}
+	return rel, true
 }
 
 // witnessVerdict is the reading without a plan: test-strategy 0.7 writes none, so the tests are what the
