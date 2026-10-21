@@ -141,40 +141,62 @@ const oraclePromptPreAttribution = `You are an independent contract verifier, no
 // measured over the cases whose contract is complete, and the skipped ones must be named in the report.
 func TestOracleSkipsACaseWithoutContractInsteadOfAbortingTheReading(t *testing.T) {
 	run, opts := oracleReading(t)
-	// The fixture's module needs a dependency that is not in the module cache, so `go doc` cannot build
-	// the case's contract with GOPROXY=off.
-	gomod := filepath.Join(opts.BenchDir, "cases", "demo", "fixture", "go.mod")
-	data, err := os.ReadFile(gomod)
+	// A second case keeps its contract, so the reading still judges something while "demo" is skipped.
+	put := func(p, s string) {
+		t.Helper()
+		p = filepath.Join(opts.BenchDir, p)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("cases/keep/fixture/README.md", "# Contract\nKeep returns one.\n")
+	put("cases/keep/fixture/go.mod", "module example.com/keep\n\ngo 1.22\n")
+	put("cases/keep/fixture/api.go", "package keep\n\n// Keep returns one.\nfunc Keep() int { return 1 }\n")
+	put("cases/keep/KEY.json", `{"request":"Test Keep","defects":[{"id":"K1"}]}`)
+	ws := filepath.Join(run, "keep/1/ws")
+	if err := os.MkdirAll(ws, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "agent_test.go"), []byte("package keep\nimport \"testing\"\nfunc TestKeep(t *testing.T) {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	aggPath := filepath.Join(run, "aggregate.json")
+	stored, err := os.ReadFile(aggPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(gomod, append(data, []byte("\nrequire example.com/unavailable v0.0.1\n")...), 0o644); err != nil {
+	var agg Aggregate
+	if err := json.Unmarshal(stored, &agg); err != nil {
 		t.Fatal(err)
 	}
-	api := filepath.Join(opts.BenchDir, "cases", "demo", "fixture", "api.go")
-	body, err := os.ReadFile(api)
+	agg.Cases = append(agg.Cases, Result{Case: "keep", Run: 1, Workspace: ws, Catch: CatchResult{Checked: true, TestFiles: []string{"agent_test.go"}, Caught: map[string]bool{"K1": true}, CaughtBy: map[string][]string{"K1": {"TestKeep"}}}})
+	data, err := json.Marshal(agg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(api, []byte("package demo\n\nimport _ \"example.com/unavailable\"\n\n"+string(body)), 0o644); err != nil {
+	if err := os.WriteFile(aggPath, data, 0644); err != nil {
 		t.Fatal(err)
 	}
+	breakContract(t, opts)
 	calls := 0
 	opts.Agent = func(context.Context, string, Key, Options) (AgentResult, error) {
 		calls++
-		return AgentResult{Result: `{"tests":[{"name":"TestContract","verdict":"contract","reason":"documented"},{"name":"TestInvented","verdict":"invented","reason":"not documented"}]}`}, nil
+		return AgentResult{Result: `{"tests":[{"name":"TestKeep","verdict":"contract","reason":"documented"}]}`}, nil
 	}
 	report, err := VerifyOracle(run, opts)
 	if err != nil {
 		t.Fatalf("a case without a contract aborted the reading: %v", err)
 	}
-	if calls != 0 {
-		t.Fatalf("an unjudgeable case was judged %d time(s)", calls)
+	if calls != 1 {
+		t.Fatalf("judged %d file(s), want only the case that kept its contract", calls)
 	}
 	if report.Unjudged != 1 || len(report.UnjudgedCases) != 1 || report.UnjudgedCases[0] != "demo" {
-		t.Fatalf("unjudged=%d %v, want the case named", report.Unjudged, report.UnjudgedCases)
+		t.Fatalf("unjudged=%d %v, want only the case named", report.Unjudged, report.UnjudgedCases)
 	}
-	if report.Recorded != (OracleCounts{Caught: 1, Broken: 1}) || report.Filtered != report.Recorded {
+	if report.Recorded != (OracleCounts{Caught: 2, Broken: 1}) || report.Filtered != report.Recorded {
 		t.Fatalf("recorded=%+v filtered=%+v, want both views unchanged", report.Recorded, report.Filtered)
 	}
 	summary, err := os.ReadFile(filepath.Join(run, "oracle", "summary.md"))
@@ -183,5 +205,54 @@ func TestOracleSkipsACaseWithoutContractInsteadOfAbortingTheReading(t *testing.T
 	}
 	if !strings.Contains(string(summary), "demo") {
 		t.Fatalf("summary does not name the skipped case:\n%s", summary)
+	}
+}
+
+// breakContract makes the case's module need a dependency the module cache cannot supply, so `go doc`
+// cannot build the case's contract.
+func breakContract(t *testing.T, opts Options) {
+	t.Helper()
+	dir := filepath.Join(opts.BenchDir, "cases", "demo", "fixture")
+	gomod := filepath.Join(dir, "go.mod")
+	data, err := os.ReadFile(gomod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gomod, append(data, []byte("\nrequire example.com/unavailable v0.0.1\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api := filepath.Join(dir, "api.go")
+	body, err := os.ReadFile(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(api, []byte("package demo\n\nimport _ \"example.com/unavailable\"\n\n"+string(body)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A run that judges no case has measured nothing: it must not replace the report a previous run wrote.
+func TestOracleKeepsAPreviousReportWhenNoCaseCanBeJudged(t *testing.T) {
+	run, opts := oracleReading(t)
+	opts.Agent = func(context.Context, string, Key, Options) (AgentResult, error) {
+		return AgentResult{Result: `{"tests":[{"name":"TestContract","verdict":"contract","reason":"documented"},{"name":"TestInvented","verdict":"invented","reason":"not documented"}]}`}, nil
+	}
+	if _, err := VerifyOracle(run, opts); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(filepath.Join(run, "oracle", "verdicts.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	breakContract(t, opts)
+	if _, err := VerifyOracle(run, opts); err == nil {
+		t.Fatal("a run that judged no case reported success")
+	}
+	after, err := os.ReadFile(filepath.Join(run, "oracle", "verdicts.json"))
+	if err != nil {
+		t.Fatalf("the previous report is gone: %v", err)
+	}
+	if string(after) != string(stored) {
+		t.Fatalf("a run that judged no case replaced the report:\n%s", after)
 	}
 }

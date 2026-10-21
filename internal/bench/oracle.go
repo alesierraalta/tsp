@@ -215,6 +215,11 @@ func VerifyOracle(run string, opts Options) (OracleReport, error) {
 		fmt.Fprintf(logOf(opts), "verify-oracle dry-run: %d files, %d kept runs; no agents or artifacts\n", len(tasks), kept)
 		return report, nil
 	}
+	if len(tasks) == 0 && kept > 0 {
+		// Nothing was judged, so the run measured nothing: publishing would replace a report that did measure
+		// something with an empty one that reads like a real result.
+		return report, fmt.Errorf("no case produced a contract: %d kept run(s) unjudged; the previous report is unchanged", kept)
+	}
 	// Each call gets its own directory and config; no test or implementation is shared between judges.
 	realAgent := opts.Agent == nil
 	opts = normalizeOptions(opts)

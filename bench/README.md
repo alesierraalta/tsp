@@ -38,7 +38,8 @@ only when the re-check reproduces the recorded counts; `--suite-timeout` caps th
 A red test the re-check cannot name, or a re-check that disagrees with the reading, stays
 unattributed and kept rather than guessing which test failed. A case whose contract cannot be
 built stays unjudged in both views and is named in the summary, so one case whose dependencies
-are unavailable offline cannot void a whole reading.
+are unavailable offline cannot void a whole reading. A run that judges no case at all publishes
+nothing, so an empty measurement never replaces the report a previous run wrote.
 
 This judge is **uncalibrated**, not evidence of correctness. No real-model evaluation
 or product integration is implied. Before using the labels as a gate, human-label a
