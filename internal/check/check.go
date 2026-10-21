@@ -200,6 +200,8 @@ func scopedVerdict(root string, changed, all []string, d Deps) Result {
 	}
 	var tests []string
 	for _, p := range all {
+		// The rule is the bench's, not a copy: this file already depends on internal/bench for
+		// RedCheck, and a second definition would let the two answers drift apart.
 		if bench.IsTestFile(p) {
 			tests = append(tests, p)
 		}
