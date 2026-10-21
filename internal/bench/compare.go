@@ -2,6 +2,7 @@ package bench
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -84,6 +85,7 @@ func refuseProvenanceMismatch(before, after Aggregate, opts CompareOptions) erro
 		refuseRuns,
 		refuseRounds,
 		refuseSessions,
+		refuseFixLoop,
 		refuseAgentConfig,
 		refuseEnvironment,
 	}
@@ -140,6 +142,16 @@ func refuseSessions(before, after Provenance) error {
 		return nil
 	}
 	return fmt.Errorf("different sessions per run: before %d, after %d", b, a)
+}
+
+// refuseFixLoop keeps a reading that measured the loop the user runs apart from one whose runs made one pass: the
+// second reading's numbers cover a workspace an agent fixed between rounds, and comparing them with a one-pass
+// reading's would read the loop's work as a difference in the instrument.
+func refuseFixLoop(before, after Provenance) error {
+	if before.FixLoop == after.FixLoop {
+		return nil
+	}
+	return errors.New("different fix-loop mode: one reading measured round 1, an agent fix and two round-2 arms, the other did not")
 }
 
 func refuseAgentConfig(before, after Provenance) error {

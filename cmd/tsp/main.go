@@ -105,7 +105,7 @@ flags for setup and doctor:
                        runtime integration signal exists), standalone, or gentle (refused as
                        pending integration), resolved before any work runs
 
-bench run [--cases <glob>] [--runner pi|claude] [--model <m>] [--runs N] [--rounds N] [--max-turns N] [--timeout 30m]
+bench run [--cases <glob>] [--runner pi|claude] [--model <m>] [--runs N] [--rounds N] [--fix-loop] [--max-turns N] [--timeout 30m]
           [--max-cost-usd N] [--out <dir>] [--bench-dir <dir>] [--dry-run] [--keep]
           [--retries N] [--retry-delay 60s] [--agent-config bench|<dir>] [--concurrency N]
           (--cases accepts comma-separated patterns)
@@ -1730,6 +1730,7 @@ func runBenchRun(args []string) int {
 	runs := fs.Int("runs", 1, "runs per case")
 	rounds := fs.Int("rounds", 1, "rounds per run: the agent runs again in the same workspace up to N times, every later round told the tests earlier rounds left failing on the unmodified code and asked for defects they do not cover; each round is recorded, and the provenance records the rounds")
 	sessions := fs.Int("sessions", 1, "independent review sessions per run; apply reference fixes for caught defects between sessions, retaining tests")
+	fixLoop := fs.Bool("fix-loop", false, "measure the loop a user runs: round 1, then the agent fixes what round 1's tests pinned (test files it touches restored, source committed), then round 2 runs twice from the same fixed workspace, once plain and once told what `tsp findings check` reports")
 	prompt := fs.String("prompt", "", "instruction every arm receives instead of the bench prompt (\""+bench.Prompt+"\"); recorded in the provenance")
 	maxTurns := fs.Int("max-turns", 70, "agent turn cap per run")
 	timeout := fs.Duration("timeout", 30*time.Minute, "agent wall-clock cap per run")
@@ -1793,6 +1794,20 @@ func runBenchRun(args []string) int {
 	}
 	if *escalateModel != "" && *escalateModel == *model {
 		fmt.Fprintf(os.Stderr, "bench run: --escalate-model must differ from --model (%s): the rerun would pay twice for one model\n", *model)
+		return 2
+	}
+	// The fix loop already runs round 2 and already fixes with the agent: the modes that do either would mix their
+	// costs and their rounds with the loop's, and the pair would no longer say what the loop measured.
+	if *fixLoop && *rounds > 1 {
+		fmt.Fprintln(os.Stderr, "bench run: --fix-loop cannot be combined with --rounds above 1: the loop already runs a second round, twice")
+		return 2
+	}
+	if *fixLoop && *sessions > 1 {
+		fmt.Fprintln(os.Stderr, "bench run: --fix-loop cannot be combined with --sessions above 1: the loop fixes with the agent, not with a reference fix")
+		return 2
+	}
+	if *fixLoop && *escalateModel != "" {
+		fmt.Fprintln(os.Stderr, "bench run: --fix-loop cannot be combined with --escalate-model: both rerun the agent and their costs would mix")
 		return 2
 	}
 	if *out == "" {
@@ -1871,7 +1886,7 @@ func runBenchRun(args []string) int {
 		skillFile = filepath.Join(cfgDir, "skills", "test-strategy", "SKILL.md")
 	}
 	_, code := bench.Run(bench.Options{
-		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
+		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, FixLoop: *fixLoop, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
 		Timeout:      *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,

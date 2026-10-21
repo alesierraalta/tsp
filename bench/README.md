@@ -399,6 +399,34 @@ The stop-on-no-new-witness rule can be evaluated offline. A later round that exh
 the run. Counts above 1 cannot be combined with `--escalate-model`, and `bench compare` refuses
 mixed round counts. Omitting the flag or using 1 preserves the one-pass behavior.
 
+## The fix loop
+
+`tsp bench run --fix-loop` measures the loop a user actually runs: a TSP pass, the agent fixes what it
+pinned, and a second TSP pass. It differs from `--sessions` in who fixes: `--sessions` applies the case's
+reference fix, which is correct by construction and can never regress, while here the agent fixes its own
+witnesses and can introduce a regression the second pass has to find.
+
+One run is: round 1, scored exactly as a one-pass run, so the reading's own numbers stay comparable; then
+`tsp findings record` with the bench's own binary under a private `TSP_HOME` in the run directory; then a
+separate agent process whose whole prompt is the fix instruction listing round 1's witnesses (no bench prompt,
+no case request). Test files the fix touches are restored to their round-1 bytes and reported as
+`fix_touched_tests`; the remaining changed non-test paths are committed, so HEAD holds the agent's fixed code
+while round 1's tests stay uncommitted — exactly as `redcheck` and the registry read them. `tsp findings check`
+then runs in that fixed workspace (the registry is keyed by the repository's location), and the fixed
+workspace is copied into two arms that run one round each: `plain`, with the bench prompt round 1 got, and
+`registry`, with that prompt plus the check report.
+
+Per arm, over the tests red on the arm's HEAD: a test green on the case's `fix/all` code is `new_real` (red on
+the agent's fixed code, green on correct code, so it separates them; names go to an adjudication list because a
+test written to an API the fix changed can be a design difference), a test red there too is `new_false`, and a
+round-1 witness still red is `still_red`. The summary adds one `fix loop` line with valid, skipped and failed
+runs plus per-arm `new_real`, `new_false`, `still_red`, cost and seconds; the fix step and each arm record their
+own turns and cost in `result.json`'s `fix_loop`, never in the run's row. A round 1 that pinned nothing skips
+the loop with a reason. A failed fix or arm step is recorded in the block and leaves the run's round-1 result
+valid; the loop is marked not valid instead of failing a run that already measured something. Provenance and
+the history row record `fix_loop`, and `bench compare` refuses a fix-loop reading beside one that is not.
+`--fix-loop` cannot be combined with `--rounds` above 1, `--sessions` above 1 or `--escalate-model`.
+
 ## What a reading can decide
 
 One run per case decides nothing. Two runs of the same configuration have flipped four of seventeen
