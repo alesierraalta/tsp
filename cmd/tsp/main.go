@@ -943,7 +943,7 @@ func runCheck(args []string) int {
 	path := fs.String("path", "", "plan file relative to the repository root")
 	suite := fs.String("suite", "", "command that runs the changed tests when there is no plan (default: their Go packages, pytest on changed .py tests, or node --test on them)")
 	waive := fs.String("no-test-needed", "", "record in "+check.WaiverName+" that the current change needs no new test, with this reason; editing the code again voids it")
-	paths := fs.String("paths", "", "answer only for these comma-separated paths: whether they owe a test, ignoring the plan's remaining targets")
+	paths := fs.String("paths", "", "answer only for these comma-separated paths, relative to --cwd: whether they owe a test, ignoring the plan's remaining targets")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
 	}
@@ -955,13 +955,18 @@ func runCheck(args []string) int {
 		fmt.Fprintln(os.Stderr, "check: --paths answers for one change; --no-test-needed records a waiver for the whole change")
 		return 2
 	}
+	named := splitPaths(*paths)
+	if flagSet(fs, "paths") && len(named) == 0 {
+		fmt.Fprintln(os.Stderr, "check: --paths names no path: name one or more comma-separated paths")
+		return 2
+	}
 	if flagSet(fs, "path") {
 		if err := plan.ValidatePlanPath("--path", *path); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 2
 		}
 	}
-	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: splitPaths(*paths)})
+	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named})
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
 }

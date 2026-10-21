@@ -120,6 +120,11 @@ func Run(cwd string, d Deps) Result {
 	if d.Waive != "" && planErr == nil {
 		return Result{Exit: 2, Files: files, Text: warn + "--no-test-needed applies only without a plan: " + planRelPath + " is this change's record"}
 	}
+	if len(d.Paths) > 0 {
+		res := scopedVerdict(cwd, root, files, gate.ParsePorcelain(statusOut), d)
+		res.Text = warn + res.Text
+		return res
+	}
 	if planErr != nil && d.Waive != "" {
 		res := recordWaiver(root, files, d)
 		res.Files = files
@@ -130,13 +135,6 @@ func Run(cwd string, d Deps) Result {
 		res := witnessVerdict(root, files, d)
 		res.Files = files
 		res.Text = warn + changedLine(files) + "\n" + res.Text
-		return res
-	}
-	// A scoped question is answered before the plan's verdict: the remaining targets are the run's
-	// agenda, so they say nothing about what the paths this work touched still owe.
-	if len(d.Paths) > 0 {
-		res := scopedVerdict(root, files, gate.ParsePorcelain(statusOut), d)
-		res.Text = warn + res.Text
 		return res
 	}
 	// The verdict is scoped to the declared run when one is declared: GapsForRun counts only the
@@ -166,18 +164,37 @@ const noWitnessDebt = "no test was added or changed with it: run the testing dis
 
 // scopedVerdict answers for the named paths only: what they owe a test. It reads the tree, so a test
 // file changed with the source settles the debt without re-running anything, and the plan is never
-// consulted: how much of a run's agenda is still open is progress, not this change's debt.
-func scopedVerdict(root string, changed, all []string, d Deps) Result {
+// consulted: how much of a run's agenda is still open is progress, not this change's debt. A caller
+// names its paths from the directory it asked about, and a path outside the repository is refused
+// rather than answered, because "it did not change" would read as "this change owes nothing".
+func scopedVerdict(cwd, root string, changed, all []string, d Deps) Result {
+	// The caller spells its paths from the directory it asked about: an absolute --cwd is the place git
+	// resolved the root from, and a relative one is read from the repository root, where a bare command
+	// runs. The prefix is that directory's own path inside the root.
+	prefix := ""
+	if c := filepath.Clean(cwd); c != "." && c != string(filepath.Separator) {
+		if filepath.IsAbs(c) {
+			if rel, err := filepath.Rel(root, c); err == nil && !outside(rel) {
+				prefix = rel
+			}
+		} else if !outside(c) {
+			prefix = c
+		}
+	}
 	named := make(map[string]bool, len(d.Paths))
 	for _, p := range d.Paths {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
 		}
-		if filepath.IsAbs(p) {
-			if rel, err := filepath.Rel(root, p); err == nil {
-				p = rel
-			}
+		given := p
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(prefix, p)
+		} else if rel, err := filepath.Rel(root, p); err == nil {
+			p = rel
+		}
+		if outside(p) {
+			return Result{Exit: 2, Text: given + ": a named path must be inside the repository at " + root}
 		}
 		named[filepath.ToSlash(filepath.Clean(p))] = true
 	}
@@ -211,6 +228,12 @@ func scopedVerdict(root string, changed, all []string, d Deps) Result {
 	}
 	sort.Strings(tests)
 	return Result{Files: in, Text: line + "\n" + "a test was added or changed with it: " + strings.Join(tests, ", ")}
+}
+
+// outside reports a repository-relative path that leaves the repository.
+func outside(rel string) bool {
+	rel = filepath.Clean(rel)
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel)
 }
 
 // witnessVerdict is the reading without a plan: test-strategy 0.7 writes none, so the tests are what the
