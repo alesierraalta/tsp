@@ -197,19 +197,31 @@ async function owedReason(cwd: string, env: Readonly<Record<string, string | und
   }
   if (result.code !== 1) return "";
   const reply = `${result.stdout}\n${result.stderr}`.split("\n").map((l) => l.trim()).filter((l) => l !== "");
-  const owed = reply.filter((l) => !META_LINE.some((meta) => meta.test(l)));
-  return boundReason(owed[0] ?? "");
+  const owed = reply.filter((l) => !META_LINE.some((meta) => meta.test(l))).filter(hasVisibleText).map(boundReason);
+  return owed[0] ?? "";
+}
+
+/**
+ * A line carrying no visible character is not a reason: it would ask the question with a blank line and hide the debt
+ * line printed after it. Formatting characters only decide that question, they are never stripped, so text that
+ * depends on them keeps rendering as written. This reads the line as the check printed it, before the cut, whose
+ * ellipsis would make an invisible line look visible.
+ */
+function hasVisibleText(line: string): boolean {
+  return /[^\p{Cc}\p{Cf}\s]/u.test(line);
 }
 
 /**
  * The reason as it may appear in a UI line: the line can quote plan-file text verbatim, so control characters never
  * survive it and it is capped at MAX_REASON characters, an ellipsis marking the cut. The cap sits above the longest
  * line the check itself prints, so its own wording always reaches the human whole; only plan text runs into it.
+ * The cut counts characters, not their UTF-16 halves, so it never leaves a lone surrogate for the UI to render.
  */
 const MAX_REASON = 300;
 function boundReason(line: string): string {
-  const clean = line.replace(/[\u0000-\u001f\u007f]/g, "");
-  return clean.length > MAX_REASON ? clean.slice(0, MAX_REASON - 1) + "…" : clean;
+  const clean = line.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  const chars = [...clean];
+  return chars.length > MAX_REASON ? chars.slice(0, MAX_REASON - 1).join("") + "…" : clean;
 }
 
 /**

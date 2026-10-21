@@ -272,6 +272,48 @@ test("the reason reaching the UI is bounded: control characters stripped, cut at
   assert.ok(reason.endsWith("…"), "a cut reason ends with an ellipsis");
 });
 
+test("a cut never splits a character: the reason reaching the UI stays well-formed text", async () => {
+  // The cut lands inside a character outside the Basic Multilingual Plane, which JavaScript stores as two halves.
+  const long = `still pending: ${"x".repeat(283)}${"😀".repeat(50)}`;
+  const h = offerHarness({ check: { stdout: `${long}\n`, stderr: "", code: 1 } });
+  await h.run("change a", [["edit", "a.go"]]);
+  const reason = (h.asked[0]?.title ?? "").slice("¿Quieres hacer TSP?\n".length);
+  assert.ok(reason.endsWith("…"), "the long reason was cut");
+  assert.ok(reason.isWellFormed(), "no half of a character reaches the UI question");
+});
+
+test("a reason made only of zero-width characters never reaches the UI blank", async () => {
+  // U+200B is not a control character, so stripping controls leaves a line that renders as nothing.
+  const owed = "no test was added or changed with it";
+  const h = offerHarness({ check: { stdout: `\u200b\u200b\u200b\n${owed}\n`, stderr: "", code: 1 } });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(h.asked.map((a) => a.title), [`¿Quieres hacer TSP?\n${owed}`], "the offer names the debt, not a line nobody can read");
+});
+
+test("bounded text is not visible text: a long invisible line never becomes the reason", async () => {
+  // The cut runs before the visibility test, so a line longer than the cap gains a visible ellipsis it never had.
+  const owed = "no test was added or changed with it";
+  const h = offerHarness({ check: { stdout: `${"\u200b".repeat(400)}\n${owed}\n`, stderr: "", code: 1 } });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(h.asked.map((a) => a.title), [`¿Quieres hacer TSP?\n${owed}`], "an ellipsis the cut added is not a reason");
+});
+
+test("no C1 control character reaches the UI question either", async () => {
+  // U+009B is the 8-bit control sequence introducer: a terminal treats it like ESC [.
+  const h = offerHarness({ check: { stdout: "still pending: a\u009b31mred\n", stderr: "", code: 1 } });
+  await h.run("change a", [["edit", "a.go"]]);
+  const reason = (h.asked[0]?.title ?? "").slice("¿Quieres hacer TSP?\n".length);
+  assert.match(reason, /^still pending: a/, "the pending line is still the reason");
+  assert.doesNotMatch(reason, /[\u0080-\u009f]/, "no C1 control character ever reaches the UI question");
+});
+
+test("a line that is only control characters never hides the debt line after it", async () => {
+  const owed = "no test was added or changed with it";
+  const h = offerHarness({ check: { stdout: `\u001b\u001b\n${owed}\n`, stderr: "", code: 1 } });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(h.asked.map((a) => a.title), [`¿Quieres hacer TSP?\n${owed}`], "the check printed a debt, so the offer names it");
+});
+
 test("a check that exits 1 with no line at all asks nothing: an empty reply is no criterion", async () => {
   const h = offerHarness({ check: { stdout: "", stderr: "", code: 1 } });
   await h.run("change a", [["edit", "a.go"]]);
