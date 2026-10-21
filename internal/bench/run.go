@@ -26,8 +26,12 @@ const Prompt = "haz el testing"
 
 // agentPrompt is what a run is actually told. A case with no request gets the bare prompt the bench has
 // always sent, byte for byte; a case with one names it and nothing more. Choosing the mode stays the
-// skill's decision, because that is the thing a reading measures.
+// skill's decision, because that is the thing a reading measures. A step whose whole instruction is the
+// bench's own — the fix between rounds — gets exactly that instruction and nothing else.
 func agentPrompt(key Key, opts Options) string {
+	if opts.Task != "" {
+		return opts.Task
+	}
 	prompt := Prompt
 	if opts.Prompt != "" {
 		prompt = opts.Prompt
@@ -100,6 +104,10 @@ type Options struct {
 	// Prompt replaces the bare instruction for every arm of a reading, so a bare agent can be asked to hunt
 	// defects instead of rerunning the suite; empty keeps the bench prompt.
 	Prompt string
+	// Task, when set, replaces the whole prompt: the fix step between rounds tells the agent which witnesses to
+	// fix and nothing about the case, so neither the bench prompt nor the case request reaches it. Empty keeps
+	// every prompt byte for byte what it was.
+	Task string
 	// Followup is appended to the prompt of a later round: what earlier rounds pinned. Empty for a first pass.
 	Followup     string
 	MaxTurns     int
@@ -120,6 +128,13 @@ type Options struct {
 	RetryDelay   time.Duration // pause before a retry, so a rate limit has time to lift
 	Agent        Agent         // nil means the selected runner's CLI
 	Log          io.Writer
+	// FixLoop measures the loop a user runs: round 1, then the agent fixes what round 1 pinned, then round 2 runs
+	// twice from the same fixed workspace, once plain and once told what the findings registry reports. Refused
+	// with the modes that already rerun the agent, whose costs the loop would mix with its own.
+	FixLoop bool
+	// TspPath is the tsp binary the loop runs `findings record` and `findings check` with. Empty uses the running
+	// executable, which for a bench run is tsp itself; a test names one so the registry is exercised for real.
+	TspPath string
 }
 
 // Agent runs the model once in a workspace; injected so tests never spawn claude. The case's key
@@ -163,12 +178,15 @@ type Aggregate struct {
 	LightActivated int `json:"light_activated"`
 	// MicroActivated counts the valid runs whose own plan is an activated micro plan, apart from
 	// LightActivated, so a reading can say how often the micro path ran and what it cost.
-	MicroActivated int    `json:"micro_activated"`
-	CostCeilingHit bool   `json:"cost_ceiling_hit"`
-	RescoredFrom   string `json:"rescored_from,omitempty"` // set when this aggregate re-reads another run with newer rules
-	RunTS          string `json:"run_ts,omitempty"`        // rescore: when the run it re-reads happened
-	SkillVersion   string `json:"skill_version,omitempty"` // rescore: the version that produced the run
-	Corpus         string `json:"corpus,omitempty"`        // digest of the measurement this run made: cases, requests, runs
+	MicroActivated int `json:"micro_activated"`
+	// FixLoop is the --fix-loop measurement: per-arm totals over the runs whose loop completed. A reading that
+	// did not run one carries none, so its summary and its comparisons stay what they were.
+	FixLoop        *FixLoopTotals `json:"fix_loop,omitempty"`
+	CostCeilingHit bool           `json:"cost_ceiling_hit"`
+	RescoredFrom   string         `json:"rescored_from,omitempty"` // set when this aggregate re-reads another run with newer rules
+	RunTS          string         `json:"run_ts,omitempty"`        // rescore: when the run it re-reads happened
+	SkillVersion   string         `json:"skill_version,omitempty"` // rescore: the version that produced the run
+	Corpus         string         `json:"corpus,omitempty"`        // digest of the measurement this run made: cases, requests, runs
 	// Runs is how many times each case ran: three runs triple the defect denominator, so a reader can
 	// reconcile the counts without re-deriving them. A zero means the aggregate never recorded a run
 	// count — it was written before the field existed, or read from a file without one — so no reading can
@@ -289,6 +307,13 @@ func normalizeOptions(opts Options) Options {
 	}
 	if opts.Agent == nil {
 		opts.Agent = runnerAgent(opts.Runner)
+	}
+	if opts.TspPath == "" {
+		// The bench is tsp: a fix loop records and checks findings with the build under test, not with whatever
+		// `tsp` happens to be on PATH.
+		if exe, err := os.Executable(); err == nil {
+			opts.TspPath = exe
+		}
 	}
 	return opts
 }
@@ -472,6 +497,7 @@ func finalizeAggregate(agg *Aggregate) {
 	agg.CaughtByRound, agg.BrokenByRound = nil, nil
 	agg.CaughtBySession, agg.RemainingBySession, agg.BrokenBySession, agg.CompletedBySession = nil, nil, nil, nil
 	agg.TurnsBySession, agg.CostBySession, agg.SecondsBySession = nil, nil, nil
+	agg.FixLoop = nil
 	complete := true
 	for _, r := range agg.Cases {
 		if r.Invalid {
@@ -484,6 +510,7 @@ func finalizeAggregate(agg *Aggregate) {
 		}
 		addRounds(agg, r.Rounds)
 		addSessions(agg, r.Sessions)
+		addFixLoop(agg, r.FixLoop)
 		agg.AdjudicatedTrue += r.AdjudicatedTrue
 		agg.AdjudicatedFalse += r.AdjudicatedFalse
 		agg.OutOfScope += r.OutOfScope
@@ -583,7 +610,7 @@ func historyEntry(agg Aggregate, caseDirs []string, opts Options) HistoryEntry {
 		Controls: agg.Controls, Precision: agg.Precision, PendingAdjudication: agg.PendingAdjudication,
 		OutOfScope: agg.OutOfScope, Inconclusive: agg.Inconclusive, UnstableCases: agg.UnstableCases,
 		AgentConfig: agg.Provenance.AgentConfig, Environment: agg.Provenance.Environment,
-		Rounds: passes(opts.Rounds), Sessions: passes(opts.Sessions),
+		Rounds: passes(opts.Rounds), Sessions: passes(opts.Sessions), FixLoop: opts.FixLoop,
 	}
 }
 
@@ -695,6 +722,11 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		recordRound(&res, ws, res.Catch, roundSeconds, opts.SuiteTimeout)
 	}
 	res.Misses = Diagnose(res, key)
+	// The loop is measured after the run's own numbers are closed, so round 1 stays exactly what a one-pass run
+	// would have recorded and the fix and both arms are counted apart (D1, D2).
+	if opts.FixLoop {
+		res.FixLoop = runFixLoop(caseDir, ws, key, runOpts, opts)
+	}
 	// Misses of either measure keep their workspace so they can be classified.
 	return finish(res, opts, res.Recall < 1 || (res.Catch.Checked && res.Caught < res.Total))
 }
@@ -703,6 +735,12 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 // and turns to res, and marks res failed when the last attempt has no verdict. Attempts are numbered from first,
 // so an escalated run's logs and transcripts follow the first run's instead of overwriting them.
 func runAgent(ws string, key Key, runOpts, opts Options, res *Result, first int) (AgentResult, int) {
+	return runAgentIn(filepath.Dir(ws), ws, key, runOpts, opts, res, first)
+}
+
+// runAgentIn is runAgent with the directory its log and transcript go to named explicitly: the fix loop runs more
+// than one agent in the same run, and each one's raw stream belongs beside the run, not on top of round 1's.
+func runAgentIn(logDir, ws string, key Key, runOpts, opts Options, res *Result, first int) (AgentResult, int) {
 	var ar AgentResult
 	var err error
 	attempt := first
@@ -712,7 +750,7 @@ func runAgent(ws string, key Key, runOpts, opts Options, res *Result, first int)
 		cancel()
 		res.CostUSD += ar.CostUSD
 		res.Turns += ar.Turns
-		writeAgentLog(filepath.Dir(ws), attempt, ar, err)
+		writeAgentLog(logDir, attempt, ar, err)
 		// A timeout is an infrastructure failure like any other: the agent hung or the provider stalled,
 		// so the run has no verdict for the case at all. Retrying it is bounded by --retries, and losing
 		// a case to a stall costs more than the second attempt.
@@ -800,6 +838,9 @@ func merge(res, scored Result) Result {
 	scored.CostUSD, scored.Turns, scored.Seconds, scored.Escalated = res.CostUSD, res.Turns, res.Seconds, res.Escalated
 	scored.Rounds = res.Rounds
 	scored.Sessions = res.Sessions
+	// The loop is the run's own account of work the scorer never sees: a rescore re-reads the plan and the tests,
+	// and must not drop what the fix step and the two arms measured.
+	scored.FixLoop = res.FixLoop
 	scored.Suite, scored.Invalid, scored.InvalidReason = res.Suite, res.Invalid, res.InvalidReason
 	scored.Failed, scored.FailReason = res.Failed, res.FailReason
 	scored.FinalMessage = res.FinalMessage
@@ -906,10 +947,10 @@ func writeJSON(path string, v any) error {
 // Summary renders the aggregate as the markdown table written to summary.md.
 func Summary(agg Aggregate) string {
 	if !hasPlans(agg) {
-		return planlessSummary(agg)
+		return withFixLoop(planlessSummary(agg), agg)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s", agg.TS, agg.Model, len(agg.Cases), aggregateTotals(agg), roundsTotals(agg)+sessionsTotals(agg))
+	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s%s", agg.TS, agg.Model, len(agg.Cases), aggregateTotals(agg), roundsTotals(agg)+sessionsTotals(agg), fixLoopTotals(agg))
 	if agg.Corpus != "" {
 		fmt.Fprintf(&b, " · corpus: %s", agg.Corpus)
 	}

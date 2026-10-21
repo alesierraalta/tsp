@@ -83,6 +83,10 @@ type Result struct {
 	// without pinning it; Misses gives every uncaught defect its reason (Diagnose).
 	FinalMessage string `json:"final_message,omitempty"`
 	Misses       []Miss `json:"misses,omitempty"`
+	// FixLoop is the --fix-loop measurement of this run: round 1's witnesses, the agent's fix, and the two round-2
+	// arms. The run's own fields stay round 1's, so a fix-loop reading's detection numbers are still a one-pass
+	// run's; absent for a run that did not ask for the loop.
+	FixLoop *FixLoop `json:"fix_loop,omitempty"`
 }
 
 var (
