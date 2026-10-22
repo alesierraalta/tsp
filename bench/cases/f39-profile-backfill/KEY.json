@@ -1,0 +1,47 @@
+{
+  "id": "f39-profile-backfill",
+  "language": "go",
+  "family": "state-logic",
+  "suite": "go test ./...",
+  "surface": "worker",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "admission.go",
+      "line": 16,
+      "class": "lazy-admission-bypass",
+      "keywords": [
+        "cold",
+        "connection",
+        "admission",
+        "limit"
+      ],
+      "description": "Admission returns allowed without reserving a shared slot when a worker has no connection yet.",
+      "trigger": {
+        "input": "timeout 20 sh -c 'd=$(mktemp -d \"${TMPDIR:-/tmp}/tpp-f39-profile-backfill-XXXXXX\") && cat > \"$d/main.go\" <<\"GO\"\npackage main\nimport (\n \"context\"\n \"fmt\"\n b \"profilebackfill\"\n)\ntype sink struct { entered chan bool; release chan bool }\nfunc (s *sink) Put(context.Context, b.Card) error { s.entered <- true; <-s.release; return nil }\nfunc main() {\n registry := b.NewRegistry(1)\n output := &sink{make(chan bool, 2), make(chan bool)}\n first := b.NewWorker(b.NewRepository([]b.Profile{{ID:\"a\", Handle:\"amy\"}}), registry, output)\n second := b.NewWorker(b.NewRepository([]b.Profile{{ID:\"b\", Handle:\"ben\"}}), registry, output)\n finished := make(chan bool, 2)\n go func(){ first.Run(context.Background(), b.Options{}); finished <- true }()\n <-output.entered\n refused := make(chan error, 1)\n go func(){ _, err := second.Run(context.Background(), b.Options{}); refused <- err }()\n admitted := false\n select {\n case <-output.entered: admitted = true\n case err := <-refused: if err != b.ErrBusy { panic(err) }\n }\n active := 1\n if admitted { active++ }\n fmt.Printf(\"running=%d limit=1\\n\", active)\n close(output.release)\n <-finished\n if admitted { <-refused }\n}\nGO\ngo run \"$d/main.go\"'",
+        "expected": "running=1 limit=1",
+        "actual": "running=2 limit=1"
+      },
+      "why_missed": "S9(a): start a job, hold its index write, then submit another worker and observe admission before releasing either job. Existing worker tests explicitly warm their connection; registry admission is correct on its own."
+    },
+    {
+      "id": "D2",
+      "file": "repository.go",
+      "line": 25,
+      "class": "preview-state-mutation",
+      "keywords": [
+        "preview",
+        "pending",
+        "claim",
+        "attempts"
+      ],
+      "description": "Pending delegates to the claiming selector, so preview reserves profiles and increments attempts before apply can select them.",
+      "trigger": {
+        "input": "timeout 20 sh -c 'd=$(mktemp -d \"${TMPDIR:-/tmp}/tpp-f39-profile-backfill-XXXXXX\") && cat > \"$d/main.go\" <<\"GO\"\npackage main\nimport (\n \"context\"\n \"fmt\"\n b \"profilebackfill\"\n)\nfunc main() {\n repo := b.NewRepository([]b.Profile{{ID:\"a\", Handle:\"amy\"}, {ID:\"b\", Handle:\"ben\"}})\n index := b.NewIndex()\n worker := b.NewWorker(repo, b.NewRegistry(1), index)\n worker.Warm()\n plan, err := worker.Run(context.Background(), b.Options{Preview:true})\n if err != nil { panic(err) }\n rows := repo.Snapshot()\n pending, attempts := 0, 0\n for _, row := range rows { if row.State == \"pending\" { pending++ }; attempts += row.Attempts }\n applied, err := worker.Run(context.Background(), b.Options{})\n if err != nil { panic(err) }\n fmt.Printf(\"preview=%d pending=%d attempts=%d applied=%d indexed=%d\\n\", len(plan.Cards), pending, attempts, applied.Applied, len(index.Cards()))\n}\nGO\ngo run \"$d/main.go\"'",
+        "expected": "preview=2 pending=2 attempts=0 applied=2 indexed=2",
+        "actual": "preview=2 pending=0 attempts=2 applied=0 indexed=0"
+      },
+      "why_missed": "S9(a): preview, inspect stored state, then apply and inspect the index. Existing tests exercise only apply, where claiming and incrementing attempts are required."
+    }
+  ]
+}

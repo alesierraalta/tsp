@@ -126,7 +126,8 @@ hand-edited `go.mod` without `go.sum` in r30). Readings of those 10 before the m
 filtered trees.
 
 Node fixtures run with `node --test` (ESM, no dependencies). Go fixtures run with `go test ./...`
-(standard library only). Every suite is green with the defects present.
+(standard library only). Python cases are also accepted with a `pytest` or `python -m pytest`
+suite. Every suite is green with the defects present.
 
 ## Fixed versions
 
@@ -159,7 +160,7 @@ Known limits of the overlays, verified by running every trigger against every va
 ## Key schema
 
 ```json
-{"id":"<id>","language":"node|go","suite":"node --test|go test ./...","surface":"library|cli|http|worker|etl|state-machine",
+{"id":"<id>","language":"node|go|python","suite":"node --test|go test ./...|python -m pytest","surface":"library|cli|http|worker|etl|state-machine",
  "defects":[{"id":"D1","file":"src/x.js","line":42,"class":"<class>","keywords":["k1","k2","k3"],
    "description":"one sentence, what is wrong",
    "trigger":{"input":"<exact call or command>","expected":"<per contract>","actual":"<observed>"},

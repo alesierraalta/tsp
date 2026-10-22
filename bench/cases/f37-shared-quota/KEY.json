@@ -1,0 +1,37 @@
+{
+  "id": "f37-shared-quota",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "family": "concurrency",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "admission.go",
+      "line": 14,
+      "class": "concurrency-counter-expiry",
+      "keywords": ["expiry", "overlap", "counter", "lease"],
+      "description": "Admission sets the shared key expiry only on the first increment, so a continuously occupied tenant loses newer live reservations when the key expires.",
+      "trigger": {
+        "input": "timeout 20 sh -c 'd=$(mktemp -d -t tpp-f37-shared-quota-XXXXXX); cat > \"$d/main.go\" <<\"GO\"\npackage main\nimport (\"fmt\"; \"time\"; q \"sharedquota\"; \"sharedquota/store\")\nfunc main() {\n now:=time.Unix(0,0); s:=store.New(func()time.Time{return now}); c:=q.Config{Namespace:\"media\",Limit:2,Lease:100*time.Millisecond}\n a,_:=q.New(c,s); b,_:=q.New(c,s)\n a.Acquire(\"alpha\")\n now=now.Add(60*time.Millisecond); b.Acquire(\"alpha\")\n now=now.Add(50*time.Millisecond); live:=1\n if _,e:=a.Acquire(\"alpha\");e==nil{live++}\n if _,e:=b.Acquire(\"alpha\");e==nil{live++}\n fmt.Printf(\"live=%d limit=2\\n\",live)\n}\nGO\ngo run \"$d/main.go\"'",
+        "expected": "live=2 limit=2\n",
+        "actual": "live=3 limit=2\n"
+      },
+      "why_missed": "The existing two-gateway suite runs short bursts that drain to zero and never advances the store clock beyond a lease while newer slots remain live."
+    },
+    {
+      "id": "D2",
+      "file": "completion.go",
+      "line": 11,
+      "class": "concurrency-release-ownership",
+      "keywords": ["ownership", "release", "stale", "counter"],
+      "description": "Release decrements the tenant counter without checking whether the supplied reservation still owns a live slot, letting a late completion consume a newer holder's occupancy.",
+      "trigger": {
+        "input": "timeout 20 sh -c 'd=$(mktemp -d -t tpp-f37-shared-quota-XXXXXX); cat > \"$d/main.go\" <<\"GO\"\npackage main\nimport (\"fmt\"; \"time\"; q \"sharedquota\"; \"sharedquota/store\")\nfunc main() {\n now:=time.Unix(0,0); s:=store.New(func()time.Time{return now}); c:=q.Config{Namespace:\"media\",Limit:1,Lease:100*time.Millisecond}\n a,_:=q.New(c,s); b,_:=q.New(c,s)\n old,_:=a.Acquire(\"alpha\")\n now=now.Add(110*time.Millisecond); b.Acquire(\"alpha\")\n a.Release(old); live:=1\n if _,e:=a.Acquire(\"alpha\");e==nil{live++}\n fmt.Printf(\"live=%d limit=1\\n\",live)\n}\nGO\ngo run \"$d/main.go\"'",
+        "expected": "live=1 limit=1\n",
+        "actual": "live=2 limit=1\n"
+      },
+      "why_missed": "The existing suite completes every nonzero reservation once while its lease is live; it never completes a reclaimed reservation after replacement admission."
+    }
+  ]
+}

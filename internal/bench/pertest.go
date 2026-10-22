@@ -165,6 +165,57 @@ func goPatternsCover(patterns []string, dir string) bool {
 	return false
 }
 
+// withPythonTestFiles adds agent files not already selected by a pytest path.
+func withPythonTestFiles(dir string, argv, testFiles []string, start int) []string {
+	var paths []string
+	for i := start; i < len(argv); i++ {
+		switch argv[i] {
+		case "-p", "-k", "-m", "-c", "-o", "--override-ini", "--rootdir", "--confcutdir", "--ignore", "--ignore-glob", "--deselect", "--maxfail", "--basetemp", "--junitxml", "--junit-xml", "--import-mode", "--tb", "--capture", "-r", "--verbosity", "--log-level", "--color", "--durations":
+			i++
+			continue
+		}
+		if strings.HasPrefix(argv[i], "-") {
+			continue
+		}
+		// A plugin flag's value (`-W error`, `--timeout 30`) is a word the list above cannot know; only a word
+		// that names something in the tree, or a node id in a file of it, is a path the suite selects.
+		p := path.Clean(filepath.ToSlash(argv[i]))
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(strings.SplitN(p, "::", 2)[0]))); err != nil {
+			continue
+		}
+		paths = append(paths, p)
+	}
+	if len(paths) == 0 {
+		// A suite that names no path collects what its configuration (testpaths) says; any explicit path
+		// would replace that collection, so the suite runs exactly as written.
+		return argv
+	}
+	out := append([]string{}, argv...)
+	for _, f := range testFiles {
+		f = path.Clean(filepath.ToSlash(f))
+		if !strings.HasSuffix(f, ".py") || !isTestFile(f) {
+			continue
+		}
+		covered := false
+		for _, p := range paths {
+			if p == f {
+				covered = true
+				break
+			}
+			st, err := os.Stat(filepath.Join(dir, filepath.FromSlash(p)))
+			if err == nil && st.IsDir() && (p == "." || strings.HasPrefix(f, p+"/")) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			out = append(out, f)
+			paths = append(paths, f)
+		}
+	}
+	return out
+}
+
 // SupportsPerTest reports whether the shared runner can read individual outcomes.
 func SupportsPerTest(suite string) bool {
 	_, parser, err := perTestCommand(suite)
@@ -178,7 +229,7 @@ func PerTest(dir, suite string, timeout time.Duration) (map[string]bool, int, st
 
 // perTest runs the suite and returns each test's outcome by name. A runner without a per-test
 // format yields the single entry "suite". A suite the splitter cannot read is refused before it runs.
-// A go suite also runs the packages of the given test files that it does not already cover.
+// Go and pytest suites also run agent tests outside their scoped paths.
 func perTest(dir, suite string, timeout time.Duration, testFiles ...string) (map[string]bool, int, string, error) {
 	argv, parser, err := perTestCommand(suite)
 	if err != nil {
@@ -187,8 +238,12 @@ func perTest(dir, suite string, timeout time.Duration, testFiles ...string) (map
 	if argv == nil {
 		return nil, -1, "", nil
 	}
-	if argv[0] == "go" && argv[1] == "test" {
+	if argv[0] == "go" && len(argv) > 1 && argv[1] == "test" {
 		argv = withTestPackages(argv, testFiles)
+	} else if argv[0] == "pytest" {
+		argv = withPythonTestFiles(dir, argv, testFiles, 1)
+	} else if strings.HasPrefix(argv[0], "python") && len(argv) > 2 && argv[1] == "-m" && argv[2] == "pytest" {
+		argv = withPythonTestFiles(dir, argv, testFiles, 3)
 	}
 	code, out := runCapture(dir, argv, timeout)
 	if parser == nil {
