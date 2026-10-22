@@ -190,7 +190,9 @@ function offerHarness(opts = {}) {
   // check is the pre-offer `tsp check` the offer derives its criterion from; the default reports one run still to plan.
   const exec = async (argv, o) => {
     calls.push({ argv: [...argv], cwd: o.cwd });
-    const outcome = argv[0] === "check" && argv[1] === "--cwd" ? check : findings[argv[1]] ?? { stdout: "", stderr: "", code: 0 };
+    // A feedback template nobody configured answers as tsp does with feedback switched off: no request, no notice.
+    const fallback = argv[0] === "feedback" ? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
+    const outcome = argv[0] === "check" && argv[1] === "--cwd" ? check : findings[argv[1]] ?? fallback;
     if (outcome instanceof Error) throw outcome;
     return outcome;
   };
@@ -447,7 +449,8 @@ test("a TSP run that pinned nothing still shows the review; a record that cannot
   assert.deepEqual(detached.notes, [{ message: "tsp findings: detached HEAD", type: "error" }]);
   const missing = offerHarness({ findings: { record: new Error("spawn tsp ENOENT") } });
   await missing.run("haz el TSP", []);
-  assert.deepEqual(missing.notes, [{ message: "tsp: spawn tsp ENOENT", type: "error" }]);
+  assert.deepEqual(missing.calls.map((c) => c.argv[1]), ["record", "--template"], "a record that throws still leaves the feedback template to ask for");
+  assert.equal(missing.notes[0].message, "tsp: spawn tsp ENOENT");
 });
 
 test("the findings review runs only after a TSP run the user asked for, with UI, not aborted, not opted out", async () => {
@@ -479,16 +482,21 @@ test("a TSP run ends by asking the agent to record its feedback on the template 
   assert.deepEqual(h.asked, [], "recording feedback asks the user nothing");
 });
 
-test("no feedback request when feedback is disabled, the template is empty, or tsp cannot run", async () => {
-  for (const template of [
-    { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 },
-    { stdout: "", stderr: "", code: 0 },
-    { stdout: "", stderr: "tsp: unknown flag\n", code: 2 },
-    new Error("spawn tsp ENOENT"),
+test("disabled feedback sends nothing and says nothing; a tsp that fails sends nothing and says why", async () => {
+  const disabled = offerHarness({ findings: { "--template": { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } } });
+  await disabled.run("haz el TSP", []);
+  assert.deepEqual(disabled.sent, []);
+  assert.deepEqual(disabled.notes.filter((n) => /feedback/.test(n.message)), [], "feedback switched off is a choice, not an error");
+  for (const [template, said] of [
+    [{ stdout: "", stderr: "", code: 0 }, "tsp feedback: no template"],
+    [{ stdout: "", stderr: "tsp: unknown flag\n", code: 2 }, "tsp: unknown flag"],
+    [{ stdout: TEMPLATE, stderr: "", code: 1 }, "tsp feedback: exited 1"],
+    [new Error("spawn tsp ENOENT"), "tsp: spawn tsp ENOENT"],
   ]) {
     const h = offerHarness({ findings: { "--template": template } });
     await h.run("haz el TSP", []);
-    assert.deepEqual(h.sent, [], String(template.stdout ?? template.message));
+    assert.deepEqual(h.sent, [], said);
+    assert.ok(h.notes.some((n) => n.type === "warning" && n.message.includes(said)), `${said}: ${JSON.stringify(h.notes)}`);
   }
 });
 

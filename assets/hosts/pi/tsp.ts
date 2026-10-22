@@ -268,17 +268,24 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
 /**
  * The feedback request for the TSP run that just ended, or "" when there is nothing to ask. The template is asked of
  * the positive way: a reply that carries the `verdict:` field is a template, so the line tsp prints while feedback is
- * disabled, an empty reply or a failing tsp never costs the agent a run.
+ * disabled, an empty reply or a failing tsp never costs the agent a run. Feedback switched off is the user's choice
+ * and stays quiet; any other reply that is not a template is a request that never went out, so the user is told why.
  */
-export async function feedbackRequest(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp): Promise<string> {
+export async function feedbackRequest(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, notify: Notify): Promise<string> {
   try {
     const result = await exec(["feedback", "--template"], { cwd, env: { ...env } });
     const template = result.stdout.trim();
-    if (result.code !== 0 || !/^verdict:/m.test(template)) return "";
+    if (result.code === 0 && template.startsWith("feedback is disabled")) return "";
+    if (result.code !== 0 || !/^verdict:/m.test(template)) {
+      const why = result.stderr.trim() || (result.code !== 0 ? `tsp feedback: exited ${result.code}` : "tsp feedback: no template");
+      notify(notice(`${why} — no feedback was requested for this TSP run`), "warning");
+      return "";
+    }
     return `${FEEDBACK_LEAD} Fill paid, cost, reason and verdict below from what that run actually found and what it cost ` +
       "(paid is \"nothing\" when it found nothing), save the report to a temporary file outside the repository and submit " +
       "it with `tsp feedback --file <that file>`. Do not change code or tests.\n\n" + template;
-  } catch {
+  } catch (error) {
+    notify(notice(`tsp: ${error instanceof Error ? error.message : String(error)} — no feedback was requested for this TSP run`), "warning");
     return "";
   }
 }
@@ -306,8 +313,9 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     edited.clear();
     if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd) || feedbackRun) return;
     if (tspRun) {
-      await reviewFindings(ctx.cwd, env, exec, (message, type) => ctx.ui.notify(message, type));
-      const request = await feedbackRequest(ctx.cwd, env, exec);
+      const notify: Notify = (message, type) => ctx.ui.notify(message, type);
+      await reviewFindings(ctx.cwd, env, exec, notify);
+      const request = await feedbackRequest(ctx.cwd, env, exec, notify);
       if (request !== "") pi.sendUserMessage(request);
       return;
     }
