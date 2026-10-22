@@ -161,12 +161,15 @@ export async function runTppCommand(rawArgs: string, deps: TppDeps): Promise<voi
 // noticed. `tsp check` is the criterion: the edit list only says source was touched, while the check says whether
 // TSP is owed and names what is missing, so a check that finds nothing owed or cannot run asks nothing.
 // When a TSP run ends, the tests it left failing on HEAD's code are recorded as findings and the review of every
-// finding is shown to the user; the agent is never told about it. A delegated child session
-// (GENTLE_PI_AGENTS_CHILD=1) has nobody to answer, so it gets neither.
+// finding is shown to the user; the agent is never told about it. Then the agent is asked to record its feedback on
+// that run on the template `tsp feedback --template` prints, so each run leaves a report later runs can be tuned on.
+// That request is a run of its own: it reviews no findings, asks no TSP question and requests no more feedback.
+// A delegated child session (GENTLE_PI_AGENTS_CHILD=1) has nobody to answer, so it gets none of them.
 export const OFFER_QUESTION = "¿Quieres hacer TSP?";
 export const OFFER_YES = "Sí";
 export const OFFER_NO = "No";
 export const TSP_PROMPT = "haz el TSP";
+export const FEEDBACK_LEAD = "The TSP run has ended. Record honest feedback on it.";
 
 const SOURCE_EXT = /\.(go|ts|tsx|js|jsx|mjs|cjs|py|rs|java|kt|rb|php|cs|c|cc|cpp|h|hpp|swift|scala|sh)$/;
 const TEST_PATH = /(^|\/)(tests?|__tests__|testdata|e2e|spec)\/|_test\.(go|py)$|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$/;
@@ -262,6 +265,24 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
   }
 }
 
+/**
+ * The feedback request for the TSP run that just ended, or "" when there is nothing to ask. The template is asked of
+ * the positive way: a reply that carries the `verdict:` field is a template, so the line tsp prints while feedback is
+ * disabled, an empty reply or a failing tsp never costs the agent a run.
+ */
+export async function feedbackRequest(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp): Promise<string> {
+  try {
+    const result = await exec(["feedback", "--template"], { cwd, env: { ...env } });
+    const template = result.stdout.trim();
+    if (result.code !== 0 || !/^verdict:/m.test(template)) return "";
+    return `${FEEDBACK_LEAD} Fill paid, cost, reason and verdict below from what that run actually found and what it cost ` +
+      "(paid is \"nothing\" when it found nothing), save the report to a temporary file outside the repository and submit " +
+      "it with `tsp feedback --file <that file>`. Do not change code or tests.\n\n" + template;
+  } catch {
+    return "";
+  }
+}
+
 function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   const optedOut = opts.optedOut ?? ((cwd: string) => existsSync(join(cwd, ".no-testing-gate")));
   const env = opts.env ?? process.env;
@@ -270,9 +291,11 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   const edited = new Set<string>(); // source paths changed in the current run
   const declined = new Set<string>(); // paths the user already said No to
   let tspRun = false;
+  let feedbackRun = false;
   pi.on("before_agent_start", (event) => {
     edited.clear();
-    tspRun = event.messageType === "user" && isTspPrompt(event.prompt);
+    feedbackRun = event.messageType === "user" && (event.prompt ?? "").startsWith(FEEDBACK_LEAD);
+    tspRun = !feedbackRun && event.messageType === "user" && isTspPrompt(event.prompt);
   });
   pi.on("tool_result", (event) => {
     const path = (event.input as { path?: unknown }).path;
@@ -281,8 +304,13 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   pi.on("agent_settled", async (event, ctx) => {
     const fresh = [...edited].filter((p) => !declined.has(p));
     edited.clear();
-    if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd)) return;
-    if (tspRun) return reviewFindings(ctx.cwd, env, exec, (message, type) => ctx.ui.notify(message, type));
+    if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd) || feedbackRun) return;
+    if (tspRun) {
+      await reviewFindings(ctx.cwd, env, exec, (message, type) => ctx.ui.notify(message, type));
+      const request = await feedbackRequest(ctx.cwd, env, exec);
+      if (request !== "") pi.sendUserMessage(request);
+      return;
+    }
     if (fresh.length === 0) return;
     const owed = await owedReason(ctx.cwd, env, exec, fresh);
     if (owed === "") return;

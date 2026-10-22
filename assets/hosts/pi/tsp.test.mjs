@@ -6,6 +6,7 @@ import { mock, test } from "node:test";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import tppExtension, {
+  FEEDBACK_LEAD,
   GENTLE_OBSERVATION_ENV,
   GENTLE_OBSERVATION_VALUE,
   observesGentleSession,
@@ -428,6 +429,7 @@ test("a TSP run ends by recording its witnesses, then shows the review of every 
     assert.deepEqual(h.calls, [
       { argv: ["findings", "record", "--cwd", "/repo"], cwd: "/repo" },
       { argv: ["findings", "check", "--cwd", "/repo"], cwd: "/repo" },
+      { argv: ["feedback", "--template"], cwd: "/repo" },
     ]);
     assert.deepEqual(h.notes, [{ message: review.trim(), type }], `check exit ${code}`);
     assert.deepEqual(h.asked, []);
@@ -437,11 +439,11 @@ test("a TSP run ends by recording its witnesses, then shows the review of every 
 test("a TSP run that pinned nothing still shows the review; a record that cannot run stops before check", async () => {
   const none = offerHarness({ findings: { record: { stdout: "no new witness\n", stderr: "", code: 1 }, check: { stdout: "no finding recorded on feat/x\n", stderr: "", code: 0 } } });
   await none.run("haz el TSP", []);
-  assert.deepEqual(none.calls.map((c) => c.argv[1]), ["record", "check"]);
+  assert.deepEqual(none.calls.map((c) => c.argv[1]), ["record", "check", "--template"]);
   assert.deepEqual(none.notes, [{ message: "no finding recorded on feat/x", type: "info" }]);
   const detached = offerHarness({ findings: { record: { stdout: "", stderr: "tsp findings: detached HEAD\n", code: 2 } } });
   await detached.run("haz el TSP", []);
-  assert.deepEqual(detached.calls.map((c) => c.argv[1]), ["record"]);
+  assert.deepEqual(detached.calls.map((c) => c.argv[1]), ["record", "--template"], "a registry that cannot record still leaves the run's feedback to ask for");
   assert.deepEqual(detached.notes, [{ message: "tsp findings: detached HEAD", type: "error" }]);
   const missing = offerHarness({ findings: { record: new Error("spawn tsp ENOENT") } });
   await missing.run("haz el TSP", []);
@@ -461,6 +463,60 @@ test("the findings review runs only after a TSP run the user asked for, with UI,
     assert.equal(h.asked.length, offered ? 1 : 0, `${why}: the offer decides before any review`);
     assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings"), [], why);
     assert.deepEqual(h.notes, [], why);
+  }
+});
+
+const TEMPLATE = "# tsp run feedback\nts: 2026-10-22T20:10:29Z\nskill: test-strategy 0.7.5\npaid: \ncost: \nreason: \nverdict: \n";
+
+test("a TSP run ends by asking the agent to record its feedback on the template tsp prints", async () => {
+  const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+  await h.run("haz el TSP", [["edit", "a_test.go"]]);
+  assert.equal(h.sent.length, 1, "one feedback request per TSP run");
+  const [prompt] = h.sent;
+  assert.ok(prompt.startsWith(FEEDBACK_LEAD), prompt);
+  assert.ok(prompt.endsWith(TEMPLATE.trim()), "the template reaches the agent whole, with the run's identity tsp filled in");
+  assert.match(prompt, /tsp feedback --file/, "the agent is told how to submit it");
+  assert.deepEqual(h.asked, [], "recording feedback asks the user nothing");
+});
+
+test("no feedback request when feedback is disabled, the template is empty, or tsp cannot run", async () => {
+  for (const template of [
+    { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 },
+    { stdout: "", stderr: "", code: 0 },
+    { stdout: "", stderr: "tsp: unknown flag\n", code: 2 },
+    new Error("spawn tsp ENOENT"),
+  ]) {
+    const h = offerHarness({ findings: { "--template": template } });
+    await h.run("haz el TSP", []);
+    assert.deepEqual(h.sent, [], String(template.stdout ?? template.message));
+  }
+});
+
+test("the feedback run itself reviews no findings, asks no TSP question and requests no more feedback", async () => {
+  const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+  await h.run("haz el TSP", []);
+  const [prompt] = h.sent;
+  const before = h.calls.length;
+  await h.run(prompt, [["edit", "internal/a.go"]]);
+  assert.equal(h.calls.length, before, "no findings review, no check, no template: the loop ends here");
+  assert.deepEqual(h.asked, []);
+  assert.equal(h.sent.length, 1);
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.equal(h.asked.length, 1, "the next ordinary run is offered TSP again");
+});
+
+test("only a TSP run asks for feedback: an ordinary, aborted, headless, opted-out or child run never does", async () => {
+  const template = { findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } };
+  for (const [h, prompt, aborted] of [
+    [offerHarness({ ...template, answer: "No" }), "change a", false],
+    [offerHarness(template), "haz el TSP", true],
+    [offerHarness({ ...template, hasUI: false }), "haz el TSP", false],
+    [offerHarness({ ...template, optedOut: true }), "haz el TSP", false],
+    [offerHarness({ ...template, env: { GENTLE_PI_AGENTS_CHILD: "1" } }), "haz el TSP", false],
+  ]) {
+    await h.run(prompt, [["edit", "a.go"]], { aborted });
+    assert.deepEqual(h.sent, [], `${prompt} aborted=${aborted}`);
+    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "feedback"), [], `${prompt} aborted=${aborted}`);
   }
 });
 
