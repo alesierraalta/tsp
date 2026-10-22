@@ -314,3 +314,21 @@ func TestCompareSkillVersionsWhenAskedByName(t *testing.T) {
 		t.Fatalf("a different model must still be refused: %v", err)
 	}
 }
+
+// A fix-loop reading measures a workspace an agent fixed between rounds, so it is never a delta against one whose
+// runs made a single pass: the pair would read the loop's work as a difference in the instrument.
+func TestCompareRefusesAFixLoopReading(t *testing.T) {
+	before, after := comparisonProvenance(), comparisonProvenance()
+	if err := refuseFixLoop(before, after); err != nil {
+		t.Fatal(err)
+	}
+	after.FixLoop = true
+	if err := refuseFixLoop(before, after); err == nil || !strings.Contains(err.Error(), "fix-loop mode") {
+		t.Fatalf("mixed fix-loop readings accepted: %v", err)
+	}
+	b := writeAggregate(t, filepath.Join(t.TempDir(), "before"), comparisonAggregate(before))
+	a := writeAggregate(t, filepath.Join(t.TempDir(), "after"), comparisonAggregate(after))
+	if _, err := Compare(b, a); err == nil || !strings.Contains(err.Error(), "fix-loop mode") {
+		t.Fatalf("compare must refuse a fix-loop reading beside a one-pass one: %v", err)
+	}
+}

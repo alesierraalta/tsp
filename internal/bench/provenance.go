@@ -37,7 +37,11 @@ type Provenance struct {
 	SkillVersion string `json:"skill_version"`
 	Corpus       string `json:"corpus"` // digest of cases, requests and runs per case
 	Cases        int    `json:"cases"`
-	Runs         int    `json:"runs"`                    // runs per case
+	Runs         int    `json:"runs"` // runs per case
+	// FixLoop records that every run measured round 1, an agent fix and two round-2 arms. It is written only when
+	// it is true, so a one-pass reading never carries a fix-loop provenance and two readings that differ on it are
+	// refused by compare instead of being read as a delta.
+	FixLoop      bool   `json:"fix_loop,omitempty"`
 	AgentConfig  string `json:"agent_config"`            // bench | inherited | custom | unspecified
 	SkillsDigest string `json:"skills_digest,omitempty"` // digest of the skills a throwaway config carried
 	Environment  string `json:"environment"`             // os/arch of the instrument
@@ -257,6 +261,9 @@ func provenanceForRun(opts Options, corpus string, cases int) Provenance {
 	}
 	if opts.Rounds > 1 {
 		p.Rounds = opts.Rounds
+	}
+	if opts.FixLoop {
+		p.FixLoop = true
 	}
 	if opts.ConfigDir != "" {
 		p.SkillsDigest, _ = SkillsDigest(opts.ConfigDir)

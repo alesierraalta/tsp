@@ -63,6 +63,10 @@ type HistoryEntry struct {
 	// Rounds records passes per run; an absent key predates this column.
 	Rounds   int `json:"rounds"`
 	Sessions int `json:"sessions"`
+	// FixLoop records that each run measured the loop the user runs: round 1, an agent fix, and two round-2 arms.
+	// It is written in the JSONL row only: the markdown table's column set is what its readers parse, and a fix-loop
+	// row is already told apart by its verdict on this field.
+	FixLoop bool `json:"fix_loop,omitempty"`
 }
 
 // A row is either a run that spawned agents or a rescore that re-read one with newer rules.

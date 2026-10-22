@@ -2627,6 +2627,44 @@ func TestBenchRunRoundsFlag(t *testing.T) {
 	}
 }
 
+// --fix-loop measures round 1, an agent fix and two round-2 arms. It is refused with the modes that already rerun
+// the agent: their rounds and their costs would mix with the loop's, and the pair would no longer be the loop.
+func TestBenchRunFixLoopFlag(t *testing.T) {
+	bin := buildCLI(t)
+	none := filepath.Join(t.TempDir(), "none-*")
+	run := func(args ...string) (int, string, string) {
+		cmd := exec.Command(bin, append([]string{"bench", "run", "--runner", "pi", "--model", "cheap", "--dry-run", "--cases", none}, args...)...)
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		_ = cmd.Run()
+		return cmd.ProcessState.ExitCode(), stdout.String(), stderr.String()
+	}
+	if code, _, stderr := run("--fix-loop", "--out", t.TempDir()); code != 1 || strings.Contains(stderr, "--fix-loop") {
+		t.Errorf("a valid --fix-loop: exit %d stderr %q, want exit 1 (flags accepted, no case matched)", code, stderr)
+	}
+	for _, tc := range []struct {
+		args   []string
+		stderr string
+	}{
+		{[]string{"--fix-loop", "--rounds", "2"}, "bench run: --fix-loop cannot be combined with --rounds above 1: the loop already runs a second round, twice\n"},
+		{[]string{"--fix-loop", "--sessions", "2"}, "bench run: --fix-loop cannot be combined with --sessions above 1: the loop fixes with the agent, not with a reference fix\n"},
+		{[]string{"--fix-loop", "--escalate-model", "strong"}, "bench run: --fix-loop cannot be combined with --escalate-model: both rerun the agent and their costs would mix\n"},
+	} {
+		out := t.TempDir()
+		code, stdout, stderr := run(append(tc.args, "--out", out)...)
+		if code != 2 || stdout != "" || stderr != tc.stderr {
+			t.Errorf("%v: exit %d stdout %q stderr %q, want exit 2 and stderr %q", tc.args, code, stdout, stderr, tc.stderr)
+		}
+		if entries, _ := os.ReadDir(out); len(entries) != 0 {
+			t.Errorf("%v: a refused run wrote %d entries", tc.args, len(entries))
+		}
+	}
+	help, _ := exec.Command(bin, "help").CombinedOutput()
+	if !strings.Contains(string(help), "[--fix-loop]") {
+		t.Errorf("the help does not name --fix-loop:\n%s", help)
+	}
+}
+
 // setupEnv isolates a setup run: its own HOME and installation state, and exactly the PATH given, so
 // the PATH check sees only what the test decided.
 func setupEnv(t *testing.T, home, path string) []string {
