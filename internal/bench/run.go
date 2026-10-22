@@ -1187,9 +1187,9 @@ func claudeAgent(ctx context.Context, ws string, key Key, opts Options) (AgentRe
 		args = append(args, "--model", opts.Model)
 	}
 	cmd := exec.CommandContext(ctx, "claude", args...)
-	boundProcessTree(cmd)
 	cmd.Dir = ws
 	cmd.Env = agentEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
+	boundProcessTree(cmd)
 	cmd.Stdin = strings.NewReader("")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
