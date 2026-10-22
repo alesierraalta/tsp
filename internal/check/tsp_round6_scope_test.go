@@ -9,7 +9,7 @@ import (
 // none, so the repositories this criterion was written for are exactly the ones where the plan is
 // absent; falling back to the whole tree there answers a question nobody asked.
 func TestCheckScopedPathsAnswerWithoutAPlan(t *testing.T) {
-	repo := &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), planErr: true}
+	repo := &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), planErr: true, existing: []string{"src/other.js"}}
 	deps := repo.deps()
 	deps.Paths = []string{"src/other.js"}
 	res := Run(".", deps)

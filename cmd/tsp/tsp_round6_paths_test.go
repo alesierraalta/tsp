@@ -6,11 +6,12 @@ import (
 	"testing"
 )
 
-// A --paths that names nothing is a usage error. Split into no path at all, it falls through to the
-// whole tree's verdict, so the caller that asked a scoped question is handed the answer to the legacy
-// one and cannot tell the difference.
+// A --paths occurrence that names nothing is a usage error. An empty or blank value trims to no
+// path, and falling through to the whole tree's verdict would hand the caller that asked a scoped
+// question the answer to the legacy one. Comma-only values were removed from this table: a comma is
+// now a legal path character, and such a value fails loudly by name in the repository tests.
 func TestCheckPathsRefusesAnEmptyValue(t *testing.T) {
-	for _, raw := range []string{"", " ", ",", " , "} {
+	for _, raw := range []string{"", " "} {
 		t.Run("raw="+raw, func(t *testing.T) {
 			f, err := os.CreateTemp(t.TempDir(), "stderr")
 			if err != nil {
