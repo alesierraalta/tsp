@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+      # Existing tags may predate release tooling. Take only the packager from
+      # the workflow revision; all tests and packaged source remain at the tag.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: .release-tooling
+          sparse-checkout: scripts/release-build.sh
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test ./... -count=1
+      - name: test pi extension
+        run: node --test assets/hosts/pi/tsp.test.mjs
+      - name: Package
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          tagged=$(git rev-parse "refs/tags/$TAG^{commit}")
+          test "$(git rev-parse HEAD)" = "$tagged"
+          TSP_RELEASE_SOURCE_DIR="$GITHUB_WORKSPACE" \
+            bash .release-tooling/scripts/release-build.sh "$TAG" dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version=${TAG#v}
+          assets=(dist/tsp_"${version}"_linux_*.tar.gz dist/checksums.txt)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG" --verify-tag --title "tsp $version" \
+              --generate-notes "${assets[@]}"
+          fi

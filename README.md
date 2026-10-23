@@ -169,25 +169,71 @@ tsp works the same in both: the difference is what else is on the machine, not h
 ### Without Gentle AI
 
 ```text
-Install TSP: run go install github.com/alesierraalta/tsp/cmd/tsp@latest, then tsp setup (if tsp is
-not found, run "$(go env GOPATH)/bin/tsp" setup and add the PATH line it prints). It is done when
-setup exits 0; show me its last lines.
+Install TSP on Linux: run
+curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
+It downloads and verifies the binary and runs setup. If Linux binaries are unavailable, use
+Go: go install github.com/alesierraalta/tsp/cmd/tsp@latest, then "$(go env GOPATH)/bin/tsp" setup.
+It is done when setup exits 0; show me its last lines.
 ```
 
 ### With Gentle AI
 
 ```text
-Install TSP: run go install github.com/alesierraalta/tsp/cmd/tsp@latest, then tsp setup (if tsp is
-not found, run "$(go env GOPATH)/bin/tsp" setup and add the PATH line it prints). It is done when
-setup exits 0; show me its last lines. Gentle AI is already installed here: confirm setup lists
-gentle-ai and engram as present.
+Install TSP on Linux: run
+curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
+It downloads and verifies the binary and runs setup. If Linux binaries are unavailable, use
+Go: go install github.com/alesierraalta/tsp/cmd/tsp@latest, then "$(go env GOPATH)/bin/tsp" setup.
+It is done when setup exits 0; show me its last lines. Gentle AI is already installed here:
+confirm setup lists gentle-ai and engram as present.
 ```
 
 ## Install
 
-Requirements: Go (the module declares Go 1.26; Go 1.21+ toolchains fetch it automatically
-with `GOTOOLCHAIN=auto`) and git. Python 3/pytest, Node.js, and Cargo are needed only for the
-suites they run.
+### Linux (no Go required)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
+```
+
+Or with wget:
+
+```sh
+wget -qO- https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
+```
+
+The installer downloads the latest Linux release binary for amd64 or arm64, verifies its SHA-256,
+installs it to `~/.local/bin`, prints its version, and runs `tsp setup`. It prints the exact PATH
+line to add to `~/.profile` if needed. Downloads require curl or wget, tar, and sha256sum (or shasum).
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `TSP_VERSION` | latest release | Pin a release, for example `v0.6.9` |
+| `TSP_INSTALL_DIR` | `~/.local/bin` | Choose the binary directory |
+| `TSP_NO_SETUP` | `0` | Set to `1` to skip setup |
+
+When piping to sh, pass variables to sh, for example:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | TSP_VERSION=v0.6.9 sh
+```
+
+Requirements: the binary needs git; Python 3/pytest, Node.js, and Cargo are needed only for the
+suites they run. Go is required only for the Go installation/update path below. On a minimal image,
+install them first, for example `sudo apt-get install -y curl git ca-certificates` (Debian, Ubuntu)
+or `sudo apk add curl git` (Alpine).
+
+`tsp setup` installs the skills into the agent hosts it finds (Claude Code at `~/.claude`, Codex at
+`~/.codex`, Gemini CLI at `~/.gemini`, OpenCode at `~/.config/opencode`), so install your agent
+first. With none of them present setup exits 1 and says so; the binary stays installed, and
+running `tsp setup` again after installing the agent finishes the job. Pi is never discovered: Pi
+users also run `tsp sync --hosts pi` to install the Pi extension.
+
+Binary users: re-run the Linux one-liner to update. `tsp update` still uses `go install`; without
+Go it prints the command to run instead of installing.
+
+### With Go
+
+The module declares Go 1.26; Go 1.21+ toolchains fetch it automatically with `GOTOOLCHAIN=auto`.
 
 ```sh
 go install github.com/alesierraalta/tsp/cmd/tsp@latest
