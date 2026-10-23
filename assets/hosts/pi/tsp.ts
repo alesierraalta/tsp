@@ -104,10 +104,13 @@ type ExecResult = { stdout: string; stderr: string; code: number };
 type ExecOpts = { cwd: string; env: Record<string, string | undefined> };
 export type ExecTpp = (argv: readonly string[], opts: ExecOpts) => Promise<ExecResult>;
 
+// Node's default 1 MiB would kill a long answer with "stdout maxBuffer length exceeded"; notices truncate it anyway.
+const MAX_CHILD_OUTPUT = 64 * 1024 * 1024;
+
 /** One tpp child without a shell; a non-zero exit is data — only a binary that never started rejects. */
 export function execTpp(argv: readonly string[], opts: ExecOpts): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
-    execFile("tsp", [...argv], { cwd: opts.cwd, env: opts.env as NodeJS.ProcessEnv, encoding: "utf8" }, (error, stdout, stderr) => {
+    execFile("tsp", [...argv], { cwd: opts.cwd, env: opts.env as NodeJS.ProcessEnv, encoding: "utf8", maxBuffer: MAX_CHILD_OUTPUT }, (error, stdout, stderr) => {
       if (error && typeof (error as { code?: unknown }).code !== "number") return reject(error);
       resolve({ stdout: String(stdout), stderr: String(stderr), code: error ? Number((error as { code?: unknown }).code) : 0 });
     });
