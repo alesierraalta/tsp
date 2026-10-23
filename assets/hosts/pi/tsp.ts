@@ -180,8 +180,35 @@ export function isSourcePath(path: string): boolean {
   return SOURCE_EXT.test(p) && !TEST_PATH.test(p);
 }
 
-/** A run the user started to do TSP: its own edits never trigger another offer. */
-const isTspPrompt = (prompt: string | undefined): boolean => /\b(tsp|test[- ]strategy)\b/i.test(prompt ?? "");
+/**
+ * A TSP run is a run whose agent loads the test-strategy skill, whatever words started it: the skill's trigger list is
+ * long and a message that only mentions tsp starts none. Pi loads a skill three ways: the read tool on its SKILL.md,
+ * bash when that is the configured file reader, or a /skill:test-strategy command, which arrives as a <skill> block
+ * leading the prompt. The exact request the offer sends is a TSP run too, because a second TSP in the same session may
+ * run on the skill the agent already holds without reading it again. Its own edits never trigger another offer.
+ *
+ * Only loading counts. The file must be SKILL.md itself, not a sibling that starts with its name; a copy inside the
+ * working repository (a relative path, or one under the working directory outside its .pi/ folder) is source being
+ * worked on, not a skill being loaded; and a bash command counts only when it reads the file, not when it names it.
+ */
+const SKILL_FILE = /(^|[\/\\])test-strategy[\/\\]SKILL\.md$/;
+const SKILL_BLOCK = /^<skill name="test-strategy" /;
+const FILE_READER = /^\s*(cat|head|tail|less|more|bat|sed)\s/;
+const isTspRequest = (prompt: string | undefined): boolean =>
+  SKILL_BLOCK.test(prompt ?? "") || (prompt ?? "").trim().toLowerCase() === TSP_PROMPT.toLowerCase();
+function isLoadedSkill(path: string, cwd: string): boolean {
+  if (!SKILL_FILE.test(path)) return false;
+  const p = path.replace(/\\/g, "/");
+  if (!(p.startsWith("/") || p.startsWith("~") || /^[A-Za-z]:\//.test(p))) return false;
+  const root = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+  return !p.startsWith(`${root}/`) || p.startsWith(`${root}/.pi/`);
+}
+function loadsTspSkill(toolName: string, input: unknown, cwd: string): boolean {
+  const { path, command } = (input ?? {}) as { path?: unknown; command?: unknown };
+  if (toolName === "read") return typeof path === "string" && isLoadedSkill(path, cwd);
+  if (toolName !== "bash" || typeof command !== "string" || !FILE_READER.test(command)) return false;
+  return command.split(/\s+/).map((t) => t.replace(/^['"]|['"]$/g, "")).some((t) => isLoadedSkill(t, cwd));
+}
 
 /**
  * What the source this run touched still owes a test for, or "" when it owes nothing: the offer's whole criterion.
@@ -302,9 +329,10 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   pi.on("before_agent_start", (event) => {
     edited.clear();
     feedbackRun = event.messageType === "user" && (event.prompt ?? "").startsWith(FEEDBACK_LEAD);
-    tspRun = !feedbackRun && event.messageType === "user" && isTspPrompt(event.prompt);
+    tspRun = !feedbackRun && event.messageType === "user" && isTspRequest(event.prompt);
   });
-  pi.on("tool_result", (event) => {
+  pi.on("tool_result", (event, ctx) => {
+    if (!feedbackRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) tspRun = true;
     const path = (event.input as { path?: unknown }).path;
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string" && isSourcePath(path)) edited.add(path);
   });

@@ -211,7 +211,8 @@ function offerHarness(opts = {}) {
   const run = async (prompt, edits, { aborted = false } = {}) => {
     await handlers.before_agent_start?.({ type: "before_agent_start", messageType: "user", prompt }, ctx);
     for (const [toolName, path, isError = false] of edits) {
-      await handlers.tool_result({ type: "tool_result", toolName, input: { path }, isError, content: [] }, ctx);
+      const input = toolName === "bash" ? { command: path } : { path };
+      await handlers.tool_result({ type: "tool_result", toolName, input, isError, content: [] }, ctx);
     }
     await handlers.agent_settled({ type: "agent_settled", aborted }, ctx);
   };
@@ -529,14 +530,63 @@ test("only a TSP run asks for feedback: an ordinary, aborted, headless, opted-ou
 });
 
 // The test-strategy skill runs on every phrase in its trigger list, so each of them starts a TSP run the user asked
-// for, and each such run is asked for its feedback, not only the phrases that spell "tsp".
+// for, and each such run is asked for its feedback, not only the phrases that spell "tsp". In Pi such a run is the one
+// whose agent loads the skill, so the run below loads it the way Pi's agent does: reading its SKILL.md.
+const SKILL_READ = ["read", "/home/u/.pi/agent/skills/test-strategy/SKILL.md"];
 test("a TSP run started by any of the skill's trigger phrases is asked for its feedback", async () => {
   for (const prompt of ["haz el testing", "testea esto", "prueba esto", "test this", "test my change"]) {
     const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
-    await h.run(prompt, []);
+    await h.run(prompt, [SKILL_READ]);
     assert.equal(h.sent.length, 1, `${prompt}: a TSP run the user asked for must be asked for its feedback`);
+    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings").map((c) => c.argv[1]), ["record", "check"], `${prompt}: and its findings are reviewed`);
   }
 });
+
+// Pi loads a skill three ways, and each is a TSP run: the read tool, bash when it is the configured file reader, and a
+// /skill:test-strategy command, which Pi expands into the prompt as a <skill> block. Another skill whose name only
+// starts with test-strategy is not this one.
+test("every way Pi loads the test-strategy skill makes the run a TSP run; a sibling skill does not", async () => {
+  const template = { findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } };
+  const skillBlock = "<skill name=\"test-strategy\" location=\"/home/u/.pi/agent/skills/test-strategy/SKILL.md\">\nReferences are relative to /home/u/.pi/agent/skills/test-strategy.\n\nGoal: ...\n</skill>\n\nesto";
+  for (const [prompt, tools, want] of [
+    ["revisa el cambio", [["bash", "cat /home/u/.pi/agent/skills/test-strategy/SKILL.md"]], 1],
+    [skillBlock, [], 1],
+    ["revisa el cambio", [["read", "/home/u/.pi/agent/skills/test-strategy-verifier/SKILL.md"]], 0],
+    ["revisa el cambio", [["read", "/home/u/.pi/agent/skills/test-strategy/SKILL.md", true]], 0],
+  ]) {
+    const h = offerHarness(template);
+    await h.run(prompt, tools);
+    assert.equal(h.sent.length, want, `${prompt.slice(0, 30)} ${JSON.stringify(tools)}`);
+  }
+});
+
+// A second TSP in the same session may run on the skill the agent already holds without reading it again, so the exact
+// request the offer sends stays a TSP run whatever the agent reads.
+test("the exact TSP request is a TSP run even when the agent does not load the skill again", async () => {
+  for (const prompt of ["haz el TSP", "  Haz el TSP  "]) {
+    const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+    await h.run(prompt, []);
+    assert.equal(h.sent.length, 1, prompt);
+  }
+});
+
+// Loading the skill is what makes a TSP run, and only loading it: a run that works on the repository's own copy of the
+// skill (editing test-strategy itself), a command that only names the file, or a different file whose name merely
+// starts with SKILL.md loads nothing, so it reviews no findings and asks for no feedback.
+for (const [why, tool] of [
+  ["reading the repository's own copy of the skill, by relative path", ["read", "assets/skills/test-strategy/SKILL.md"]],
+  ["reading the repository's own copy of the skill, by absolute path", ["read", "/repo/assets/skills/test-strategy/SKILL.md"]],
+  ["a command that only counts the skill file's lines", ["bash", "wc -l /home/u/.pi/agent/skills/test-strategy/SKILL.md"]],
+  ["a command that only lists the skill file", ["bash", "ls -l /home/u/.pi/agent/skills/test-strategy/SKILL.md"]],
+  ["reading a backup beside the skill file", ["read", "/home/u/.pi/agent/skills/test-strategy/SKILL.md.bak"]],
+]) {
+  test(`not a TSP run: ${why}`, async () => {
+    const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+    await h.run("mejora el skill", [tool]);
+    assert.deepEqual(h.sent, [], "no feedback request");
+    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings"), [], "no findings review");
+  });
+}
 
 // A message that only mentions tsp asks for no TSP run, so there is no run to report on: a feedback request there
 // would record a report about a TSP run that never happened.
