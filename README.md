@@ -139,13 +139,18 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    new([New machine]) --> install[go install github.com/alesierraalta/tsp/cmd/tsp@latest]
-    install --> sync[tsp sync<br/>skills to every host, Stop hook into Claude]
-    sync --> doctor{tsp doctor}
+    new([New machine]) --> choice{Go available?}
+    choice -- no --> bin[curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh sh<br/>verifies the release checksum, installs to ~/.local/bin]
+    choice -- yes --> goinstall[go install github.com/alesierraalta/tsp/cmd/tsp@latest]
+    bin --> setup[tsp setup<br/>skills into every discovered host, Stop hook into Claude]
+    goinstall --> setup
+    setup --> doctor{tsp doctor}
     doctor -- healthy --> use([Ready])
-    doctor -- action required --> sync
-    use --> update[tsp update<br/>installs the newer tagged release<br/>where the running binary lives]
-    update --> sync
+    doctor -- "action required" --> setup
+    use --> binupdate[re-run the one-liner<br/>binary users]
+    use --> goupdate[tsp update<br/>Go users]
+    binupdate --> setup
+    goupdate --> setup
     old([Machine with rdd-plus 0.3.x]) --> bridge[rdd-plus update<br/>to the 0.3.20 bridge]
     bridge --> bridge2[rdd-plus update<br/>installs tpp beside rdd-plus]
     bridge2 --> tspbridge[tpp update<br/>installs tsp and points tpp at it]
@@ -155,36 +160,88 @@ flowchart TD
 
 ## Install with an agent
 
-Hand one of these prompts to an agent that has a shell. `tsp setup` does the install and the checking
-itself, so the prompt only has to run it and read how it ended: exit 0 and a last line saying tsp is
-installed and working.
+Paste one of these prompts into an agent that has a shell. The prompt is short on purpose: `tsp setup`
+does the install and the checking itself, so the agent only has to run it, read how it ended, and
+report the last line. Every refusal it is told to respect is a real check in the installer.
 
 | You use | Prompt | What you get |
 |---|---|---|
 | Gentle AI (gentle-ai and engram installed) | [With Gentle AI](#with-gentle-ai) | tsp's testing discipline, plus Gentle AI's native review lifecycle with receipts (RDD) after it, and Engram memory across sessions |
 | Neither | [Without Gentle AI](#without-gentle-ai) | tsp's testing discipline on its own. Without gentle-ai there is no native review lifecycle and no receipts; without engram the plan file is the only memory across sessions |
+| Pi | [As a Pi extension](#as-a-pi-extension) | The same install, plus Pi's native `/tsp` command |
 
-tsp works the same in both: the difference is what else is on the machine, not how tsp behaves.
+tsp works the same in all three: the difference is what else is on the machine, not how tsp behaves.
 
 ### Without Gentle AI
 
 ```text
-Install TSP on Linux: run
-curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
-It downloads and verifies the binary and runs setup. If Linux binaries are unavailable, use
-Go: go install github.com/alesierraalta/tsp/cmd/tsp@latest, then "$(go env GOPATH)/bin/tsp" setup.
-It is done when setup exits 0; show me its last lines.
+Set up TSP on this machine and prove it works.
+
+1. Run: curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
+   It verifies the release checksum, installs the binary to ~/.local/bin, and runs tsp setup.
+2. Report the exit code and the last three lines. It is done only when the exit code is 0 and the last
+   line reads "tsp is installed and working: ...".
+3. If the shell cannot find tsp afterwards, add the export PATH line the installer printed to the
+   profile file it names, then open a new shell.
+4. If setup exits 1 with "nothing installed: no host found", stop and tell me: this machine has no
+   agent config directory yet, so my agent CLI has to exist first. Then run tsp setup again. Do not
+   create a config directory by hand to make the check pass.
+5. If the checksum does not match, the system is not Linux, or the architecture has no release
+   binary, stop and report which one it was. Do not skip the checksum, pick another version, or use
+   sudo.
+6. On macOS, or when no Linux binary fits this machine, use Go instead:
+   go install github.com/alesierraalta/tsp/cmd/tsp@latest
+   "$(go env GOPATH)/bin/tsp" setup
+Report every command you ran and how each one ended.
 ```
 
 ### With Gentle AI
 
 ```text
-Install TSP on Linux: run
-curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
-It downloads and verifies the binary and runs setup. If Linux binaries are unavailable, use
-Go: go install github.com/alesierraalta/tsp/cmd/tsp@latest, then "$(go env GOPATH)/bin/tsp" setup.
-It is done when setup exits 0; show me its last lines. Gentle AI is already installed here:
-confirm setup lists gentle-ai and engram as present.
+Set up TSP on this machine and prove it works.
+
+1. Run: curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
+   It verifies the release checksum, installs the binary to ~/.local/bin, and runs tsp setup.
+2. Report the exit code and the last three lines. It is done only when the exit code is 0 and the last
+   line reads "tsp is installed and working: ...".
+3. Gentle AI is already installed here. In the setup output, confirm gentle-ai and engram are listed
+   as present, and tell me what the native review lifecycle adds on top of tsp's testing discipline.
+4. If setup exits 1 with "nothing installed: no host found", stop and tell me which agent config
+   directory is missing, then run tsp setup again once it exists. Do not create it by hand.
+5. If the checksum does not match, the system is not Linux, or the architecture has no release
+   binary, stop and report which one it was. Do not skip the checksum, pick another version, or use
+   sudo.
+6. On macOS, or when no Linux binary fits this machine, use Go instead:
+   go install github.com/alesierraalta/tsp/cmd/tsp@latest
+   "$(go env GOPATH)/bin/tsp" setup
+Report every command you ran and how each one ended.
+```
+
+### As a Pi extension
+
+Pi is never discovered: `setup` leaves it alone and only `sync --hosts pi` installs it.
+
+```text
+Set up TSP on this machine and add its Pi extension.
+
+1. Run: curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
+   It verifies the release checksum, installs the binary to ~/.local/bin, and runs tsp setup.
+2. Then run: tsp sync --hosts pi
+   That installs the extension only; it is the one command that targets Pi.
+3. Report the exit code and last lines of both commands, and list the files written under
+   ~/.pi/agent/extensions/tsp.
+4. If a command refuses, report its exact message. Do not pass --force, and do not copy files into
+   the Pi directories by hand.
+Report every command you ran and how each one ended.
+```
+
+### Then, in a repository
+
+Setup changes the machine, not a repository. Once it is done, this is what a project needs:
+
+```text
+In this repository, run tsp check and tell me what the tests still owe: which changed production
+files have no test, and what the plan is missing. Change nothing yet.
 ```
 
 ## Install
@@ -227,6 +284,17 @@ or `sudo apk add curl git` (Alpine).
 first. With none of them present setup exits 1 and says so; the binary stays installed, and
 running `tsp setup` again after installing the agent finishes the job. Pi is never discovered: Pi
 users also run `tsp sync --hosts pi` to install the Pi extension.
+
+```mermaid
+flowchart LR
+    setup[tsp setup] --> scan{Which hosts exist?}
+    scan -- "~/.claude" --> claude["Claude Code<br/>skills + Stop hook"]
+    scan -- "~/.codex" --> codex["Codex<br/>skills"]
+    scan -- "~/.gemini" --> gemini["Gemini CLI<br/>skills"]
+    scan -- "~/.config/opencode" --> oc["OpenCode<br/>skills"]
+    scan -- none --> stop["exit 1<br/>nothing installed: no host found"]
+    pisync["tsp sync --hosts pi"] --> pi["Pi<br/>/tsp extension, never discovered"]
+```
 
 Binary users: re-run the Linux one-liner to update. `tsp update` still uses `go install`; without
 Go it prints the command to run instead of installing.
