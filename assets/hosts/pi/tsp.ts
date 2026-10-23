@@ -164,12 +164,15 @@ export async function runTppCommand(rawArgs: string, deps: TppDeps): Promise<voi
 // noticed. `tsp check` is the criterion: the edit list only says source was touched, while the check says whether
 // TSP is owed and names what is missing, so a check that finds nothing owed or cannot run asks nothing.
 // When a TSP run ends, the tests it left failing on HEAD's code are recorded as findings and the review of every
-// finding is shown to the user; the agent is never told about it. A delegated child session
-// (GENTLE_PI_AGENTS_CHILD=1) has nobody to answer, so it gets neither.
+// finding is shown to the user; the agent is never told about it. Then the agent is asked to record its feedback on
+// that run on the template `tsp feedback --template` prints, so each run leaves a report later runs can be tuned on.
+// That request is a run of its own: it reviews no findings, asks no TSP question and requests no more feedback.
+// A delegated child session (GENTLE_PI_AGENTS_CHILD=1) has nobody to answer, so it gets none of them.
 export const OFFER_QUESTION = "¿Quieres hacer TSP?";
 export const OFFER_YES = "Sí";
 export const OFFER_NO = "No";
 export const TSP_PROMPT = "haz el TSP";
+export const FEEDBACK_LEAD = "The TSP run has ended. Record honest feedback on it.";
 
 const SOURCE_EXT = /\.(go|ts|tsx|js|jsx|mjs|cjs|py|rs|java|kt|rb|php|cs|c|cc|cpp|h|hpp|swift|scala|sh)$/;
 const TEST_PATH = /(^|\/)(tests?|__tests__|testdata|e2e|spec)\/|_test\.(go|py)$|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$/;
@@ -180,8 +183,35 @@ export function isSourcePath(path: string): boolean {
   return SOURCE_EXT.test(p) && !TEST_PATH.test(p);
 }
 
-/** A run the user started to do TSP: its own edits never trigger another offer. */
-const isTspPrompt = (prompt: string | undefined): boolean => /\b(tsp|test[- ]strategy)\b/i.test(prompt ?? "");
+/**
+ * A TSP run is a run whose agent loads the test-strategy skill, whatever words started it: the skill's trigger list is
+ * long and a message that only mentions tsp starts none. Pi loads a skill three ways: the read tool on its SKILL.md,
+ * bash when that is the configured file reader, or a /skill:test-strategy command, which arrives as a <skill> block
+ * leading the prompt. The exact request the offer sends is a TSP run too, because a second TSP in the same session may
+ * run on the skill the agent already holds without reading it again. Its own edits never trigger another offer.
+ *
+ * Only loading counts. The file must be SKILL.md itself, not a sibling that starts with its name; a copy inside the
+ * working repository (a relative path, or one under the working directory outside its .pi/ folder) is source being
+ * worked on, not a skill being loaded; and a bash command counts only when it reads the file, not when it names it.
+ */
+const SKILL_FILE = /(^|[\/\\])test-strategy[\/\\]SKILL\.md$/;
+const SKILL_BLOCK = /^<skill name="test-strategy" /;
+const FILE_READER = /^\s*(cat|head|tail|less|more|bat|sed)\s/;
+const isTspRequest = (prompt: string | undefined): boolean =>
+  SKILL_BLOCK.test(prompt ?? "") || (prompt ?? "").trim().toLowerCase() === TSP_PROMPT.toLowerCase();
+function isLoadedSkill(path: string, cwd: string): boolean {
+  if (!SKILL_FILE.test(path)) return false;
+  const p = path.replace(/\\/g, "/");
+  if (!(p.startsWith("/") || p.startsWith("~") || /^[A-Za-z]:\//.test(p))) return false;
+  const root = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+  return !p.startsWith(`${root}/`) || p.startsWith(`${root}/.pi/`);
+}
+function loadsTspSkill(toolName: string, input: unknown, cwd: string): boolean {
+  const { path, command } = (input ?? {}) as { path?: unknown; command?: unknown };
+  if (toolName === "read") return typeof path === "string" && isLoadedSkill(path, cwd);
+  if (toolName !== "bash" || typeof command !== "string" || !FILE_READER.test(command)) return false;
+  return command.split(/\s+/).map((t) => t.replace(/^['"]|['"]$/g, "")).some((t) => isLoadedSkill(t, cwd));
+}
 
 /**
  * What the source this run touched still owes a test for, or "" when it owes nothing: the offer's whole criterion.
@@ -265,6 +295,31 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
   }
 }
 
+/**
+ * The feedback request for the TSP run that just ended, or "" when there is nothing to ask. The template is asked of
+ * the positive way: a reply that carries the `verdict:` field is a template, so the line tsp prints while feedback is
+ * disabled, an empty reply or a failing tsp never costs the agent a run. Feedback switched off is the user's choice
+ * and stays quiet; any other reply that is not a template is a request that never went out, so the user is told why.
+ */
+export async function feedbackRequest(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, notify: Notify): Promise<string> {
+  try {
+    const result = await exec(["feedback", "--template"], { cwd, env: { ...env } });
+    const template = result.stdout.trim();
+    if (result.code === 0 && template.startsWith("feedback is disabled")) return "";
+    if (result.code !== 0 || !/^verdict:/m.test(template)) {
+      const why = result.stderr.trim() || (result.code !== 0 ? `tsp feedback: exited ${result.code}` : "tsp feedback: no template");
+      notify(notice(`${why} — no feedback was requested for this TSP run`), "warning");
+      return "";
+    }
+    return `${FEEDBACK_LEAD} Fill paid, cost, reason and verdict below from what that run actually found and what it cost ` +
+      "(paid is \"nothing\" when it found nothing), save the report to a temporary file outside the repository and submit " +
+      "it with `tsp feedback --file <that file>`. Do not change code or tests.\n\n" + template;
+  } catch (error) {
+    notify(notice(`tsp: ${error instanceof Error ? error.message : String(error)} — no feedback was requested for this TSP run`), "warning");
+    return "";
+  }
+}
+
 function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   const optedOut = opts.optedOut ?? ((cwd: string) => existsSync(join(cwd, ".no-testing-gate")));
   const env = opts.env ?? process.env;
@@ -273,19 +328,28 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   const edited = new Set<string>(); // source paths changed in the current run
   const declined = new Set<string>(); // paths the user already said No to
   let tspRun = false;
+  let feedbackRun = false;
   pi.on("before_agent_start", (event) => {
     edited.clear();
-    tspRun = event.messageType === "user" && isTspPrompt(event.prompt);
+    feedbackRun = event.messageType === "user" && (event.prompt ?? "").startsWith(FEEDBACK_LEAD);
+    tspRun = !feedbackRun && event.messageType === "user" && isTspRequest(event.prompt);
   });
-  pi.on("tool_result", (event) => {
+  pi.on("tool_result", (event, ctx) => {
+    if (!feedbackRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) tspRun = true;
     const path = (event.input as { path?: unknown }).path;
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string" && isSourcePath(path)) edited.add(path);
   });
   pi.on("agent_settled", async (event, ctx) => {
     const fresh = [...edited].filter((p) => !declined.has(p));
     edited.clear();
-    if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd)) return;
-    if (tspRun) return reviewFindings(ctx.cwd, env, exec, (message, type) => ctx.ui.notify(message, type));
+    if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd) || feedbackRun) return;
+    if (tspRun) {
+      const notify: Notify = (message, type) => ctx.ui.notify(message, type);
+      await reviewFindings(ctx.cwd, env, exec, notify);
+      const request = await feedbackRequest(ctx.cwd, env, exec, notify);
+      if (request !== "") pi.sendUserMessage(request);
+      return;
+    }
     if (fresh.length === 0) return;
     const owed = await owedReason(ctx.cwd, env, exec, fresh);
     if (owed === "") return;

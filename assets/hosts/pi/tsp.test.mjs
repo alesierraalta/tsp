@@ -6,6 +6,7 @@ import { mock, test } from "node:test";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import tppExtension, {
+  FEEDBACK_LEAD,
   GENTLE_OBSERVATION_ENV,
   GENTLE_OBSERVATION_VALUE,
   observesGentleSession,
@@ -190,7 +191,9 @@ function offerHarness(opts = {}) {
   // check is the pre-offer `tsp check` the offer derives its criterion from; the default reports one run still to plan.
   const exec = async (argv, o) => {
     calls.push({ argv: [...argv], cwd: o.cwd });
-    const outcome = argv[0] === "check" && argv[1] === "--cwd" ? check : findings[argv[1]] ?? { stdout: "", stderr: "", code: 0 };
+    // A feedback template nobody configured answers as tsp does with feedback switched off: no request, no notice.
+    const fallback = argv[0] === "feedback" ? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
+    const outcome = argv[0] === "check" && argv[1] === "--cwd" ? check : findings[argv[1]] ?? fallback;
     if (outcome instanceof Error) throw outcome;
     return outcome;
   };
@@ -209,7 +212,8 @@ function offerHarness(opts = {}) {
   const run = async (prompt, edits, { aborted = false } = {}) => {
     await handlers.before_agent_start?.({ type: "before_agent_start", messageType: "user", prompt }, ctx);
     for (const [toolName, path, isError = false] of edits) {
-      await handlers.tool_result({ type: "tool_result", toolName, input: { path }, isError, content: [] }, ctx);
+      const input = toolName === "bash" ? { command: path } : { path };
+      await handlers.tool_result({ type: "tool_result", toolName, input, isError, content: [] }, ctx);
     }
     await handlers.agent_settled({ type: "agent_settled", aborted }, ctx);
   };
@@ -429,6 +433,7 @@ test("a TSP run ends by recording its witnesses, then shows the review of every 
     assert.deepEqual(h.calls, [
       { argv: ["findings", "record", "--cwd", "/repo"], cwd: "/repo" },
       { argv: ["findings", "check", "--cwd", "/repo"], cwd: "/repo" },
+      { argv: ["feedback", "--template"], cwd: "/repo" },
     ]);
     assert.deepEqual(h.notes, [{ message: review.trim(), type }], `check exit ${code}`);
     assert.deepEqual(h.asked, []);
@@ -438,15 +443,16 @@ test("a TSP run ends by recording its witnesses, then shows the review of every 
 test("a TSP run that pinned nothing still shows the review; a record that cannot run stops before check", async () => {
   const none = offerHarness({ findings: { record: { stdout: "no new witness\n", stderr: "", code: 1 }, check: { stdout: "no finding recorded on feat/x\n", stderr: "", code: 0 } } });
   await none.run("haz el TSP", []);
-  assert.deepEqual(none.calls.map((c) => c.argv[1]), ["record", "check"]);
+  assert.deepEqual(none.calls.map((c) => c.argv[1]), ["record", "check", "--template"]);
   assert.deepEqual(none.notes, [{ message: "no finding recorded on feat/x", type: "info" }]);
   const detached = offerHarness({ findings: { record: { stdout: "", stderr: "tsp findings: detached HEAD\n", code: 2 } } });
   await detached.run("haz el TSP", []);
-  assert.deepEqual(detached.calls.map((c) => c.argv[1]), ["record"]);
+  assert.deepEqual(detached.calls.map((c) => c.argv[1]), ["record", "--template"], "a registry that cannot record still leaves the run's feedback to ask for");
   assert.deepEqual(detached.notes, [{ message: "tsp findings: detached HEAD", type: "error" }]);
   const missing = offerHarness({ findings: { record: new Error("spawn tsp ENOENT") } });
   await missing.run("haz el TSP", []);
-  assert.deepEqual(missing.notes, [{ message: "tsp: spawn tsp ENOENT", type: "error" }]);
+  assert.deepEqual(missing.calls.map((c) => c.argv[1]), ["record", "--template"], "a record that throws still leaves the feedback template to ask for");
+  assert.equal(missing.notes[0].message, "tsp: spawn tsp ENOENT");
 });
 
 test("the findings review runs only after a TSP run the user asked for, with UI, not aborted, not opted out", async () => {
@@ -462,6 +468,134 @@ test("the findings review runs only after a TSP run the user asked for, with UI,
     assert.equal(h.asked.length, offered ? 1 : 0, `${why}: the offer decides before any review`);
     assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings"), [], why);
     assert.deepEqual(h.notes, [], why);
+  }
+});
+
+const TEMPLATE = "# tsp run feedback\nts: 2026-10-22T20:10:29Z\nskill: test-strategy 0.7.5\npaid: \ncost: \nreason: \nverdict: \n";
+
+test("a TSP run ends by asking the agent to record its feedback on the template tsp prints", async () => {
+  const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+  await h.run("haz el TSP", [["edit", "a_test.go"]]);
+  assert.equal(h.sent.length, 1, "one feedback request per TSP run");
+  const [prompt] = h.sent;
+  assert.ok(prompt.startsWith(FEEDBACK_LEAD), prompt);
+  assert.ok(prompt.endsWith(TEMPLATE.trim()), "the template reaches the agent whole, with the run's identity tsp filled in");
+  assert.match(prompt, /tsp feedback --file/, "the agent is told how to submit it");
+  assert.deepEqual(h.asked, [], "recording feedback asks the user nothing");
+});
+
+test("disabled feedback sends nothing and says nothing; a tsp that fails sends nothing and says why", async () => {
+  const disabled = offerHarness({ findings: { "--template": { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } } });
+  await disabled.run("haz el TSP", []);
+  assert.deepEqual(disabled.sent, []);
+  assert.deepEqual(disabled.notes.filter((n) => /feedback/.test(n.message)), [], "feedback switched off is a choice, not an error");
+  for (const [template, said] of [
+    [{ stdout: "", stderr: "", code: 0 }, "tsp feedback: no template"],
+    [{ stdout: "", stderr: "tsp: unknown flag\n", code: 2 }, "tsp: unknown flag"],
+    [{ stdout: TEMPLATE, stderr: "", code: 1 }, "tsp feedback: exited 1"],
+    [new Error("spawn tsp ENOENT"), "tsp: spawn tsp ENOENT"],
+  ]) {
+    const h = offerHarness({ findings: { "--template": template } });
+    await h.run("haz el TSP", []);
+    assert.deepEqual(h.sent, [], said);
+    assert.ok(h.notes.some((n) => n.type === "warning" && n.message.includes(said)), `${said}: ${JSON.stringify(h.notes)}`);
+  }
+});
+
+test("the feedback run itself reviews no findings, asks no TSP question and requests no more feedback", async () => {
+  const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+  await h.run("haz el TSP", []);
+  const [prompt] = h.sent;
+  const before = h.calls.length;
+  await h.run(prompt, [["edit", "internal/a.go"]]);
+  assert.equal(h.calls.length, before, "no findings review, no check, no template: the loop ends here");
+  assert.deepEqual(h.asked, []);
+  assert.equal(h.sent.length, 1);
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.equal(h.asked.length, 1, "the next ordinary run is offered TSP again");
+});
+
+test("only a TSP run asks for feedback: an ordinary, aborted, headless, opted-out or child run never does", async () => {
+  const template = { findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } };
+  for (const [h, prompt, aborted] of [
+    [offerHarness({ ...template, answer: "No" }), "change a", false],
+    [offerHarness(template), "haz el TSP", true],
+    [offerHarness({ ...template, hasUI: false }), "haz el TSP", false],
+    [offerHarness({ ...template, optedOut: true }), "haz el TSP", false],
+    [offerHarness({ ...template, env: { GENTLE_PI_AGENTS_CHILD: "1" } }), "haz el TSP", false],
+  ]) {
+    await h.run(prompt, [["edit", "a.go"]], { aborted });
+    assert.deepEqual(h.sent, [], `${prompt} aborted=${aborted}`);
+    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "feedback"), [], `${prompt} aborted=${aborted}`);
+  }
+});
+
+// The test-strategy skill runs on every phrase in its trigger list, so each of them starts a TSP run the user asked
+// for, and each such run is asked for its feedback, not only the phrases that spell "tsp". In Pi such a run is the one
+// whose agent loads the skill, so the run below loads it the way Pi's agent does: reading its SKILL.md.
+const SKILL_READ = ["read", "/home/u/.pi/agent/skills/test-strategy/SKILL.md"];
+test("a TSP run started by any of the skill's trigger phrases is asked for its feedback", async () => {
+  for (const prompt of ["haz el testing", "testea esto", "prueba esto", "test this", "test my change"]) {
+    const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+    await h.run(prompt, [SKILL_READ]);
+    assert.equal(h.sent.length, 1, `${prompt}: a TSP run the user asked for must be asked for its feedback`);
+    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings").map((c) => c.argv[1]), ["record", "check"], `${prompt}: and its findings are reviewed`);
+  }
+});
+
+// Pi loads a skill three ways, and each is a TSP run: the read tool, bash when it is the configured file reader, and a
+// /skill:test-strategy command, which Pi expands into the prompt as a <skill> block. Another skill whose name only
+// starts with test-strategy is not this one.
+test("every way Pi loads the test-strategy skill makes the run a TSP run; a sibling skill does not", async () => {
+  const template = { findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } };
+  const skillBlock = "<skill name=\"test-strategy\" location=\"/home/u/.pi/agent/skills/test-strategy/SKILL.md\">\nReferences are relative to /home/u/.pi/agent/skills/test-strategy.\n\nGoal: ...\n</skill>\n\nesto";
+  for (const [prompt, tools, want] of [
+    ["revisa el cambio", [["bash", "cat /home/u/.pi/agent/skills/test-strategy/SKILL.md"]], 1],
+    [skillBlock, [], 1],
+    ["revisa el cambio", [["read", "/home/u/.pi/agent/skills/test-strategy-verifier/SKILL.md"]], 0],
+    ["revisa el cambio", [["read", "/home/u/.pi/agent/skills/test-strategy/SKILL.md", true]], 0],
+  ]) {
+    const h = offerHarness(template);
+    await h.run(prompt, tools);
+    assert.equal(h.sent.length, want, `${prompt.slice(0, 30)} ${JSON.stringify(tools)}`);
+  }
+});
+
+// A second TSP in the same session may run on the skill the agent already holds without reading it again, so the exact
+// request the offer sends stays a TSP run whatever the agent reads.
+test("the exact TSP request is a TSP run even when the agent does not load the skill again", async () => {
+  for (const prompt of ["haz el TSP", "  Haz el TSP  "]) {
+    const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+    await h.run(prompt, []);
+    assert.equal(h.sent.length, 1, prompt);
+  }
+});
+
+// Loading the skill is what makes a TSP run, and only loading it: a run that works on the repository's own copy of the
+// skill (editing test-strategy itself), a command that only names the file, or a different file whose name merely
+// starts with SKILL.md loads nothing, so it reviews no findings and asks for no feedback.
+for (const [why, tool] of [
+  ["reading the repository's own copy of the skill, by relative path", ["read", "assets/skills/test-strategy/SKILL.md"]],
+  ["reading the repository's own copy of the skill, by absolute path", ["read", "/repo/assets/skills/test-strategy/SKILL.md"]],
+  ["a command that only counts the skill file's lines", ["bash", "wc -l /home/u/.pi/agent/skills/test-strategy/SKILL.md"]],
+  ["a command that only lists the skill file", ["bash", "ls -l /home/u/.pi/agent/skills/test-strategy/SKILL.md"]],
+  ["reading a backup beside the skill file", ["read", "/home/u/.pi/agent/skills/test-strategy/SKILL.md.bak"]],
+]) {
+  test(`not a TSP run: ${why}`, async () => {
+    const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+    await h.run("mejora el skill", [tool]);
+    assert.deepEqual(h.sent, [], "no feedback request");
+    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings"), [], "no findings review");
+  });
+}
+
+// A message that only mentions tsp asks for no TSP run, so there is no run to report on: a feedback request there
+// would record a report about a TSP run that never happened.
+test("a message that only mentions tsp is not a TSP run and is not asked for feedback", async () => {
+  for (const prompt of ["¿qué hace tsp check?", "no hagas el TSP, solo explícame el diff", "actualiza el binario de tsp"]) {
+    const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+    await h.run(prompt, []);
+    assert.deepEqual(h.sent, [], `${prompt}: no TSP run was asked for, so no feedback is requested`);
   }
 });
 
