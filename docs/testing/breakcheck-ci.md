@@ -2,7 +2,7 @@
 
 ## Candidate identity
 
-- Project/root: `rdd-plus` at worktree `/home/alesierraalta/documents/projects/rdd-plus-worktrees/ci-run-the-suite`
+- Project/root: `rdd-plus` at worktree `../rdd-plus-worktrees/ci-run-the-suite`
 - Execution label: `breakcheck-ci-2026-09-18`
 - Candidate: base `b210de6`. One new workflow (`.github/workflows/ci.yml`), three modified (`Makefile`, `README.md`, `docs/testing/dogfooding-log.md`) and this report, also new. Uncommitted at campaign time.
 - Scope: whether the CI job actually runs what it claims and fails when it should. Not claimed: GitHub's own behaviour (the first real run is the proof), branch protection, or any other workflow.

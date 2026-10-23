@@ -2,7 +2,7 @@
 
 ## Candidate identity
 
-- Project/root: `rdd-plus` at worktree `/home/alesierraalta/documents/projects/rdd-plus-worktrees/104-declared-plan-path`
+- Project/root: `rdd-plus` at worktree `../rdd-plus-worktrees/104-declared-plan-path`
 - Execution label: `breakcheck-104-plan-path-2026-09-18`
 - Candidate: the working tree of `fix/104-declared-plan-path` — base `90ab13b`, six modified files (`internal/bench/score.go`, `adjudication.go`, `run.go`, `score_test.go`, `linked_test.go`, `bench/README.md`), uncommitted at campaign time.
 - Scope: the plan-path resolution the change introduces and the readers that consume it. Not claimed: the corpus, the scorer's matching rules, `rescore`, or any other bench behaviour.

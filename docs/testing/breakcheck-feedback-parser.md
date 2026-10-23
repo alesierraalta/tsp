@@ -2,7 +2,7 @@
 
 ## Candidate identity
 
-- Project/root: `rdd-plus` at worktree `/home/alesierraalta/documents/projects/rdd-plus-worktrees/94-bounded-adversarial-gate`.
+- Project/root: `rdd-plus` at worktree `../rdd-plus-worktrees/94-bounded-adversarial-gate`.
 - Execution label: `breakcheck-feedback-parser-2026-09-17`.
 - Candidate: `internal/feedback` (`internal/feedback/feedback.go`) and CLI surface `cmd/rdd-plus/main.go` (`runFeedback`), exercised at commit `069f70518ff0fc016b92599e41452d4aa65d6464`.
 - Scope: `the feedback package (Parse, Record, Read, Summary) and its CLI surface at this commit; no diff is gated and no other package is claimed. The identity fields in this block were completed after the run to match the revised report template; probe measurements are unchanged.`
@@ -204,6 +204,6 @@ Observed:
 
 ## Feedback record
 
-- Result: `recorded exactly once after successful submission: exit=0; stdout="recorded partly feedback for /home/alesierraalta/documents/projects/rdd-plus-worktrees/94-bounded-adversarial-gate"; stderr empty.`
+- Result: `recorded exactly once after successful submission: exit=0; stdout="recorded partly feedback for ../rdd-plus-worktrees/94-bounded-adversarial-gate"; stderr empty.`
 - Command: `rtk run 'feedback_file="${TMPDIR:-/tmp}/breakcheck-feedback-$(date +%s).md"; "${TMPDIR:-/tmp}/rdd-plus" feedback --template > "$feedback_file"; fill only the existing fields; "${TMPDIR:-/tmp}/rdd-plus" feedback --file "$feedback_file"'` (the actual fill used only `ts`, `repo`, `plan`, `skill`, `build`, `paid`, `cost`, `reason`, `verdict`, `guess`, and `freeform`; no `--config-dir` was passed on submit).
-- Ledger/reference: `/home/alesierraalta/.claude/telemetry/run-feedback.jsonl` (default config directory); verdict recorded was `partly`. The required feedback submission succeeded, so it is claimed as recorded.
+- Ledger/reference: `~/.claude/telemetry/run-feedback.jsonl` (default config directory); verdict recorded was `partly`. The required feedback submission succeeded, so it is claimed as recorded.

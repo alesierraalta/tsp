@@ -2,7 +2,7 @@
 
 ## Candidate identity
 
-- Project/root: `rdd-plus` at worktree `/home/alesierraalta/documents/projects/rdd-plus-worktrees/feedback-record-fidelity`
+- Project/root: `rdd-plus` at worktree `../rdd-plus-worktrees/feedback-record-fidelity`
 - Execution label: `breakcheck-feedback-fidelity-2026-09-18`
 - Candidate: base `b5678e2`. Seven files: `cmd/rdd-plus/main.go`, `cmd/rdd-plus/main_test.go`, `internal/feedback/feedback.go`, `internal/feedback/feedback_test.go`, `README.md`, `assets/skills/test-strategy/SKILL.md`, `assets/skills/breakcheck/SKILL.md`. Uncommitted at campaign time.
 - Scope: where the feedback record lands and what its `skill` field says. Not claimed: the verdict vocabulary, the aggregate, the bench's own provenance, or the rows already written.
