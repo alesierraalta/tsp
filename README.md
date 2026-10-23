@@ -148,7 +148,8 @@ flowchart TD
     update --> sync
     old([Machine with rdd-plus 0.3.x]) --> bridge[rdd-plus update<br/>to the 0.3.20 bridge]
     bridge --> bridge2[rdd-plus update<br/>installs tpp beside rdd-plus]
-    bridge2 --> migrate[tpp sync<br/>rewires the rdd-plus hook to tpp,<br/>moves ~/.config/rdd-plus to ~/.config/tpp]
+    bridge2 --> tspbridge[tpp update<br/>installs tsp and points tpp at it]
+    tspbridge --> migrate[tsp sync<br/>rewires legacy hooks to tsp,<br/>moves legacy state to ~/.config/tsp]
     migrate --> doctor
 ```
 
@@ -160,15 +161,15 @@ installed and working.
 
 | You use | Prompt | What you get |
 |---|---|---|
-| Gentle AI (gentle-ai and engram installed) | [With Gentle AI](#with-gentle-ai) | tpp's testing discipline, plus Gentle AI's native review lifecycle with receipts (RDD) after it, and Engram memory across sessions |
-| Neither | [Without Gentle AI](#without-gentle-ai) | tpp's testing discipline on its own. Without gentle-ai there is no native review lifecycle and no receipts; without engram the plan file is the only memory across sessions |
+| Gentle AI (gentle-ai and engram installed) | [With Gentle AI](#with-gentle-ai) | tsp's testing discipline, plus Gentle AI's native review lifecycle with receipts (RDD) after it, and Engram memory across sessions |
+| Neither | [Without Gentle AI](#without-gentle-ai) | tsp's testing discipline on its own. Without gentle-ai there is no native review lifecycle and no receipts; without engram the plan file is the only memory across sessions |
 
-tpp works the same in both: the difference is what else is on the machine, not how tpp behaves.
+tsp works the same in both: the difference is what else is on the machine, not how tsp behaves.
 
 ### Without Gentle AI
 
 ```text
-Install TSP after its first publication: run go install github.com/alesierraalta/tsp/cmd/tsp@latest, then tsp setup (if tsp is
+Install TSP: run go install github.com/alesierraalta/tsp/cmd/tsp@latest, then tsp setup (if tsp is
 not found, run "$(go env GOPATH)/bin/tsp" setup and add the PATH line it prints). It is done when
 setup exits 0; show me its last lines.
 ```
@@ -176,7 +177,7 @@ setup exits 0; show me its last lines.
 ### With Gentle AI
 
 ```text
-Install TSP after its first publication: run go install github.com/alesierraalta/tsp/cmd/tsp@latest, then tsp setup (if tsp is
+Install TSP: run go install github.com/alesierraalta/tsp/cmd/tsp@latest, then tsp setup (if tsp is
 not found, run "$(go env GOPATH)/bin/tsp" setup and add the PATH line it prints). It is done when
 setup exits 0; show me its last lines. Gentle AI is already installed here: confirm setup lists
 gentle-ai and engram as present.
@@ -184,13 +185,16 @@ gentle-ai and engram as present.
 
 ## Install
 
-Install TSP from its module. An existing TPP install moves over with `tpp update` (bridge
-`go install github.com/alesierraalta/tpp/cmd/tpp@v0.5.1`), which installs `tsp` and points `tpp` at it.
+Requirements: Go (the module declares Go 1.26; Go 1.21+ toolchains fetch it automatically
+with `GOTOOLCHAIN=auto`) and git. Python 3/pytest, Node.js, and Cargo are needed only for the
+suites they run.
 
 ```sh
 go install github.com/alesierraalta/tsp/cmd/tsp@latest
 tsp setup     # sync, then doctor's checks, then one line saying tsp works (exit 0) or what is left
 ```
+
+If `tsp` is not found, run `"$(go env GOPATH)/bin/tsp" setup` and add the PATH line it prints.
 
 `tsp setup` is the one-step path: it runs the same sync as `tsp sync`, the same checks as `tsp doctor`
 against the directory it just wrote, and ends on `tsp is installed and working: <N> skills in <hosts>,
@@ -255,8 +259,8 @@ the Pi extension is the explicit `--hosts pi` opt-in described below. The Stop h
 where its transport is known—Claude Code's `~/.claude/settings.json`; OpenCode, Gemini, and Codex
 receive skills but their transports are documented rather than wired. Claude's sync merges into
 `~/.claude/settings.json`: every existing hook and setting is preserved, the gate is added once,
-and running it again changes nothing. A file modified after tpp installed it is not replaced
-by default; pass `--force` to replace it after tpp snapshots the edited file in the central
+and running it again changes nothing. A file modified after tsp installed it is not replaced
+by default; pass `--force` to replace it after tsp snapshots the edited file in the central
 backup store described below. A path under the skills directory that sync cannot read, or a symlink
 back to an enclosing folder, is reported once as a user path and left alone; an unreadable skills
 directory itself still aborts the run. An unparseable `settings.json` aborts the run before anything is
@@ -280,20 +284,23 @@ duplicates nothing of Gentle's: ODD, Engram memory, and the review lifecycle rem
 | `tsp repair` | Claude-only: re-syncs the managed skills and re-wires Claude's Stop hook; the Pi extension is untouched. |
 
 Load the extension (`pi --extension <path>/tsp.ts`, or let Pi load it from
-`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks "¿Quieres hacer TSP?" in the chat, and only when the scoped check (`tsp check --paths`, one flag per path) says the source that run touched still owes a test — a plan target open from earlier work, or a run that only wrote a report, asks nothing; "Sí" sends "haz el TSP", which invokes `test-strategy`, and "No" is remembered for those files (details in `assets/hosts/README.md`). Test files never trigger it (`*.test.*`, `*.spec.*`, `x_test.go`, `test_x.py`, `x_test.py`, and anything under `tests/`, `__tests__/`, `testdata/`, `e2e/` or `spec/`), nor does a TSP run, an aborted run, a session without UI, a delegated subagent session (`GENTLE_PI_AGENTS_CHILD=1`), or a repository with `.no-testing-gate`. When a TSP run ends, the extension runs `tsp findings record` and then `tsp findings check`, and shows the review in the chat; the agent is not told about it. Edits made through a shell command are not seen. This was watched in a live Pi 1.3.0 session. `/tsp check` keeps a quoted argument whole, so `/tsp check --suite "npm test"` reaches the CLI as one value. The Pi Stop hook is a separate,
+`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks "¿Quieres hacer TSP?" in the chat, and only when the scoped check (`tsp check --paths`, one flag per path) says the source that run touched still owes a test — a plan target open from earlier work, or a run that only wrote a report, asks nothing; "Sí" sends "haz el TSP", which invokes `test-strategy`, and "No" is remembered for those files (details in `assets/hosts/README.md`). Dependency trees (`node_modules/`, `vendor/`, `.venv/`, `venv/`, `site-packages/`, `dist-packages/`, and `__pypackages__/`) are excluded from production source and tests. Test files never trigger it (`*.test.*`, `*.spec.*`, `x_test.go`, `test_x.py`, `x_test.py`, and anything under `tests/`, `__tests__/`, `testdata/`, `e2e/` or `spec/`), nor does a TSP run, an aborted run, a session without UI, a delegated subagent session (`GENTLE_PI_AGENTS_CHILD=1`), or a repository with `.no-testing-gate`. When a TSP run ends, the extension runs `tsp findings record` and then `tsp findings check`, and shows the review in the chat; the agent is not told about it. Edits made through a shell command are not seen. This was watched in a live Pi 1.3.0 session. `/tsp check` keeps a quoted argument whole, so `/tsp check --suite "npm test"` reaches the CLI as one value. The Pi Stop hook is a separate,
 **not verified** surface: its payload contract was read from the pi-hooks package and nobody has
 watched it fire here, so merging `assets/hosts/pi/settings.stop-hook.json` into Pi's settings is
 ready to test, not working.
 
 ### Upgrading from rdd-plus
 
-tpp (test planning process) was called rdd-plus until 0.4.0. The old names keep working, and the new
+An existing TPP install moves over with `tpp update` (bridge
+`go install github.com/alesierraalta/tpp/cmd/tpp@v0.5.1`), which installs `tsp` and points `tpp` at it.
+
+TSP was previously called tpp (test planning process), and rdd-plus until 0.4.0. The old names keep working, and the new
 ones win when both are present:
 
 - An rdd-plus 0.3.x install reaches tpp through `rdd-plus update`: the 0.3.20 bridge release installs
-  `tpp` beside it. From then on, run `tpp`.
-- `tpp sync` rewrites a Stop hook wired to `"<dir>/rdd-plus" gate` into `"<dir>/tpp" gate`, with no
-  duplicate entry; `tpp uninstall` removes either.
+  `tpp` beside it. Then use the TPP bridge above and run `tsp`.
+- `tsp sync` rewrites legacy Stop hooks wired to `"<dir>/rdd-plus" gate` or `"<dir>/tpp" gate`
+  into `"<dir>/tsp" gate`, with no duplicate entry; `tsp uninstall` removes legacy hooks too.
 - The first default-root resolution moves an existing `~/.config/tpp` or `~/.config/rdd-plus` tree
   (state, backups, update cache) to `~/.config/tsp`, retaining both old paths as symlink aliases.
   An existing TSP root wins; divergent legacy roots are not merged, and a failed move leaves the old root in use.
@@ -315,7 +322,7 @@ Keep the local state at `<config root>/state.json`; the default is `~/.config/ts
 hosts, components, and files. Keep it local-only.
 Feedback reports and their private review-cursor sidecar live under the selected
 `<config-dir>/telemetry` (default `~/.claude/telemetry`); `--config-dir` selects this store, separately
-from TPP_HOME's local installation state. Classify paths as managed (installed by tpp), modified-by-the-user (never overwrite without
+from TSP_HOME's local installation state. Classify paths as managed (installed by tsp), modified-by-the-user (never overwrite without
 `--force`; always snapshot first), or foreign (never write or delete). Store backups at
 `<config root>/backups/<timestamp>/{manifest.json, files/…}`.
 
@@ -342,7 +349,7 @@ and `repair` are documented in the Commands table below.
 | `tsp feature list\|enable\|disable <id> [--preview]` | Lists or toggles optional features; preview without changing state. |
 | `tsp feedback [--template | --file <path> | --summary | --pending | --mark-reviewed <token>] [--config-dir <dir>]` | Records or reads local run feedback. `--summary` is all-history and cursor-neutral. The first `--pending` call establishes a baseline now at the current snapshot; later calls print pending reports, the snapshot total, and one exact snapshot token. Review the full batch before acknowledging that token; reports appended after that snapshot remain pending. The cursor is a private sidecar under the selected feedback telemetry directory. |
 | `tsp tui` | Interactive menu over the status report, feature toggles (list, enable/disable, preview), and the sync dry-run plan. Needs an interactive terminal on Linux or macOS; elsewhere it refuses and points at `status`, `feature`, and `sync --dry-run`. |
-| `tsp update [--check]` | Checks the Go module proxy for a newer release and installs it with `go install github.com/alesierraalta/tsp/cmd/tsp@<tag>` (after TSP publication) (prints the command when `go` is absent); `--check` only refreshes the offline cache. |
+| `tsp update [--check]` | Checks the Go module proxy for a newer release and installs it with `go install github.com/alesierraalta/tsp/cmd/tsp@<tag>` (prints the command when `go` is absent); `--check` only refreshes the offline cache. |
 | `tsp uninstall [--dry-run] [--orphans] [--force] [--config-dir <dir>]` | Removes managed assets and unwires the Stop hook; never touches foreign files. Modified content needs `--force` (snapshot first); `--orphans` also removes assets the manifest no longer ships; `--dry-run` writes nothing. |
 | `tsp restore [--id <backup-id>] [--dry-run]` | Copies a backup store entry back onto its original paths (default: the latest backup). |
 | `tsp repair [--config-dir <dir>] [--dry-run] [--force]` | Brings a broken install back to what `doctor` reports healthy (missing/drifted managed skills and Stop hook re-wire), Claude-only — the Pi extension is untouched; a healthy install is a no-op. |
@@ -351,6 +358,17 @@ and `repair` are documented in the Commands table below.
 | `tsp plan export [--path <plan>] [--commit <sha>]` | Prints the plan's Findings as Markdown for a pull request comment: one row per finding with its location, severity, status, pinning test and the evidence that re-observes it (the Admit command, the digest shortened to 12 hex, and `Expect: fail` when declared), headed by the commit covered (default the short HEAD) and the plan's base name, never its directory. Every cell is sanitised like the gaps report's quotes. It never posts: `tsp plan export --path <plan> \| gh pr comment <n> -F -` is the operator's call. |
 | `tsp feedback` | Records one honest process report about the testing method itself, or reads the reports back. `--template` prints a fillable skeleton, `--file <path>` records it, `--summary` (the default) answers whether the method is earning its keep. |
 | `tsp version` | Prints the version. |
+
+Additional commands:
+
+| Command | What it does |
+|---|---|
+| `tsp check` | Says what the repository still owes from git, tests, and an optional plan. |
+| `tsp redcheck` | Runs added or changed tests against HEAD's code to identify defect witnesses. |
+| `tsp findings record\|check\|verdict` | Records defect witnesses, checks their state at the next review, or records a verdict. |
+| `tsp probe env [dir] [--json]` | Reports undelivered environment settings (read-only). |
+| `tsp plan upgrade [--run <slug>] [--path <path>]` | Upgrades a plan to the current contract. |
+| `tsp bench adjudicate` | Records or shows decisions for finding rows; undecided rows stay pending. |
 
 ## How the gate decides
 
@@ -435,9 +453,10 @@ node --test assets/hosts/pi/tsp.test.mjs  # the Pi extension's pure surface
 
 Integration tests build the CLI once and drive it with real repositories in temporary
 directories; they are skipped under `-short`. The differential test compares the Go gate with the
-original Node hook when `node` and `~/.claude/hooks/testing-gate.mjs` are present.
+original Node hook only when `node` and the legacy `~/.claude/hooks/testing-gate.mjs` exist;
+it is skipped otherwise.
 
-CI runs that suite on every pull request and on every push to `master`, with `node` installed so the
+CI runs that suite on every pull request and on every push to `main`, with `node` installed so the
 benchmark's JavaScript cases run instead of skipping, and it runs
 `node --test assets/hosts/pi/tsp.test.mjs` for the Pi extension. It checks `gofmt`, `go vet`, the build and
 `go test ./... -count=1` — the same commands `make vet`, `make build` and `make test` run locally.

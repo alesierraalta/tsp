@@ -1,4 +1,4 @@
-tpp
+tsp
 Copyright 2026 Alejandro Sierra Alta
 
 This product includes skill definitions derived from the Gentleman-Programming skills
@@ -17,5 +17,5 @@ required properties, plan contribution sections, two-tier safety gates). The rem
 (exploit-testing, real-run-validation, silent-degradation, implementation-theater,
 dependency-legitimacy, docker-test-containers) and all Go code are original to this repository.
 
-tpp complements gentle-ai (https://github.com/gentleman-programming/gentle-ai); it does not
+tsp complements gentle-ai (https://github.com/gentleman-programming/gentle-ai); it does not
 include, modify, or replace any part of it.
