@@ -45,7 +45,7 @@ func (c CatchResult) Count() int {
 
 var (
 	testPathRe    = regexp.MustCompile(`(^|/)(tests?|__tests__|spec)/|(_test\.go|\.(test|spec)\.[cm]?[jt]sx?|_spec\.rb|(^|/)test_[^/]*\.py|(^|/)test\.[cm]?js|[-_]test\.[cm]?js|(^|/)test-[^/]*\.[cm]?js)$`)
-	ignoredPathRe = regexp.MustCompile(`(^|/)(\.git|node_modules|vendor|\.atl|\.claude|docs|testdata|\.venv|venv|__pycache__|\.pytest_cache)(/|$)`)
+	ignoredPathRe = regexp.MustCompile(`(^|/)(\.git|node_modules|vendor|\.atl|\.claude|docs|testdata|\.venv|venv|__pycache__|\.pytest_cache|site-packages|dist-packages|__pypackages__)(/|$)`)
 )
 
 // isTestFile recognises the test files of the suites the benchmark runs.

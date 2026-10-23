@@ -1,4 +1,4 @@
-tpp
+tsp
 Copyright 2026 Alejandro Sierra Alta
 
 This product includes skill definitions derived from the Gentleman-Programming skills
@@ -10,12 +10,17 @@ This product includes skill definitions derived from the Gentleman-Programming s
   assets/skills/runtime-reliability-testing
   assets/skills/database-persistence-testing
   assets/skills/clean-architecture-audit
+  assets/skills/go-testing (from the go-testing skill of https://github.com/Gentleman-Programming/gentle-ai)
 
 Those skills were substantially rewritten in this repository (organic state inference, persisted
 non-shrinking plans, evidence contract, contract-class enumeration, survivor-first mutation,
-required properties, plan contribution sections, two-tier safety gates). The remaining skills
-(exploit-testing, real-run-validation, silent-degradation, implementation-theater,
-dependency-legitimacy, docker-test-containers) and all Go code are original to this repository.
+required properties, plan contribution sections, two-tier safety gates; go-testing was rewritten
+around races, leaks, order dependence, fuzzing and deterministic time). The remaining skills
+(agent-eval, breakcheck, contract-compat-testing, crash-and-process-testing,
+dependency-legitimacy, docker-test-containers, exploit-testing, iac-safe-auditor,
+implementation-theater, llm-eval-design, llm-redteam, messaging-eventdriven-testing,
+python-testing-patterns, rag-audit-evaluator, real-run-validation, resilience-fault-injection,
+silent-degradation, test-strategy-verifier) and all Go code are original to this repository.
 
-tpp complements gentle-ai (https://github.com/gentleman-programming/gentle-ai); it does not
-include, modify, or replace any part of it.
+tsp complements gentle-ai (https://github.com/gentleman-programming/gentle-ai); apart from the
+go-testing skill definition attributed above, it does not include, modify, or replace any part of it.

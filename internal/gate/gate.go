@@ -30,6 +30,8 @@ var excludedDirs = map[string]bool{
 	"fixture": true, "fixtures": true, "eval": true, "evals": true,
 	"node_modules": true, "vendor": true, "dist": true, "build": true, "target": true,
 	".venv": true, "venv": true, ".cache": true, ".claude": true,
+	// Installed Python packages, whatever the environment holding them is called (env, .conda, .tox/py313).
+	"site-packages": true, "dist-packages": true, "__pypackages__": true,
 }
 
 var (

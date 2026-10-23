@@ -105,10 +105,17 @@ flags for setup and doctor:
                        runtime integration signal exists), standalone, or gentle (refused as
                        pending integration), resolved before any work runs
 
-bench run [--cases <glob>] [--runner pi|claude] [--model <m>] [--runs N] [--rounds N] [--fix-loop] [--max-turns N] [--timeout 30m]
+bench run [--cases <glob>] [--runner pi|claude|codex|agy] [--model <m>] [--runs N] [--rounds N] [--fix-loop] [--max-turns N] [--timeout 30m]
           [--max-cost-usd N] [--out <dir>] [--bench-dir <dir>] [--dry-run] [--keep]
-          [--retries N] [--retry-delay 60s] [--agent-config bench|<dir>] [--concurrency N]
+          [--retries N] [--retry-delay 60s] [--agent-config bench|bench-all|none|<dir>] [--concurrency N]
+          [--sessions N] [--prompt <instruction>] [--escalate-model <m>]
           (--cases accepts comma-separated patterns)
+          (--sessions: independent reviews retaining tests and applying reference fixes between sessions;
+           above 1 excludes explicit --rounds, --escalate-model and --fix-loop)
+          (--prompt replaces every arm's instruction; --escalate-model retries from a fresh workspace
+           when redcheck finds no witness; must differ from --model and excludes --rounds above 1 and --fix-loop)
+          (--agent-config bench-all loads every embedded skill, pi only; none is the bare baseline
+           for pi, agy and codex, and codex's only mode; agy accepts only bench or none)
           (--model is a name for claude and <provider>/<model>[:<thinking>] for pi; --runner pi
            builds a throwaway agent dir under --out unless --agent-config names one)
 bench score --case <dir> --workspace <ws>
@@ -1120,6 +1127,9 @@ func runRedcheck(args []string) int {
 	}
 	for _, name := range rep.PinsNothing {
 		fmt.Println("passes on the unmodified code:", name)
+	}
+	for _, u := range rep.Uncollected {
+		fmt.Printf("could not collect: %s (%s)\n", u.File, u.Reason)
 	}
 	switch {
 	case len(rep.Red) == 0 && len(rep.PinsNothing) == 0:

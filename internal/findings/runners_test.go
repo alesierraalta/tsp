@@ -13,6 +13,19 @@ import (
 	"github.com/alesierraalta/tsp/internal/findings"
 )
 
+func TestPytestCollectionDiagnosticsAreReported(t *testing.T) {
+	if out, err := exec.Command("python3", "-m", "pytest", "--version").CombinedOutput(); err != nil {
+		t.Skipf("pytest unavailable: %s", out)
+	}
+	d := repo(t)
+	put(t, d, "test_good.py", "def test_red():\n    assert False\n")
+	put(t, d, "test_bad.py", "import tsp_missing_dependency_123456\n")
+	out, code := findings.Record(d, "", wait)
+	if code != 0 || !strings.Contains(out, "recorded test_good.py test_good.py::test_red") || !strings.Contains(out, "could not collect: test_bad.py (ModuleNotFoundError: No module named 'tsp_missing_dependency_123456')\n") || strings.Contains(out, "recorded test_bad.py") {
+		t.Fatalf("record: %d %s", code, out)
+	}
+}
+
 func TestCargoInlineWitnessIsReported(t *testing.T) {
 	if _, err := exec.LookPath("cargo"); err != nil {
 		t.Skip("cargo unavailable")

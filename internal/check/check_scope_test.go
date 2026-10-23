@@ -70,6 +70,23 @@ func TestCheckScopedPathsIgnoreThePlanTargets(t *testing.T) {
 	}
 }
 
+// The tests that settle a scoped change are named like the changed source: a host reads this answer
+// through a bounded pipe, so a change carrying hundreds of tests must not print every one of them.
+func TestCheckScopedPathsCapTheTestsNamed(t *testing.T) {
+	entries := []string{" M src/app.js"}
+	for i := 1; i <= MaxNamed+2; i++ {
+		entries = append(entries, "?? tests/t"+string(rune('0'+i))+".test.js")
+	}
+	repo := &fakeRepo{root: "/r", status: porcelain(entries...), plan: owing}
+	deps := repo.deps()
+	deps.Paths = []string{"src/app.js"}
+	res := Run(".", deps)
+	want := "a test was added or changed with it: tests/t1.test.js, tests/t2.test.js, tests/t3.test.js, tests/t4.test.js, tests/t5.test.js, tests/t6.test.js and 2 more"
+	if res.Exit != 0 || !strings.Contains(res.Text, want) {
+		t.Fatalf("exit %d, want 0 with %q:\n%s", res.Exit, want, res.Text)
+	}
+}
+
 // A --paths name that is neither a file in the working tree nor a path git status shows is a
 // mistake, and answering "nothing to check" for it would hide the very debt the caller asked
 // about: the check refuses it by name instead. A legacy comma-joined value reaches this guard and

@@ -2,7 +2,7 @@
 
 ## Candidate identity
 
-- Project/root: `rdd-plus` at worktree `/home/alesierraalta/documents/projects/rdd-plus-worktrees/109-scorer-read-error`
+- Project/root: `rdd-plus` at worktree `../rdd-plus-worktrees/109-scorer-read-error`
 - Execution label: `breakcheck-109-read-error-2026-09-18`
 - Candidate: the working tree of `fix/109-scorer-read-error` — base `cca8254`, five tracked modified files (`internal/bench/adjudication.go`, `score.go`, `score_test.go`, `bench/README.md`, `docs/testing/dogfooding-log.md`) plus this report. Uncommitted at campaign time. The change carries two things: the #109 read-failure note, and the repair of the guard `master` lost when #107's commit omitted `adjudication.go`.
 - Scope: the note a failed plan read produces, its interaction with the #106 declaration note, and the refusal contract shared by the two scorers. Not claimed: scoring, matching, the corpus, or `rescore`'s own resolution logic.

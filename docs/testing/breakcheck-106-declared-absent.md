@@ -2,7 +2,7 @@
 
 ## Candidate identity
 
-- Project/root: `rdd-plus` at worktree `/home/alesierraalta/documents/projects/rdd-plus-worktrees/106-declared-absent-note`
+- Project/root: `rdd-plus` at worktree `../rdd-plus-worktrees/106-declared-absent-note`
 - Execution label: `breakcheck-106-declared-absent-2026-09-18`
 - Candidate: the working tree of `fix/106-declared-absent-note` — base `118de15`, four modified files (`internal/bench/score.go`, `adjudication.go`, `score_test.go`, `bench/README.md`), uncommitted at campaign time.
 - Scope: the missing-plan note the change introduces, its interaction with the refusal note and with the two scoring functions. Not claimed: scoring, matching, the corpus, `rescore`, or the kept copy.

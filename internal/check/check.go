@@ -243,7 +243,7 @@ func scopedVerdict(cwd, root string, changed, all, deleted []string, d Deps) Res
 		return Result{Exit: 1, Files: in, Text: line + "\n" + noWitnessDebt}
 	}
 	sort.Strings(tests)
-	return Result{Files: in, Text: line + "\n" + "a test was added or changed with it: " + strings.Join(tests, ", ")}
+	return Result{Files: in, Text: line + "\n" + "a test was added or changed with it: " + capNames(tests)}
 }
 
 // outside reports a repository-relative path that leaves the repository.
@@ -436,13 +436,15 @@ func ignoredPlanWarning(root, path string, d Deps) string {
 }
 
 func changedLine(files []string) string {
-	shown := files
-	extra := ""
-	if len(files) > MaxNamed {
-		shown = files[:MaxNamed]
-		extra = fmt.Sprintf(" and %d more", len(files)-MaxNamed)
+	return fmt.Sprintf("%d production source file(s) changed: %s", len(files), capNames(files))
+}
+
+// capNames lists at most MaxNamed paths and counts the rest: a host reads the answer through a bounded pipe.
+func capNames(paths []string) string {
+	if len(paths) <= MaxNamed {
+		return strings.Join(paths, ", ")
 	}
-	return fmt.Sprintf("%d production source file(s) changed: %s%s", len(files), strings.Join(shown, ", "), extra)
+	return fmt.Sprintf("%s and %d more", strings.Join(paths[:MaxNamed], ", "), len(paths)-MaxNamed)
 }
 
 func gitAt(dir string, args ...string) (string, error) {

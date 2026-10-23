@@ -35,7 +35,7 @@ test("observation protocol matches Go literals; registered commands invoke the s
   assert.match(calls[0].options.description, /tsp/);
   const executions = [];
   const execFileMock = mock.method(childProcess, "execFile", (file, args, options, callback) => {
-    executions.push({ file, args, cwd: options.cwd });
+    executions.push({ file, args, cwd: options.cwd, maxBuffer: options.maxBuffer });
     callback(null, "ok\\n", "");
     return {};
   });
@@ -56,9 +56,10 @@ test("observation protocol matches Go literals; registered commands invoke the s
     invocations.push({ name, notifications: rec.rec.notify, status: rec.rec.status });
   }
   assert.deepEqual(invocations.map(({ name }) => name), ["tsp", "tpp"]);
+  // Node's default 1 MiB stdout limit kills a long answer with "stdout maxBuffer length exceeded".
   assert.deepEqual(executions, [
-    { file: "tsp", args: ["check", "--cwd", "/w"], cwd: "/w" },
-    { file: "tsp", args: ["check", "--cwd", "/w"], cwd: "/w" },
+    { file: "tsp", args: ["check", "--cwd", "/w"], cwd: "/w", maxBuffer: 64 * 1024 * 1024 },
+    { file: "tsp", args: ["check", "--cwd", "/w"], cwd: "/w", maxBuffer: 64 * 1024 * 1024 },
   ]);
   for (const { notifications, status } of invocations) {
     assert.deepEqual(notifications, [{ message: "ok\\n", type: "info" }]);

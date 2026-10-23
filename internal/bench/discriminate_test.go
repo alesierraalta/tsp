@@ -178,9 +178,12 @@ func TestDiscriminateMultiDefectWithoutKeepVariantIsUncheckable(t *testing.T) {
 func TestIsTestFile(t *testing.T) {
 	yes := []string{"tests/a.sh", "test/x.js", "__tests__/y.tsx", "src/a.test.js", "src/a.spec.ts", "pkg/a_test.go", "spec/z_spec.rb", "tests/test_x.py",
 		// node --test runs these by default, so a suite may keep its tests in them.
-		"test.js", "pkg/test.mjs", "src/a-test.js", "src/a_test.cjs", "src/test-a.js"}
+		"test.js", "pkg/test.mjs", "src/a-test.js", "src/a_test.cjs", "src/test-a.js", "backend/tests/test_core.py"}
 	no := []string{"src/a.js", "config.go", "docs/testing/test-plan.md", "node_modules/x/test/a.js", ".git/hooks/test", "testdata/a.txt",
-		"src/latest.js", "src/contest.js", "src/testing.js"}
+		"src/latest.js", "src/contest.js", "src/testing.js",
+		// An installed package's own tests, whatever the environment holding them is called.
+		".conda/lib/python3.13/site-packages/pkg/tests/test_x.py", "env/lib/python3.13/site-packages/pkg/test_y.py",
+		"x/dist-packages/pkg/tests/test_z.py", "__pypackages__/3.13/lib/p/tests/test_m.py"}
 	for _, p := range yes {
 		if !isTestFile(p) {
 			t.Errorf("%s should be a test file", p)

@@ -49,7 +49,7 @@ func perTestCommand(suite string) (argv []string, parser func(string) map[string
 		return append(fields[:2:2], append([]string{"-json"}, fields[2:]...)...), parseGoJSON, nil
 	case fields[0] == "pytest":
 		return append(fields[:1:1], append(pytestFlags(), fields[1:]...)...), parsePytest, nil
-	case strings.HasPrefix(fields[0], "python") && len(fields) > 2 && fields[1] == "-m" && fields[2] == "pytest":
+	case len(fields) > 2 && fields[1] == "-m" && fields[2] == "pytest":
 		return append(fields[:3:3], append(pytestFlags(), fields[3:]...)...), parsePytest, nil
 	}
 	return fields, nil, nil
@@ -59,7 +59,10 @@ func perTestCommand(suite string) (argv []string, parser func(string) map[string
 func runCapture(dir string, argv []string, timeout time.Duration) (int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	argv = suiteArgv(dir, argv)
+	// A repository interpreter under /tmp must remain visible in staged runs.
+	if len(argv) == 0 || !filepath.IsAbs(argv[0]) || !underTmp(filepath.Dir(argv[0])) {
+		argv = suiteArgv(dir, argv)
+	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
@@ -242,7 +245,7 @@ func perTest(dir, suite string, timeout time.Duration, testFiles ...string) (map
 		argv = withTestPackages(argv, testFiles)
 	} else if argv[0] == "pytest" {
 		argv = withPythonTestFiles(dir, argv, testFiles, 1)
-	} else if strings.HasPrefix(argv[0], "python") && len(argv) > 2 && argv[1] == "-m" && argv[2] == "pytest" {
+	} else if len(argv) > 2 && argv[1] == "-m" && argv[2] == "pytest" {
 		argv = withPythonTestFiles(dir, argv, testFiles, 3)
 	}
 	code, out := runCapture(dir, argv, timeout)
@@ -330,7 +333,46 @@ func parseTAP(out string) map[string]bool {
 }
 
 // pytestFlags ask pytest for one summary line per test (-rA) and keep its cache out of the tree it runs in.
-func pytestFlags() []string { return []string{"-rA", "-p", "no:cacheprovider"} }
+func pytestFlags() []string {
+	return []string{"-rA", "-p", "no:cacheprovider", "--continue-on-collection-errors"}
+}
+
+// Uncollected identifies a pytest file that never produced a test verdict.
+type Uncollected struct {
+	File   string `json:"file"`
+	Reason string `json:"reason"`
+}
+
+func pytestUncollected(out string) []Uncollected {
+	var result []Uncollected
+	seen := map[string]bool{}
+	reasons := map[string]string{}
+	current := ""
+	for _, line := range strings.Split(out, "\n") {
+		if at := strings.Index(line, "ERROR collecting "); at >= 0 {
+			current = strings.Trim(strings.TrimSpace(line[at+len("ERROR collecting "):]), "_ ")
+		}
+		if current != "" && strings.HasPrefix(line, "E   ") && reasons[current] == "" {
+			reasons[current] = strings.TrimSpace(strings.TrimPrefix(line, "E   "))
+		}
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "ERROR ") {
+			continue
+		}
+		file, reason, _ := strings.Cut(strings.TrimPrefix(line, "ERROR "), " - ")
+		file = strings.TrimSpace(file)
+		if !strings.HasSuffix(file, ".py") || strings.Contains(file, "::") || seen[file] {
+			continue
+		}
+		seen[file] = true
+		if reason == "" {
+			reason = reasons[file]
+		}
+		result = append(result, Uncollected{File: file, Reason: strings.TrimSpace(reason)})
+	}
+	return result
+}
 
 var pytestLine = regexp.MustCompile(`^(PASSED|FAILED) (\S+::\S+)`)
 

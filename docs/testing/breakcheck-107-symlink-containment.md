@@ -2,7 +2,7 @@
 
 ## Candidate identity
 
-- Project/root: `rdd-plus` at worktree `/home/alesierraalta/documents/projects/rdd-plus-worktrees/107-symlink-containment`
+- Project/root: `rdd-plus` at worktree `../rdd-plus-worktrees/107-symlink-containment`
 - Execution label: `breakcheck-107-symlink-containment-2026-09-18`
 - Candidate: the working tree of `fix/107-symlink-containment` — base `7d10868`. Six source files plus two documents: `internal/bench/score.go`, `adjudication.go`, `run.go`, `linked_test.go`, `score_test.go`, `bench/README.md`, this report and `docs/testing/dogfooding-log.md`. Uncommitted at campaign time; the campaign itself ran against the four files the change then held, before the fixes the verification rounds produced.
 - Scope: the containment guard the change introduces and the resolution paths it now refuses. Not claimed: scoring, matching, the corpus, `rescore`, or the corpus scaffolding.
