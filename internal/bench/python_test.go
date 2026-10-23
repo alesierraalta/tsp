@@ -10,6 +10,67 @@ import (
 	"time"
 )
 
+func TestInferredPytestUsesVenv(t *testing.T) {
+	if out, err := exec.Command("python3", "-m", "pytest", "--version").CombinedOutput(); err != nil {
+		t.Skipf("pytest unavailable: %s", out)
+	}
+	dir := redCheckRepo(t)
+	venv := filepath.Join(dir, "backend", ".venv")
+	if out, err := exec.Command("python3", "-m", "venv", "--system-site-packages", venv).CombinedOutput(); err != nil {
+		t.Fatalf("venv: %v: %s", err, out)
+	}
+	python := filepath.Join(venv, "bin", "python")
+	if out, err := exec.Command(python, "-c", "import sysconfig,pathlib; pathlib.Path(sysconfig.get_path('purelib'), 'tsp_venv_only.py').write_text('value = 42\\n')").CombinedOutput(); err != nil {
+		t.Fatalf("package: %v: %s", err, out)
+	}
+	writeFile(t, dir, "backend/test_venv.py", "import tsp_venv_only\ndef test_venv():\n    assert tsp_venv_only.value == 0\n")
+	rep, err := RedCheck(dir, "", 30*time.Second)
+	if err != nil || !strings.Contains(rep.Suite, python) || !reflect.DeepEqual(rep.Red, []string{"backend/test_venv.py::test_venv"}) {
+		t.Fatalf("venv inference: report=%+v err=%v", rep, err)
+	}
+}
+
+func TestPytestJudgesWhatCollects(t *testing.T) {
+	if out, err := exec.Command("python3", "-m", "pytest", "--version").CombinedOutput(); err != nil {
+		t.Skipf("pytest unavailable: %s", out)
+	}
+	dir := redCheckRepo(t)
+	writeFile(t, dir, "test_good.py", "def test_red():\n    assert False\n")
+	writeFile(t, dir, "test_bad.py", "import tsp_missing_dependency_123456\n")
+	rep, err := RedCheck(dir, "", 30*time.Second)
+	if err != nil || !reflect.DeepEqual(rep.Red, []string{"test_good.py::test_red"}) {
+		t.Fatalf("partial collection: report=%+v err=%v", rep, err)
+	}
+	want := []Uncollected{{File: "test_bad.py", Reason: "ModuleNotFoundError: No module named 'tsp_missing_dependency_123456'"}}
+	if !reflect.DeepEqual(rep.Uncollected, want) {
+		t.Fatalf("uncollected=%+v", rep.Uncollected)
+	}
+	// Changed tests are added to explicitly scoped suites, so use a fresh repository
+	// containing only the uncollectable file for the empty-collection diagnostic.
+	empty := redCheckRepo(t)
+	writeFile(t, empty, "test_bad.py", "import tsp_missing_dependency_123456\n")
+	_, err = RedCheck(empty, "", 30*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "could not collect: test_bad.py (ModuleNotFoundError:") || !strings.Contains(err.Error(), `--suite "<venv>/bin/python -m pytest ..."`) {
+		t.Fatalf("empty collection: %v", err)
+	}
+}
+
+func TestPytestEnvironmentChoice(t *testing.T) {
+	dir := t.TempDir()
+	for _, env := range []string{"aaa", "backend/a-env", "backend/z-env", "backend/deep/env", "node_modules/env", ".git/env", "too/deep/to/find/env"} {
+		writeFile(t, dir, env+"/pyvenv.cfg", "home = python\n")
+		writeFile(t, dir, env+"/bin/python", "")
+	}
+	got, err := inferRedCheckSuite(dir, []string{"backend/test_sample.py"})
+	if err != nil || !strings.Contains(got, filepath.Join(dir, "backend/a-env/bin/python")) {
+		t.Fatalf("nearest then lexical: %q %v", got, err)
+	}
+	fallback, err := inferRedCheckSuite(t.TempDir(), []string{"test_sample.py"})
+	if err != nil || fallback != "python3 -m pytest test_sample.py" {
+		t.Fatalf("fallback: %q %v", fallback, err)
+	}
+}
+
 func TestKeyPythonLanguage(t *testing.T) {
 	for _, language := range []string{"python", "node", "go", "ruby"} {
 		k := Key{ID: "languages", Language: language, Suite: "pytest", Control: ControlClean}

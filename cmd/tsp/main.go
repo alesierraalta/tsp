@@ -1128,6 +1128,9 @@ func runRedcheck(args []string) int {
 	for _, name := range rep.PinsNothing {
 		fmt.Println("passes on the unmodified code:", name)
 	}
+	for _, u := range rep.Uncollected {
+		fmt.Printf("could not collect: %s (%s)\n", u.File, u.Reason)
+	}
 	switch {
 	case len(rep.Red) == 0 && len(rep.PinsNothing) == 0:
 		fmt.Println("no new test was found in the changed files, so no defect is pinned.")

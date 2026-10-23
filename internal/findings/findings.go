@@ -164,8 +164,12 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if rep.Suite != "" && !bench.SupportsPerTest(rep.Suite) {
 		return failure(unsupportedRunner)
 	}
+	var diagnostics strings.Builder
+	for _, file := range rep.Uncollected {
+		fmt.Fprintf(&diagnostics, "could not collect: %s (%s)\n", file.File, file.Reason)
+	}
 	if len(rep.Red) == 0 {
-		return "no defect witnesses recorded\n", 1
+		return diagnostics.String() + "no defect witnesses recorded\n", 1
 	}
 	commit, e := git(top, "rev-parse", "HEAD")
 	if e != nil {
@@ -206,12 +210,12 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	// A run with no red witness at all returned above, before locking, exactly as before this change. Reaching
 	// here with nothing recorded means every witness it found lives where git cannot version it.
 	if out.Len() == 0 {
-		return skipped.String() + "nothing recorded: every witness lives under a path git ignores\n", 1
+		return diagnostics.String() + skipped.String() + "nothing recorded: every witness lives under a path git ignores\n", 1
 	}
 	if e = save(r, path); e != nil {
 		return failure(e)
 	}
-	return skipped.String() + out.String(), 0
+	return diagnostics.String() + skipped.String() + out.String(), 0
 }
 
 // SetVerdict records a human decision against the current test fingerprint.

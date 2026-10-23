@@ -100,3 +100,47 @@ func TestRedcheckExitCodesAndReport(t *testing.T) {
 		})
 	}
 }
+
+// A test file pytest cannot import gives no verdict: the witnesses that did collect still judge the change,
+// and the file that did not is named with its reason instead of hiding behind a failed run.
+func TestRedcheckNamesAFilePytestCouldNotCollect(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the CLI and runs pytest")
+	}
+	if err := exec.Command("python3", "-m", "pytest", "--version").Run(); err != nil {
+		t.Skip("pytest not installed")
+	}
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, rel), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("calc.py", "def add(a, b):\n    return a - b\n")
+	for _, args := range [][]string{
+		{"init", "-q"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"},
+		{"add", "-A"}, {"commit", "-qm", "base"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write("tests/test_calc.py", "from calc import add\n\ndef test_add():\n    assert add(2, 2) == 4\n")
+	write("tests/test_db.py", "import tsp_missing_module\n\ndef test_db():\n    pass\n")
+	code, out := runRedcheckCLI(t, bin, dir)
+	for _, want := range []string{
+		"fails on the unmodified code: tests/test_calc.py::test_add",
+		"could not collect: tests/test_db.py (ModuleNotFoundError: No module named 'tsp_missing_module')",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if code != 0 {
+		t.Errorf("exit %d, want 0 (a witness exists):\n%s", code, out)
+	}
+}

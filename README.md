@@ -541,8 +541,11 @@ witness `tsp redcheck` finds), by a waiver for this change, or by `.no-testing-g
 root. `tsp check --no-test-needed "<reason>"` records the waiver in `.tsp-waiver.json`: the reason and a
 fingerprint of the changed production files. Commit it with the change so the reviewer sees why there
 is no test; editing the code again voids it, and it is refused when a plan exists. How to run the changed
-tests is inferred for Go (`go test` on their packages), Python (`python3 -m pytest` on the changed
-`.py` tests) and Node (`node --test`). When `package.json`'s `scripts.test` starts with
+tests is inferred for Go (`go test` on their packages), Python (`<interpreter> -m pytest` on the changed
+`.py` tests) and Node (`node --test`). The Python interpreter is that of the repository's virtual
+environment nearest the changed tests (a directory holding `pyvenv.cfg`), else `python3`, and the printed
+suite names it. A test file pytest cannot import is reported as `could not collect: <file> (<reason>)`
+and is never counted as a witness; the tests that did collect are still judged. When `package.json`'s `scripts.test` starts with
 `jest` or `vitest` (optionally through `npx`), infer `npx jest` or `npx vitest run`
 on the changed files instead. Other runners, including Cargo, need `--suite`. When the tests cannot be run one
 by one, check fails instead of guessing.

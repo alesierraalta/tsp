@@ -21,10 +21,11 @@ import (
 // RedCheckReport is what the red check found: which test files the agent added or changed, and which of the
 // tests they introduce fail on the unmodified code (a witness) or pass there (they pin nothing).
 type RedCheckReport struct {
-	Suite       string   `json:"suite"`
-	TestFiles   []string `json:"test_files"`
-	Red         []string `json:"red"`
-	PinsNothing []string `json:"pins_nothing"`
+	Suite       string        `json:"suite"`
+	Uncollected []Uncollected `json:"uncollected,omitempty"`
+	TestFiles   []string      `json:"test_files"`
+	Red         []string      `json:"red"`
+	PinsNothing []string      `json:"pins_nothing"`
 }
 
 // RedCheck runs the tests added or changed in the repository holding dir against the code its HEAD commit
@@ -125,10 +126,19 @@ func RedCheck(dir, suite string, timeout time.Duration) (RedCheckReport, error) 
 	if err != nil {
 		return rep, err
 	}
+	rep.Uncollected = pytestUncollected(out)
 	// Without one outcome per test name (a build failure, a runner the parser cannot read) nothing is known about
 	// any single test, and a failed build must never read as a red witness.
 	if _, wholeSuite := after["suite"]; len(after) == 0 || (len(after) == 1 && wholeSuite) {
-		return rep, fmt.Errorf("the changed tests could not be run test by test with %q: %s", suite, tail(out, 600))
+		detail := tail(out, 600)
+		if len(rep.Uncollected) > 0 {
+			var diagnostics []string
+			for _, file := range rep.Uncollected {
+				diagnostics = append(diagnostics, "could not collect: "+file.File+" ("+file.Reason+")")
+			}
+			detail = strings.Join(diagnostics, "; ") + `; select the project environment with --suite "<venv>/bin/python -m pytest ..."`
+		}
+		return rep, fmt.Errorf("the changed tests could not be run test by test with %q: %s", suite, detail)
 	}
 	for name, passed := range after {
 		if newParentCovers(after, before, name) {
@@ -218,7 +228,7 @@ func inferRedCheckSuite(root string, files []string) (string, error) {
 		}
 	}
 	if len(py) > 0 {
-		return "python3 -m pytest " + strings.Join(py, " "), nil
+		return pytestInterpreter(root, py) + " -m pytest " + strings.Join(py, " "), nil
 	}
 	if data, err := os.ReadFile(filepath.Join(root, "package.json")); err == nil {
 		var pkg struct{ Scripts map[string]string }
@@ -241,6 +251,56 @@ func inferRedCheckSuite(root string, files []string) (string, error) {
 		return "node --test " + strings.Join(files, " "), nil
 	}
 	return "", errors.New("cannot infer how to run the changed tests: pass --suite")
+}
+
+// pytestInterpreter uses the nearest repository environment, keeping its absolute path
+// because the red check runs against extracted trees without the environment itself.
+func pytestInterpreter(root string, files []string) string {
+	best, bestDistance := "", int(^uint(0)>>1)
+	_ = filepath.WalkDir(root, func(p string, entry os.DirEntry, err error) error {
+		if err != nil || !entry.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, p)
+		depth := 0
+		if rel != "." {
+			depth = len(strings.Split(rel, string(filepath.Separator)))
+		}
+		if entry.Name() == ".git" || entry.Name() == "node_modules" || depth > 3 {
+			return filepath.SkipDir
+		}
+		if _, err := os.Stat(filepath.Join(p, "pyvenv.cfg")); err != nil {
+			return nil
+		}
+		for _, binary := range []string{"bin/python", "Scripts/python.exe"} {
+			candidate := filepath.Join(p, filepath.FromSlash(binary))
+			if st, err := os.Stat(candidate); err != nil || st.IsDir() {
+				continue
+			}
+			distance := int(^uint(0) >> 1)
+			for _, file := range files {
+				r, err := filepath.Rel(filepath.Dir(filepath.Join(root, file)), p)
+				if err != nil {
+					continue
+				}
+				d := 0
+				if r != "." {
+					d = len(strings.Split(r, string(filepath.Separator)))
+				}
+				if d < distance {
+					distance = d
+				}
+			}
+			if distance < bestDistance || (distance == bestDistance && (best == "" || candidate < best)) {
+				best, bestDistance = candidate, distance
+			}
+		}
+		return filepath.SkipDir
+	})
+	if best == "" {
+		return "python3"
+	}
+	return "\"" + strings.ReplaceAll(strings.ReplaceAll(best, "\\", "\\\\"), "\"", "\\\"") + "\""
 }
 
 // extractHead writes the files HEAD records into dst, the code the agent's edits must not decide the verdict.
