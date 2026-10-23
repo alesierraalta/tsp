@@ -139,24 +139,23 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    new([New machine]) --> choice{Go available?}
-    choice -- no --> bin[curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh sh<br/>verifies the release checksum, installs to ~/.local/bin]
-    choice -- yes --> goinstall[go install github.com/alesierraalta/tsp/cmd/tsp@latest]
-    bin --> setup[tsp setup<br/>skills into every discovered host, Stop hook into Claude]
+    new([New machine]) --> choice{Go toolchain?}
+    choice -- no --> bin[one-line installer<br/>checksum verified, installs to ~/.local/bin]
+    choice -- yes --> goinstall[go install cmd/tsp@latest]
+    bin --> setup[tsp setup<br/>skills into every host, Stop hook into Claude]
     goinstall --> setup
     setup --> doctor{tsp doctor}
-    doctor -- healthy --> use([Ready])
     doctor -- "action required" --> setup
-    use --> binupdate[re-run the one-liner<br/>binary users]
-    use --> goupdate[tsp update<br/>Go users]
-    binupdate --> setup
-    goupdate --> setup
-    old([Machine with rdd-plus 0.3.x]) --> bridge[rdd-plus update<br/>to the 0.3.20 bridge]
+    doctor -- healthy --> use([Ready])
+    old([Machine already running<br/>rdd-plus 0.3.x]) --> bridge[rdd-plus update<br/>moves it to the 0.3.20 bridge]
     bridge --> bridge2[rdd-plus update<br/>installs tpp beside rdd-plus]
-    bridge2 --> tspbridge[tpp update<br/>installs tsp and points tpp at it]
-    tspbridge --> migrate[tsp sync<br/>rewires legacy hooks to tsp,<br/>moves legacy state to ~/.config/tsp]
+    bridge2 --> tspbridge[tpp update<br/>installs tsp, points tpp at it]
+    tspbridge --> migrate[tsp sync<br/>legacy hooks rewired,<br/>state moved to ~/.config/tsp]
     migrate --> doctor
 ```
+
+Staying current later is one command, not a reinstall: binary users re-run the one-liner, and Go users
+run `tsp update`.
 
 ## Install with an agent
 
