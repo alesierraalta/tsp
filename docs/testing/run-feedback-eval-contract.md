@@ -71,8 +71,10 @@ not human grading. Before the run, executor context must state the obligation an
 persistence, the agent gives only a brief acknowledgment; the full retrospective lives outside chat.
 
 Reuse the existing fields: `ts`, `repo`, `plan`, `skill`, `build`, `paid`, `cost`, `reason`, and
-`verdict`, with optional `guess` and `freeform`. Accepted verdicts are `paid`, `partly`, and
-`ceremony`. Self-report is useful evidence, not independent truth.
+`verdict`, with optional `guess` and `freeform`. Accepted verdicts are `paid`, `partly`, `ceremony`, and
+`blocked`; `blocked` means the attempt never executed, so it grades nothing and is counted apart from
+`ceremony`. `skill` names what actually ran, so the template leaves it for the operator and prints the
+emitted identity only as its definition line. Self-report is useful evidence, not independent truth.
 
 The existing top-level CLI placement is:
 

@@ -20,18 +20,23 @@ import (
 	"github.com/alesierraalta/tsp/internal/sanitize"
 )
 
-// Verdicts are the three honest answers to "did the method earn its keep".
+// Verdicts are the honest answers to "did the method earn its keep", plus the one that says the run never
+// got to ask.
 const (
 	VerdictPaid     = "paid"
 	VerdictPartly   = "partly"
 	VerdictCeremony = "ceremony"
+	// VerdictBlocked records an attempt a harness, delegation or tooling failure ended before any probe ran.
+	// It grades nothing about the method: it exists so such a run is not recorded as ceremony, which asserts
+	// cost without a finding, and so the summary keeps the blocker separate instead of folding it into a verdict.
+	VerdictBlocked = "blocked"
 )
 
 // NotGiven is what a required-but-absent field says instead of guessing a value.
 const NotGiven = "(not given)"
 
-// Verdicts lists every accepted verdict in the order a refusal names them.
-var Verdicts = []string{VerdictPaid, VerdictPartly, VerdictCeremony}
+// Verdicts lists every accepted verdict in the order a refusal names them and the summary counts them.
+var Verdicts = []string{VerdictPaid, VerdictPartly, VerdictCeremony, VerdictBlocked}
 
 // Report is one run's feedback, stamped with the run's identity so reports compare across skill
 // versions. Every field is required except Guess and Freeform.
@@ -148,12 +153,16 @@ func Template(r Report) string {
 	}
 	return strings.Join([]string{
 		"# tsp run feedback — what the method cost and what it paid.",
-		"# Fill in paid, cost, reason and verdict. verdict is one of: " + strings.Join(Verdicts, ", ") + ".",
+		"# Fill in skill, paid, cost, reason and verdict. verdict is one of: " + strings.Join(Verdicts, ", ") + ".",
 		"# Submit with: tsp feedback --file <this file>",
 		"ts: " + r.TS,
 		"repo: " + r.Repo,
 		"plan: " + plan,
-		"skill: " + r.Skill,
+		// The identity this binary embeds is a claim about the binary, not about the skill the operator read.
+		// Prefilling it is how a report ends up naming a version nobody ran, so it is a definition line only.
+		"# skill = what actually ran, as <name> or <name> <version>; this build embeds " + r.Skill +
+			" — keep that only if it is what you read",
+		"skill: ",
 		"build: " + r.Build,
 		"# paid = what the method found or proved that the change would otherwise have shipped without; \"nothing\" when it found nothing",
 		"paid: ",
@@ -161,7 +170,7 @@ func Template(r Report) string {
 		"cost: ",
 		"# reason = one line on why the verdict below follows from paid and cost",
 		"reason: ",
-		"# verdict = paid (worth its cost), partly (some steps paid, some were ceremony), or ceremony (cost without a finding)",
+		"# verdict = paid (worth its cost), partly (some steps paid, some were ceremony), ceremony (cost without a finding), or blocked (the attempt never ran, so it grades nothing)",
 		"verdict: ",
 		"# guess = optional: your hunch about the method or the code that this run did not prove",
 		"guess: ",
@@ -361,7 +370,7 @@ func Summary(configDir string) (string, error) {
 		fmt.Fprintf(&b, "  %s: %d\n", v, counts[v])
 	}
 
-	type split struct{ paid, partly, ceremony, unknown int }
+	type split struct{ paid, partly, ceremony, blocked, unknown int }
 	perSkill := map[string]*split{}
 	perProject := map[string]*split{}
 	var skills, projects []string
@@ -389,6 +398,9 @@ func Summary(configDir string) (string, error) {
 		case VerdictCeremony:
 			s.ceremony++
 			p.ceremony++
+		case VerdictBlocked:
+			s.blocked++
+			p.blocked++
 		default:
 			s.unknown++
 			p.unknown++
@@ -401,7 +413,10 @@ func Summary(configDir string) (string, error) {
 
 	writeSplit := func(name string, s *split) {
 		fmt.Fprintf(&b, "  %s: %d (paid %d, partly %d, ceremony %d",
-			name, s.paid+s.partly+s.ceremony+s.unknown, s.paid, s.partly, s.ceremony)
+			name, s.paid+s.partly+s.ceremony+s.blocked+s.unknown, s.paid, s.partly, s.ceremony)
+		if s.blocked > 0 {
+			fmt.Fprintf(&b, ", blocked %d", s.blocked)
+		}
 		if s.unknown > 0 {
 			fmt.Fprintf(&b, ", unknown %d", s.unknown)
 		}
