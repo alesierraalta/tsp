@@ -1,5 +1,8 @@
 # TSP (Test Strategy Planning)
 
+To install: [paste this prompt into your agent](#install-with-an-agent). It installs tsp, runs the
+checks, and reports how it ended — you do not run anything by hand.
+
 A deterministic companion for the testing discipline in Claude Code. It complements gentle-ai; it
 does not replace it. gentle-ai owns the review lifecycle (frozen candidate, refuter, receipts).
 TSP owns what happens before that: a testing flow the model runs and a set of Go binaries
@@ -13,6 +16,92 @@ environment can do so a skill degrades explicitly instead of failing on a tool i
 For benchmark review/fix/review cycles, use `tsp bench run --sessions N`: independent
 sessions keep the agent's tests and apply reference fixes for caught defects between reviews.
 See [benchmark sessions](bench/README.md#independent-review-sessions) for records and constraints.
+
+## Install with an agent
+
+Paste one of these prompts into an agent that has a shell. The prompt is short on purpose: `tsp setup`
+does the install and the checking itself, so the agent only has to run it, read how it ended, and
+report the last line. Every refusal it is told to respect is a real check in the installer.
+
+| You use | Prompt | What you get |
+|---|---|---|
+| Gentle AI (gentle-ai and engram installed) | [With Gentle AI](#with-gentle-ai) | tsp's testing discipline, plus Gentle AI's native review lifecycle with receipts (RDD) after it, and Engram memory across sessions |
+| Neither | [Without Gentle AI](#without-gentle-ai) | tsp's testing discipline on its own. Without gentle-ai there is no native review lifecycle and no receipts; without engram the plan file is the only memory across sessions |
+| Pi | [As a Pi extension](#as-a-pi-extension) | The same install, plus Pi's native `/tsp` command |
+
+tsp works the same in all three: the difference is what else is on the machine, not how tsp behaves.
+
+### Without Gentle AI
+
+```text
+Set up TSP on this machine and prove it works.
+
+1. Run: curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
+   It verifies the release checksum, installs the binary to ~/.local/bin, and runs tsp setup.
+2. Report the exit code and the last three lines. It is done only when the exit code is 0 and the last
+   line reads "tsp is installed and working: ...".
+3. If the shell cannot find tsp afterwards, add the export PATH line the installer printed to the
+   profile file it names, then open a new shell.
+4. If setup exits 1 with "nothing installed: no host found", stop and tell me: this machine has no
+   agent config directory yet, so my agent CLI has to exist first. Then run tsp setup again. Do not
+   create a config directory by hand to make the check pass.
+5. If the checksum does not match, the system is not Linux, or the architecture has no release
+   binary, stop and report which one it was. Do not skip the checksum, pick another version, or use
+   sudo.
+6. On macOS, or when no Linux binary fits this machine, use Go instead:
+   go install github.com/alesierraalta/tsp/cmd/tsp@latest
+   "$(go env GOPATH)/bin/tsp" setup
+Report every command you ran and how each one ended.
+```
+
+### With Gentle AI
+
+```text
+Set up TSP on this machine and prove it works.
+
+1. Run: curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
+   It verifies the release checksum, installs the binary to ~/.local/bin, and runs tsp setup.
+2. Report the exit code and the last three lines. It is done only when the exit code is 0 and the last
+   line reads "tsp is installed and working: ...".
+3. Gentle AI is already installed here. In the setup output, confirm gentle-ai and engram are listed
+   as present, and tell me what the native review lifecycle adds on top of tsp's testing discipline.
+4. If setup exits 1 with "nothing installed: no host found", stop and tell me which agent config
+   directory is missing, then run tsp setup again once it exists. Do not create it by hand.
+5. If the checksum does not match, the system is not Linux, or the architecture has no release
+   binary, stop and report which one it was. Do not skip the checksum, pick another version, or use
+   sudo.
+6. On macOS, or when no Linux binary fits this machine, use Go instead:
+   go install github.com/alesierraalta/tsp/cmd/tsp@latest
+   "$(go env GOPATH)/bin/tsp" setup
+Report every command you ran and how each one ended.
+```
+
+### As a Pi extension
+
+Pi is never discovered: `setup` leaves it alone and only `sync --hosts pi` installs it.
+
+```text
+Set up TSP on this machine and add its Pi extension.
+
+1. Run: curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
+   It verifies the release checksum, installs the binary to ~/.local/bin, and runs tsp setup.
+2. Then run: tsp sync --hosts pi
+   That installs the extension only; it is the one command that targets Pi.
+3. Report the exit code and last lines of both commands, and confirm the file it wrote at
+   ~/.pi/agent/extensions/tpp/index.ts.
+4. If a command refuses, report its exact message. Do not pass --force, and do not copy files into
+   the Pi directories by hand.
+Report every command you ran and how each one ended.
+```
+
+### Then, in a repository
+
+Setup changes the machine, not a repository. Once it is done, this is what a project needs:
+
+```text
+In this repository, run tsp check and tell me what the tests still owe: which changed production
+files have no test, and what the plan is missing. Change nothing yet.
+```
 
 ## Probe undelivered environment settings
 
@@ -156,92 +245,6 @@ flowchart TD
 
 Staying current later is one command, not a reinstall: binary users re-run the one-liner, and Go users
 run `tsp update`.
-
-## Install with an agent
-
-Paste one of these prompts into an agent that has a shell. The prompt is short on purpose: `tsp setup`
-does the install and the checking itself, so the agent only has to run it, read how it ended, and
-report the last line. Every refusal it is told to respect is a real check in the installer.
-
-| You use | Prompt | What you get |
-|---|---|---|
-| Gentle AI (gentle-ai and engram installed) | [With Gentle AI](#with-gentle-ai) | tsp's testing discipline, plus Gentle AI's native review lifecycle with receipts (RDD) after it, and Engram memory across sessions |
-| Neither | [Without Gentle AI](#without-gentle-ai) | tsp's testing discipline on its own. Without gentle-ai there is no native review lifecycle and no receipts; without engram the plan file is the only memory across sessions |
-| Pi | [As a Pi extension](#as-a-pi-extension) | The same install, plus Pi's native `/tsp` command |
-
-tsp works the same in all three: the difference is what else is on the machine, not how tsp behaves.
-
-### Without Gentle AI
-
-```text
-Set up TSP on this machine and prove it works.
-
-1. Run: curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
-   It verifies the release checksum, installs the binary to ~/.local/bin, and runs tsp setup.
-2. Report the exit code and the last three lines. It is done only when the exit code is 0 and the last
-   line reads "tsp is installed and working: ...".
-3. If the shell cannot find tsp afterwards, add the export PATH line the installer printed to the
-   profile file it names, then open a new shell.
-4. If setup exits 1 with "nothing installed: no host found", stop and tell me: this machine has no
-   agent config directory yet, so my agent CLI has to exist first. Then run tsp setup again. Do not
-   create a config directory by hand to make the check pass.
-5. If the checksum does not match, the system is not Linux, or the architecture has no release
-   binary, stop and report which one it was. Do not skip the checksum, pick another version, or use
-   sudo.
-6. On macOS, or when no Linux binary fits this machine, use Go instead:
-   go install github.com/alesierraalta/tsp/cmd/tsp@latest
-   "$(go env GOPATH)/bin/tsp" setup
-Report every command you ran and how each one ended.
-```
-
-### With Gentle AI
-
-```text
-Set up TSP on this machine and prove it works.
-
-1. Run: curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
-   It verifies the release checksum, installs the binary to ~/.local/bin, and runs tsp setup.
-2. Report the exit code and the last three lines. It is done only when the exit code is 0 and the last
-   line reads "tsp is installed and working: ...".
-3. Gentle AI is already installed here. In the setup output, confirm gentle-ai and engram are listed
-   as present, and tell me what the native review lifecycle adds on top of tsp's testing discipline.
-4. If setup exits 1 with "nothing installed: no host found", stop and tell me which agent config
-   directory is missing, then run tsp setup again once it exists. Do not create it by hand.
-5. If the checksum does not match, the system is not Linux, or the architecture has no release
-   binary, stop and report which one it was. Do not skip the checksum, pick another version, or use
-   sudo.
-6. On macOS, or when no Linux binary fits this machine, use Go instead:
-   go install github.com/alesierraalta/tsp/cmd/tsp@latest
-   "$(go env GOPATH)/bin/tsp" setup
-Report every command you ran and how each one ended.
-```
-
-### As a Pi extension
-
-Pi is never discovered: `setup` leaves it alone and only `sync --hosts pi` installs it.
-
-```text
-Set up TSP on this machine and add its Pi extension.
-
-1. Run: curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | sh
-   It verifies the release checksum, installs the binary to ~/.local/bin, and runs tsp setup.
-2. Then run: tsp sync --hosts pi
-   That installs the extension only; it is the one command that targets Pi.
-3. Report the exit code and last lines of both commands, and confirm the file it wrote at
-   ~/.pi/agent/extensions/tpp/index.ts.
-4. If a command refuses, report its exact message. Do not pass --force, and do not copy files into
-   the Pi directories by hand.
-Report every command you ran and how each one ended.
-```
-
-### Then, in a repository
-
-Setup changes the machine, not a repository. Once it is done, this is what a project needs:
-
-```text
-In this repository, run tsp check and tell me what the tests still owe: which changed production
-files have no test, and what the plan is missing. Change nothing yet.
-```
 
 ## Install
 
@@ -738,10 +741,16 @@ tsp feedback --summary           # counts per verdict and per skill version, plu
 tsp feedback                     # no flags: the summary, the cheapest path to the answer
 ```
 
-One report is `paid`, `cost`, `reason`, and a `verdict` of `paid`, `partly`, or `ceremony`; `guess`
-and `freeform` are optional. The template defines each field on a comment line above it: `paid` is what
-the method found or proved, not whether paid services were called. A report that repeats the repository,
-plan and verdict of the last report within 30 minutes is still recorded, with a warning on stderr. The `skill` field names what actually ran as `<name>` or `<name> <version>`; for example, a breakcheck run records `breakcheck <its version>`. Each report appends one JSON line to
+One report is `paid`, `cost`, `reason`, and a `verdict` of `paid`, `partly`, `ceremony`, or
+`blocked`; `guess` and `freeform` are optional. The template defines each field on a comment line above
+it: `paid` is what the method found or proved, not whether paid services were called. `blocked` records an
+attempt a harness, delegation or tooling failure ended before it could execute, so the summary keeps it on
+its own line instead of reading it as `ceremony`. A report that repeats the repository,
+plan and verdict of the last report within 30 minutes is still recorded, with a warning on stderr. The
+`skill` field names what actually ran as `<name>` or `<name> <version>`; for example, a breakcheck run
+records `breakcheck <its version>`. The template leaves it empty and prints the identity this build
+embeds only as that field's definition line, because a prefilled value is what gets submitted. Each
+report appends one JSON line to
 `<config-dir>/telemetry/run-feedback.jsonl` and one section to `run-feedback.md`, beside the gate's
 own log. The summary counts reports, verdicts, and skill versions and prints the `guess` lines of
 the most recent reports; it clusters nothing and invents no score.
