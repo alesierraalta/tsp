@@ -528,6 +528,26 @@ test("only a TSP run asks for feedback: an ordinary, aborted, headless, opted-ou
   }
 });
 
+// The test-strategy skill runs on every phrase in its trigger list, so each of them starts a TSP run the user asked
+// for, and each such run is asked for its feedback, not only the phrases that spell "tsp".
+test("a TSP run started by any of the skill's trigger phrases is asked for its feedback", async () => {
+  for (const prompt of ["haz el testing", "testea esto", "prueba esto", "test this", "test my change"]) {
+    const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+    await h.run(prompt, []);
+    assert.equal(h.sent.length, 1, `${prompt}: a TSP run the user asked for must be asked for its feedback`);
+  }
+});
+
+// A message that only mentions tsp asks for no TSP run, so there is no run to report on: a feedback request there
+// would record a report about a TSP run that never happened.
+test("a message that only mentions tsp is not a TSP run and is not asked for feedback", async () => {
+  for (const prompt of ["¿qué hace tsp check?", "no hagas el TSP, solo explícame el diff", "actualiza el binario de tsp"]) {
+    const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+    await h.run(prompt, []);
+    assert.deepEqual(h.sent, [], `${prompt}: no TSP run was asked for, so no feedback is requested`);
+  }
+});
+
 test("dismissing the question (no answer) sends nothing", async () => {
   const h = offerHarness({ answer: undefined });
   await h.run("change a", [["edit", "a.go"]]);
