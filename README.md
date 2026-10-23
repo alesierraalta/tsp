@@ -228,8 +228,8 @@ Set up TSP on this machine and add its Pi extension.
    It verifies the release checksum, installs the binary to ~/.local/bin, and runs tsp setup.
 2. Then run: tsp sync --hosts pi
    That installs the extension only; it is the one command that targets Pi.
-3. Report the exit code and last lines of both commands, and list the files written under
-   ~/.pi/agent/extensions/tsp.
+3. Report the exit code and last lines of both commands, and confirm the file it wrote at
+   ~/.pi/agent/extensions/tpp/index.ts.
 4. If a command refuses, report its exact message. Do not pass --force, and do not copy files into
    the Pi directories by hand.
 Report every command you ran and how each one ended.
