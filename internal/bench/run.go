@@ -1193,7 +1193,7 @@ func claudeAgent(ctx context.Context, ws string, key Key, opts Options) (AgentRe
 	cmd.Stdin = strings.NewReader("")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
-	err := cmd.Run()
+	err := runBounded(cmd)
 	ar := ParseStream(bytes.NewReader(out.Bytes()))
 	ar.Raw = tail(out.String(), 64*1024) + "\n--- stderr ---\n" + tail(errb.String(), 4*1024)
 	ar.Transcript = out.Bytes()

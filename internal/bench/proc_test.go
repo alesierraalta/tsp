@@ -99,6 +99,49 @@ func TestTimeoutKillsAnOrphanTheRunLeftBehind(t *testing.T) {
 	}
 }
 
+// A run that ends in time can leave a background job too (a server an agent started for a test and never
+// stopped). Across a reading of a hundred runs those pile up the same way a timed-out run's did; what the run
+// started must not outlive it either way.
+func TestAFinishedRunLeavesNothingRunning(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid is not installed")
+	}
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "leftover.pid")
+	// The job's output goes nowhere, so it holds no pipe: this case is only about the process outliving the run.
+	code, _ := runCapture(dir, []string{"sh", "-c", "setsid sh -c 'sleep 30 >/dev/null 2>&1 & echo $! > " + pidFile + "'"}, 10*time.Second)
+	if code != 0 {
+		t.Fatalf("the run itself failed: exit %d", code)
+	}
+	if survived(t, pidFile) {
+		t.Fatal("a run that finished in time left a process it started running")
+	}
+}
+
+// A suite that passes but leaves a background job holding its output (a test server it never stopped) still
+// passed: its exit status must come back, not -1. Losing it turns a green suite into a broken one in the score.
+func TestAFinishedRunKeepsItsExitStatusWhenAChildHoldsTheOutput(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "holder.pid")
+	code, _ := runCapture(dir, []string{"sh", "-c", "sleep 30 & echo $! > " + pidFile + "; exit 0"}, 10*time.Second)
+	survived(t, pidFile) // only to clean up: this case is about the exit status
+	if code != 0 {
+		t.Fatalf("a suite that exited 0 came back as exit %d", code)
+	}
+}
+
+// RunSuite judges whether a fixture or a fixed version is green: a passing suite that leaves a child holding
+// its output must still read green, or a sound case is refused as broken.
+func TestRunSuiteKeepsAPassingSuiteGreenWhenAChildHoldsTheOutput(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "holder.pid")
+	res, err := RunSuite(dir, `sh -c "sleep 30 & echo $! > `+pidFile+`; exit 0"`, 10*time.Second)
+	survived(t, pidFile)
+	if err != nil || !res.Green || res.ExitCode != 0 {
+		t.Fatalf("RunSuite = exit %d green %v err %v; want a green suite with exit 0", res.ExitCode, res.Green, err)
+	}
+}
+
 // The kill is aimed: a process this run did not start (a concurrent run's, the operator's) survives it, even
 // when it runs the same command in the same directory.
 func TestTimeoutSparesAProcessTheRunDidNotStart(t *testing.T) {
@@ -140,6 +183,8 @@ func TestNoCallerReplacesTheEnvironmentAfterBoundingTheTree(t *testing.T) {
 				bound = true
 			case bound && strings.HasPrefix(line, "cmd.Env ="):
 				t.Errorf("%s:%d replaces cmd.Env after boundProcessTree, dropping the run mark", file, i+1)
+			case bound && strings.Contains(line, "cmd.Run()"):
+				t.Errorf("%s:%d runs a bounded command with cmd.Run: use runBounded, which ends what the run left behind", file, i+1)
 			case strings.HasPrefix(line, "func "):
 				bound = false
 			}

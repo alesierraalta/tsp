@@ -26,7 +26,7 @@ func agyAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResul
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	started := time.Now()
-	err := cmd.Run()
+	err := runBounded(cmd)
 	ar := ParseAgyStream(bytes.NewReader(out.Bytes()))
 	if ar.DurationMS == 0 {
 		ar.DurationMS = time.Since(started).Milliseconds()

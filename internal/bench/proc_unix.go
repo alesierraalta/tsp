@@ -48,6 +48,31 @@ func boundProcessTree(cmd *exec.Cmd) {
 	cmd.WaitDelay = 2 * time.Second
 }
 
+// runBounded runs a command bounded by boundProcessTree and, however it ends, kills every process still carrying
+// the run's mark: a run that finished in time can leave a job behind (a test server it never stopped), and
+// across a reading of a hundred runs those pile up just as a timed-out run's did.
+func runBounded(cmd *exec.Cmd) error {
+	err := cmd.Run()
+	if mark := runMarkOf(cmd); mark != "" {
+		for _, pid := range markedProcesses(mark) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
+	return commandOutcome(cmd, err)
+}
+
+// runMarkOf reads the mark boundProcessTree gave the command: the last one, since a run started inside another
+// run inherits the outer mark first and appends its own.
+func runMarkOf(cmd *exec.Cmd) string {
+	prefix := runMarkEnv + "="
+	for i := len(cmd.Env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(cmd.Env[i], prefix) {
+			return strings.TrimPrefix(cmd.Env[i], prefix)
+		}
+	}
+	return ""
+}
+
 // newRunMark returns a value no other run shares, so concurrent runs never kill each other's processes.
 func newRunMark() string {
 	buf := make([]byte, 16)

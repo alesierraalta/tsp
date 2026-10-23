@@ -73,7 +73,7 @@ func runCapture(dir string, argv []string, timeout time.Duration) (int, string) 
 	boundProcessTree(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
-	err := cmd.Run()
+	err := runBounded(cmd)
 	code := 0
 	if err != nil {
 		code = -1
