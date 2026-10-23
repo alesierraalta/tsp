@@ -4,8 +4,8 @@ description: "Trigger: terminé la implementación, implementation done, a code 
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.2.2"
-  requires_tsp: "0.6.8"
+  version: "0.2.3"
+  requires_tsp: "0.6.9"
   scope: [common]
   auto_invoke: "After ODD finishes an implementation and before the RDD review or declaring done: run `tsp check` with one `--paths` per changed production source path (e.g. `tsp check --paths a.go --paths b.go`), say the verdict in one line, then run the full test-strategy flow when it is owed. No production source from this work means no implementation, so no TSP."
 ---
