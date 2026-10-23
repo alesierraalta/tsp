@@ -125,22 +125,128 @@ func TestParseRefusesMissingRequiredFieldsNamingThem(t *testing.T) {
 	}
 }
 
-func TestParseRefusesAVerdictOutsideTheThree(t *testing.T) {
+func TestParseRefusesAVerdictOutsideTheFour(t *testing.T) {
 	text := strings.Replace(validText(), "verdict: partly", "verdict: maybe", 1)
 	_, err := Parse(text)
 	if err == nil {
 		t.Fatal("want a refusal for an unknown verdict")
 	}
-	for _, want := range []string{VerdictPaid, VerdictPartly, VerdictCeremony} {
+	for _, want := range []string{VerdictPaid, VerdictPartly, VerdictCeremony, VerdictBlocked} {
 		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("the refusal must name all three verdicts; missing %q in %v", want, err)
+			t.Fatalf("the refusal must name all four verdicts; missing %q in %v", want, err)
 		}
+	}
+}
+
+// An attempt a harness, delegation or tooling failure ended before any probe ran produced no evidence
+// about the method. `ceremony` would claim it did, and the summary counts by verdict, so the run needs a
+// verdict of its own that says it never judged the method.
+func TestParseRecordsABlockedAttemptWithoutClaimingCeremony(t *testing.T) {
+	text := strings.Replace(validText(), "verdict: partly", "verdict: blocked", 1)
+	r, err := Parse(text)
+	if err != nil {
+		t.Fatalf("Parse refused a blocked attempt: %v", err)
+	}
+	if r.Verdict != VerdictBlocked {
+		t.Fatalf("verdict = %q, want %q", r.Verdict, VerdictBlocked)
+	}
+}
+
+// The value axis is what the ledger is read for: a blocked attempt is not a ceremony, so it is counted on
+// its own line instead of inflating the verdict that grades the method.
+func TestSummaryCountsABlockedAttemptApartFromCeremony(t *testing.T) {
+	enableFeedbackForTest(t)
+	dir := t.TempDir()
+	records := []Report{
+		{TS: "2026-10-23T14:26:28Z", Repo: "/repo", Plan: "p", Skill: "test-strategy 0.7.6", Build: "b",
+			Paid: "nothing", Cost: "one delegated task", Reason: "the task failed", Verdict: VerdictBlocked},
+		{TS: "2026-10-24T14:26:28Z", Repo: "/repo", Plan: "p", Skill: "test-strategy 0.7.6", Build: "b",
+			Paid: "nothing", Cost: "a plan nobody read", Reason: "cost without a finding", Verdict: VerdictCeremony},
+	}
+	for _, r := range records {
+		if err := Record(dir, r); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	got, err := Summary(dir)
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	for _, want := range []string{
+		"blocked: 1",
+		"ceremony: 1",
+		"/repo: 2 (paid 0, partly 0, ceremony 1, blocked 1)",
+		"test-strategy 0.7.6: 2 (paid 0, partly 0, ceremony 1, blocked 1)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "unknown") {
+		t.Fatalf("a blocked attempt is not an unclassified verdict:\n%s", got)
+	}
+}
+
+// The differential check against the base commit found exactly one difference: the verdicts block names
+// every accepted verdict, so it lists `blocked: 0` for a ledger that holds none, while no project or skill
+// line grows a clause it did not have. That is the requested vocabulary, not drift, so it is pinned here.
+func TestSummaryWithoutABlockedAttemptKeepsEveryOtherLineAsItWas(t *testing.T) {
+	enableFeedbackForTest(t)
+	dir := t.TempDir()
+	records := []Report{
+		{TS: "2026-10-01T10:00:00Z", Repo: "/repo/a", Plan: "p1", Skill: "test-strategy 0.7.5", Build: "b",
+			Paid: "found a defect", Cost: "an hour", Reason: "tests missed it", Verdict: VerdictPaid},
+		{TS: "2026-10-02T10:00:00Z", Repo: "/repo/a", Plan: "p2", Skill: "test-strategy 0.7.5", Build: "b",
+			Paid: "nothing", Cost: "an hour", Reason: "cost without a finding", Verdict: VerdictCeremony},
+	}
+	for _, r := range records {
+		if err := Record(dir, r); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+	got, err := Summary(dir)
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	for _, want := range []string{
+		"paid: 1", "ceremony: 1", "blocked: 0",
+		"/repo/a: 2 (paid 1, partly 0, ceremony 1)",
+		"test-strategy 0.7.5: 2 (paid 1, partly 0, ceremony 1)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "blocked 0") {
+		t.Fatalf("a ledger with no blocked row must not grow a blocked clause on a project or skill line:\n%s", got)
+	}
+}
+
+// The identity a template shows is the one this binary embeds, which is a claim about the binary, not about
+// the skill the operator read. A prefilled value is a value that gets submitted: the row recorded on
+// 2026-10-23 said `test-strategy 0.7.6` because the template supplied it while 0.7.5 was what ran.
+func TestTemplateLeavesTheSkillIdentityToTheOperator(t *testing.T) {
+	got := Template(Report{TS: "t", Repo: "/repo", Plan: "/plan", Skill: "test-strategy 0.7.6", Build: "0.3.6 (abc)"})
+	if strings.Contains(got, "skill: test-strategy 0.7.6") {
+		t.Fatalf("the template must not present the embedded identity as the value to submit:\n%s", got)
+	}
+	if !strings.Contains(got, "\nskill: \n") {
+		t.Fatalf("the skill field must be left for the operator to fill:\n%s", got)
+	}
+	var defined bool
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "# skill = ") && strings.Contains(line, "test-strategy 0.7.6") {
+			defined = true
+		}
+	}
+	if !defined {
+		t.Fatalf("the embedded identity belongs on its definition line, naming where it comes from:\n%s", got)
 	}
 }
 
 func TestTemplateFillsTheIdentityAndNamesTheSubmitCommand(t *testing.T) {
 	got := Template(Report{TS: "t", Repo: "/repo", Plan: "/plan", Skill: "tsp 0.3.9", Build: "0.3.6 (abc)"})
-	for _, want := range []string{"ts: t", "repo: /repo", "plan: /plan", "skill: tsp 0.3.9", "build: 0.3.6 (abc)"} {
+	for _, want := range []string{"ts: t", "repo: /repo", "plan: /plan", "build: 0.3.6 (abc)"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("template missing %q:\n%s", want, got)
 		}

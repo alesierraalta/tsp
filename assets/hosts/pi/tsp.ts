@@ -311,9 +311,10 @@ export async function feedbackRequest(cwd: string, env: Readonly<Record<string, 
       notify(notice(`${why} — no feedback was requested for this TSP run`), "warning");
       return "";
     }
-    return `${FEEDBACK_LEAD} Fill paid, cost, reason and verdict below from what that run actually found and what it cost ` +
+    return `${FEEDBACK_LEAD} Fill skill (what actually ran), paid, cost, reason and verdict below from what that run actually found and what it cost ` +
       "(paid is \"nothing\" when it found nothing), save the report to a temporary file outside the repository and submit " +
-      "it with `tsp feedback --file <that file>`. Do not change code or tests.\n\n" + template;
+      "it with `tsp feedback --file <that file>`. The skill field names the skill and version you actually read, not the " +
+      "one this binary embeds. Do not change code or tests.\n\n" + template;
   } catch (error) {
     notify(notice(`tsp: ${error instanceof Error ? error.message : String(error)} — no feedback was requested for this TSP run`), "warning");
     return "";

@@ -471,7 +471,7 @@ test("the findings review runs only after a TSP run the user asked for, with UI,
   }
 });
 
-const TEMPLATE = "# tsp run feedback\nts: 2026-10-22T20:10:29Z\nskill: test-strategy 0.7.5\npaid: \ncost: \nreason: \nverdict: \n";
+const TEMPLATE = "# tsp run feedback\nts: 2026-10-22T20:10:29Z\n# skill = what actually ran, as <name> or <name> <version>; this build embeds test-strategy 0.7.6 — keep that only if it is what you read\nskill: \npaid: \ncost: \nreason: \nverdict: \n";
 
 test("a TSP run ends by asking the agent to record its feedback on the template tsp prints", async () => {
   const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
@@ -479,7 +479,9 @@ test("a TSP run ends by asking the agent to record its feedback on the template 
   assert.equal(h.sent.length, 1, "one feedback request per TSP run");
   const [prompt] = h.sent;
   assert.ok(prompt.startsWith(FEEDBACK_LEAD), prompt);
-  assert.ok(prompt.endsWith(TEMPLATE.trim()), "the template reaches the agent whole, with the run's identity tsp filled in");
+  assert.ok(prompt.endsWith(TEMPLATE.trim()), "the template reaches the agent whole, with the identity tsp can fill in");
+  assert.match(prompt, /Fill skill \(what actually ran\)/, "the agent is told the skill field is its own to fill");
+  assert.match(prompt, /not the one this binary embeds/, "the agent is told the printed identity is not what ran");
   assert.match(prompt, /tsp feedback --file/, "the agent is told how to submit it");
   assert.deepEqual(h.asked, [], "recording feedback asks the user nothing");
 });

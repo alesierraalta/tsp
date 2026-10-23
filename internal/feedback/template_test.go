@@ -11,7 +11,7 @@ import (
 func TestTemplateDefinesEveryFieldItAsksFor(t *testing.T) {
 	got := Template(Report{TS: "t", Repo: "/repo", Skill: "s", Build: "b"})
 	lines := strings.Split(got, "\n")
-	for _, field := range []string{"paid", "cost", "reason", "verdict", "guess", "freeform"} {
+	for _, field := range []string{"skill", "paid", "cost", "reason", "verdict", "guess", "freeform"} {
 		at := -1
 		for i, l := range lines {
 			if l == field+": " {
@@ -22,7 +22,8 @@ func TestTemplateDefinesEveryFieldItAsksFor(t *testing.T) {
 			t.Fatalf("field %q has no definition line above it:\n%s", field, got)
 		}
 	}
-	filled := strings.NewReplacer("paid: \n", "paid: found a defect\n", "cost: \n", "cost: an hour\n",
+	filled := strings.NewReplacer("skill: \n", "skill: test-strategy 0.7.6\n",
+		"paid: \n", "paid: found a defect\n", "cost: \n", "cost: an hour\n",
 		"reason: \n", "reason: tests missed it\n", "verdict: \n", "verdict: paid\n").Replace(got)
 	r, err := Parse(filled)
 	if err != nil {
@@ -30,6 +31,9 @@ func TestTemplateDefinesEveryFieldItAsksFor(t *testing.T) {
 	}
 	if r.Paid != "found a defect" || r.Verdict != "paid" {
 		t.Fatalf("parsed %+v", r)
+	}
+	if r.Skill != "test-strategy 0.7.6" {
+		t.Fatalf("the operator's own skill identity must survive the parse: %+v", r)
 	}
 }
 
