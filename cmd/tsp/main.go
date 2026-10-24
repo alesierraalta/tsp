@@ -78,6 +78,11 @@ commands:
            new test fails on the unmodified code, 1 when none does or none was added, 2 when nothing
            could be judged
            ([--cwd <dir>] [--suite <test command>] [--timeout <duration>])
+  verify   ask a second session, with no access to the writer's conversation, whether this change's
+           tests mean anything: it freezes the candidate, hands over the diff, the plan and the
+           check output, and accepts only a structured verdict. Exit 0 pinned, 1 findings,
+           2 the verifier could not answer (--session-cmd is required; --cwd, --base, --task,
+           --include-untracked, --plan, --check-output, --redcheck-output, --timeout, --keep, --json)
   findings record defect witnesses after a TSP run; check their state at the next review
            (record [--cwd <dir>] [--suite <test command>] [--timeout <duration>])
            (check [--cwd <dir>] [--timeout <duration>])
@@ -218,6 +223,8 @@ func main() {
 		os.Exit(runCheck(os.Args[2:]))
 	case "redcheck":
 		os.Exit(runRedcheck(os.Args[2:]))
+	case "verify":
+		os.Exit(runVerify(os.Args[2:]))
 	case "findings":
 		os.Exit(runFindings(os.Args[2:]))
 	case "status":
