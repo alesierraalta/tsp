@@ -124,6 +124,33 @@ skipped; real `.env` files are never opened. This is a literal-text heuristic, n
 Exit codes: **1** findings, **0** clean (no text output; JSON prints `[]`), **2** usage
 errors (stderr only).
 
+### Code hygiene inside the change
+
+`tsp probe quality [--cwd <dir>] [--base <ref>]` asks the same kind of question about the change
+itself: it scores every Go function the change touches with the E63 rule, and reports blocks copied
+inside the change. `--base` compares that ref with the working tree, so the probe runs before you
+commit.
+
+```
+$ tsp probe quality --base main
+cmd/tsp/main.go:263 complexity — runProbe scores 27 over the bar of 15: split it or name why it stays
+internal/quality/score.go:111 duplication — this 6-line block also appears at internal/quality/score.go:78: keep one of them
+```
+
+Two rules keep the report short enough to act on. Only lines the change touches are measured, so a
+five-year-old file you edited once does not return its whole history. And the probe names what it
+cannot measure instead of reporting clean: `*_test.go` files are not measured (the bar governs
+shipped code), and a change that touches only a language with no adapter exits **2** with the reason:
+
+```
+$ tsp probe quality
+probe quality: quality probe unusable: the change touched no language this probe measures (no adapter for python (1 file(s)))
+```
+
+Exit codes: **1** findings, **0** clean, **2** nothing measurable or usage error. JSON is available
+with `--json`. Dead code is listed under `not_checked`: counting references over a whole program is
+not implemented here, and a wrong "dead" claim would cost more than a missing one.
+
 ## How it works
 
 Four pictures of the same system: the pieces, the decision the gate takes at every Stop, the testing
@@ -489,6 +516,7 @@ Additional commands:
 | `tsp scan [--base <ref>] [--sarif <report>] [--level <l>]` | Brings a scanner's real findings into the change: runs gitleaks when installed, or reads any SARIF report, keeps only the files the change touched, and gates at `--level` (default `warning`). Exit 0 nothing at that level, 1 findings, 2 nothing scanned. |
 | `tsp findings record\|check\|verdict` | Records defect witnesses, checks their state at the next review, or records a verdict. |
 | `tsp probe env [dir] [--json]` | Reports undelivered environment settings (read-only). |
+| `tsp probe quality [--cwd <dir>] [--base <ref>]` | Reports complexity and copied blocks inside the lines a change touches, and names the languages it cannot measure. Exit 0 clean, 1 findings, 2 nothing measurable. |
 | `tsp plan upgrade [--run <slug>] [--path <path>]` | Upgrades a plan to the current contract. |
 | `tsp bench adjudicate` | Records or shows decisions for finding rows; undecided rows stay pending. |
 

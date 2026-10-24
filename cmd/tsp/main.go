@@ -261,57 +261,94 @@ func main() {
 }
 
 func runProbe(args []string) int {
-	const help = "Usage of probe:\n  tsp probe env [dir] [--json]\nReports literal environment reads absent from deploy artifacts with deployed siblings.\nExit 1: findings; 0: clean (no text output); 2: usage error. Never writes to the scanned tree.\n"
-	fail := func(message string) int { fmt.Fprintln(os.Stderr, "probe:", message); return 2 }
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Fprint(os.Stderr, help)
+		fmt.Fprint(os.Stderr, probeHelp)
 		return 0
 	}
+	if len(args) > 0 && args[0] == "quality" {
+		return runProbeQuality(args[1:])
+	}
 	if len(args) == 0 || args[0] != "env" {
-		return fail("expected env [dir] [--json]")
+		fmt.Fprintln(os.Stderr, "probe:", "expected env [dir] [--json], or quality [--cwd <dir>] [--base <ref>]")
+		return 2
 	}
-	dir := "."
-	haveDir, asJSON := false, false
-	for _, arg := range args[1:] {
-		switch {
-		case arg == "--help" || arg == "-h":
-			fmt.Fprint(os.Stderr, help)
-			return 0
-		case arg == "--json":
-			asJSON = true
-		case strings.HasPrefix(arg, "-"):
-			return fail("unknown flag " + arg)
-		case haveDir:
-			return fail("expected at most one directory")
-		default:
-			dir = arg
-			haveDir = true
-		}
+	return runProbeEnv(args[1:])
+}
+
+// probeHelp names every probe and what its exit codes mean.
+const probeHelp = "Usage of probe:\n  tsp probe env [dir] [--json]\n  tsp probe quality [--cwd <dir>] [--base <ref>] [--max-complexity <n>] [--dup-window <n>] [--json]\nReports literal environment reads absent from deploy artifacts with deployed siblings, or the hygiene of the\nlines a change touches (complex functions, blocks copied inside the change) for the languages that have an adapter.\nExit 1: findings; 0: clean (no text output); 2: usage error or nothing measurable. Never writes to the scanned tree.\n"
+
+// envFlags are the environment probe's inputs after parsing.
+type envFlags struct {
+	dir    string
+	asJSON bool
+}
+
+// runProbeEnv reports environment reads the deployment artifacts never deliver.
+func runProbeEnv(args []string) int {
+	parsed, code := parseProbeEnvArgs(args)
+	if code != 0 {
+		return code
 	}
-	info, err := os.Stat(dir)
+	info, err := os.Stat(parsed.dir)
 	if err != nil {
-		return fail(err.Error())
+		fmt.Fprintln(os.Stderr, "probe:", err)
+		return 2
 	}
 	if !info.IsDir() {
-		return fail("not a directory: " + dir)
+		fmt.Fprintln(os.Stderr, "probe:", "not a directory: "+parsed.dir)
+		return 2
 	}
-	findings, err := probe.Env(dir)
+	findings, err := probe.Env(parsed.dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "probe:", err)
 		return 1
 	}
+	if code := printEnvFindings(findings, parsed.asJSON); code != 0 {
+		return code
+	}
+	if len(findings) > 0 {
+		return 1
+	}
+	return 0
+}
+
+// parseProbeEnvArgs reads the environment probe's arguments; a non-zero code is the exit to return.
+func parseProbeEnvArgs(args []string) (envFlags, int) {
+	parsed := envFlags{dir: "."}
+	haveDir := false
+	for _, arg := range args {
+		switch {
+		case arg == "--help" || arg == "-h":
+			fmt.Fprint(os.Stderr, probeHelp)
+			return envFlags{}, 0
+		case arg == "--json":
+			parsed.asJSON = true
+		case strings.HasPrefix(arg, "-"):
+			fmt.Fprintln(os.Stderr, "probe:", "unknown flag "+arg)
+			return envFlags{}, 2
+		case haveDir:
+			fmt.Fprintln(os.Stderr, "probe:", "expected at most one directory")
+			return envFlags{}, 2
+		default:
+			parsed.dir = arg
+			haveDir = true
+		}
+	}
+	return parsed, 0
+}
+
+// printEnvFindings writes the environment findings; a non-zero code means the output could not be written.
+func printEnvFindings(findings []probe.Finding, asJSON bool) int {
 	if asJSON {
 		if err := json.NewEncoder(os.Stdout).Encode(findings); err != nil {
 			fmt.Fprintln(os.Stderr, "probe:", err)
 			return exitArtifact
 		}
-	} else {
-		for _, f := range findings {
-			fmt.Printf("%s read at %s; siblings delivered by %s\n", f.Name, strings.Join(f.ReadAt, ", "), strings.Join(f.DeliveredBy, ", "))
-		}
+		return 0
 	}
-	if len(findings) > 0 {
-		return 1
+	for _, f := range findings {
+		fmt.Printf("%s read at %s; siblings delivered by %s\n", f.Name, strings.Join(f.ReadAt, ", "), strings.Join(f.DeliveredBy, ", "))
 	}
 	return 0
 }
