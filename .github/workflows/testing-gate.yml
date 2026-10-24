@@ -1,0 +1,26 @@
+name: testing gate
+
+# The gate TSP ships for other repositories, run on TSP itself: a pull request that changes
+# production source without a test that fails on the code the range started from fails here.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # --base reads the range, so the base branch has to be in the clone.
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # The gate is built from the pull request itself. A change that weakens `check` would weaken
+      # its own verdict, which is why the exit code is reported and, in a repository that runs the
+      # released binary instead, replaced by it.
+      - run: go build -o "$RUNNER_TEMP/tsp" ./cmd/tsp
+      - run: '"$RUNNER_TEMP/tsp" check --base "origin/${{ github.base_ref }}"'

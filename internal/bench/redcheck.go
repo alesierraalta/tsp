@@ -33,6 +33,26 @@ type RedCheckReport struct {
 // HEAD's own tests run, which covers a new row added to an existing table test. An empty suite is inferred
 // from the repository: the Go packages or Node files that hold the changed tests.
 func RedCheck(dir, suite string, timeout time.Duration) (RedCheckReport, error) {
+	return redCheckAt(dir, suite, "HEAD", nil, timeout)
+}
+
+// RedCheckRange asks the same question for a commit range: the candidate is `base...HEAD`, so the code
+// the change started from is base, and the tests are the ones the range touched. Reading HEAD's tree
+// instead would compare a commit against itself and report that no test came with it.
+func RedCheckRange(dir, suite, base string, changed []string, timeout time.Duration) (RedCheckReport, error) {
+	tests := make([]string, 0, len(changed))
+	for _, p := range changed {
+		if isTestFile(p) {
+			tests = append(tests, p)
+		}
+	}
+	if len(tests) == 0 {
+		return RedCheckReport{Suite: suite, TestFiles: []string{}}, nil
+	}
+	return redCheckAt(dir, suite, base, tests, timeout)
+}
+
+func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Duration) (RedCheckReport, error) {
 	var rep RedCheckReport
 	top, err := gitRun(dir, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -44,12 +64,16 @@ func RedCheck(dir, suite string, timeout time.Duration) (RedCheckReport, error) 
 		return rep, err
 	}
 	defer removeTree(head)
-	if err := extractHead(root, head); err != nil {
+	if err := extractRev(root, rev, head); err != nil {
 		return rep, err
 	}
-	files, err := agentTestFiles(head, root)
-	if err != nil {
-		return rep, err
+	files := agentFiles
+	if files == nil {
+		var err error
+		files, err = agentTestFiles(head, root)
+		if err != nil {
+			return rep, err
+		}
 	}
 	rep.TestFiles = files
 	if argv, _, e := perTestCommand(suite); e == nil && len(argv) > 1 && argv[0] == "cargo" && argv[1] == "test" {
