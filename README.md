@@ -151,6 +151,41 @@ Exit codes: **1** findings, **0** clean, **2** nothing measurable or usage error
 with `--json`. Dead code is listed under `not_checked`: counting references over a whole program is
 not implemented here, and a wrong "dead" claim would cost more than a missing one.
 
+### Architecture the change must not bend
+
+`tsp probe arch [--cwd <dir>] [--base <ref>] [--rules <file>]` reads its rules from JSON, by default
+`.tsp-arch.json` at the repository root, and reports the import edges a change *added* that the
+declaration refuses:
+
+```json
+{
+  "layers": [
+    {"name": "analyzers", "paths": ["internal/quality/"], "imports": ["example.com/m/internal/quality"]},
+    {"name": "bench", "paths": ["internal/bench/"], "imports": ["example.com/m/internal/bench"]}
+  ],
+  "forbid": [
+    {"from": "analyzers", "to": "bench", "why": "a probe answers about one change; the experiment harness must not be how a review is judged"}
+  ]
+}
+```
+
+A layer matches by repository path (who the importer is) or by import prefix (what is imported), so the
+rule reads the same whether a file moved or a package was renamed. The `why` is carried into the
+finding, because a rule nobody remembers the reason for gets deleted the first time it is inconvenient.
+
+```
+$ tsp probe arch --base main
+internal/mutate/mutate.go:26 forbidden-edge analyzers must not import bench (example.com/m/internal/bench): a probe answers about one change; the experiment harness must not be how a review is judged
+```
+
+Only edges whose import line is inside the change are blamed: an edge that was already there is
+pre-existing debt, and failing every pull request for it is how a gate gets turned off. A declaration
+that names a layer nobody declared is refused (a typo must not silently disable a rule), and cycles are
+named under `not_checked`: the Go toolchain already refuses an import cycle, so a cycle a build accepts
+cannot exist, and reporting one would be an opinion. Exit codes are the probe's usual **1** findings,
+**0** clean, **2** nothing measurable — a repository without a declaration exits 2, because "no rule
+was enforced" is not "the architecture is clean". JavaScript and TypeScript imports are not parsed yet.
+
 ## How it works
 
 Four pictures of the same system: the pieces, the decision the gate takes at every Stop, the testing
@@ -517,6 +552,7 @@ Additional commands:
 | `tsp findings record\|check\|verdict` | Records defect witnesses, checks their state at the next review, or records a verdict. |
 | `tsp probe env [dir] [--json]` | Reports undelivered environment settings (read-only). |
 | `tsp probe quality [--cwd <dir>] [--base <ref>]` | Reports complexity and copied blocks inside the lines a change touches, and names the languages it cannot measure. Exit 0 clean, 1 findings, 2 nothing measurable. |
+| `tsp probe arch [--cwd <dir>] [--base <ref>] [--rules <file>]` | Reports the import edges a change added that `.tsp-arch.json` refuses. Exit 0 clean, 1 findings, 2 nothing measurable. |
 | `tsp plan upgrade [--run <slug>] [--path <path>]` | Upgrades a plan to the current contract. |
 | `tsp bench adjudicate` | Records or shows decisions for finding rows; undecided rows stay pending. |
 

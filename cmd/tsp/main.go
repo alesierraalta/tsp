@@ -268,15 +268,18 @@ func runProbe(args []string) int {
 	if len(args) > 0 && args[0] == "quality" {
 		return runProbeQuality(args[1:])
 	}
+	if len(args) > 0 && args[0] == "arch" {
+		return runProbeArch(args[1:])
+	}
 	if len(args) == 0 || args[0] != "env" {
-		fmt.Fprintln(os.Stderr, "probe:", "expected env [dir] [--json], or quality [--cwd <dir>] [--base <ref>]")
+		fmt.Fprintln(os.Stderr, "probe:", "expected env [dir] [--json], quality [--cwd <dir>] [--base <ref>], or arch [--cwd <dir>] [--base <ref>] [--rules <file>]")
 		return 2
 	}
 	return runProbeEnv(args[1:])
 }
 
 // probeHelp names every probe and what its exit codes mean.
-const probeHelp = "Usage of probe:\n  tsp probe env [dir] [--json]\n  tsp probe quality [--cwd <dir>] [--base <ref>] [--max-complexity <n>] [--dup-window <n>] [--json]\nReports literal environment reads absent from deploy artifacts with deployed siblings, or the hygiene of the\nlines a change touches (complex functions, blocks copied inside the change) for the languages that have an adapter.\nExit 1: findings; 0: clean (no text output); 2: usage error or nothing measurable. Never writes to the scanned tree.\n"
+const probeHelp = "Usage of probe:\n  tsp probe env [dir] [--json]\n  tsp probe quality [--cwd <dir>] [--base <ref>] [--max-complexity <n>] [--dup-window <n>] [--json]\n  tsp probe arch [--cwd <dir>] [--base <ref>] [--rules <file>] [--json]\nReports literal environment reads absent from deploy artifacts with deployed siblings, the hygiene of the\nlines a change touches (complex functions, blocks copied inside the change) for the languages that have an adapter,\nor the import edges a change added that <repo>/.tsp-arch.json refuses.\nExit 1: findings; 0: clean (no text output); 2: usage error or nothing measurable. Never writes to the scanned tree.\n"
 
 // envFlags are the environment probe's inputs after parsing.
 type envFlags struct {

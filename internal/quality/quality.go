@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/alesierraalta/tsp/internal/gitdiff"
@@ -389,7 +388,11 @@ type lineRange struct{ first, last int }
 
 // wholeFile reports whether the ranges mean "the entire file", which is how a new file is treated.
 func wholeFile(ranges []lineRange) bool {
-	return len(ranges) == 1 && ranges[0].first <= 1 && ranges[0].last >= 1<<30
+	spans := make([]gitdiff.Range, 0, len(ranges))
+	for _, r := range ranges {
+		spans = append(spans, gitdiff.Range{First: r.first, Last: r.last})
+	}
+	return gitdiff.WholeFile(spans)
 }
 
 // intersects reports whether [first,last] meets any changed range.
@@ -405,87 +408,17 @@ func intersects(ranges []lineRange, first, last int) bool {
 // changedLines reads the new-side line ranges of the change: the hunks of the diff, plus every line of
 // each untracked file, because the whole file is new.
 func changedLines(root, base string, d Deps) (map[string][]lineRange, error) {
-	ranges := map[string][]lineRange{}
-	args := []string{"diff", "-U0", "--no-renames"}
-	if base != "" {
-		// The ref is compared with the working tree, so a probe run before committing sees the change
-		// it is about to review.
-		args = append(args, base)
-	}
-	out, err := d.Git(root, args...)
+	found, err := gitdiff.ChangedRanges(root, base, d.Git)
 	if err != nil {
-		return nil, fmt.Errorf("%w: git diff failed while reading the changed lines", ErrUnusable)
+		return nil, fmt.Errorf("%w: %v", ErrUnusable, err)
 	}
-	parseHunks(out, ranges)
-	untracked, err := d.Git(root, "status", "--porcelain", "-z", "-uall")
-	if err != nil {
-		return nil, fmt.Errorf("%w: git status failed while reading the changed lines", ErrUnusable)
-	}
-	for _, entry := range strings.Split(untracked, "\x00") {
-		if !strings.HasPrefix(entry, "?? ") {
-			continue
+	ranges := make(map[string][]lineRange, len(found))
+	for path, spans := range found {
+		for _, span := range spans {
+			ranges[path] = append(ranges[path], lineRange{first: span.First, last: span.Last})
 		}
-		key := filepath.ToSlash(strings.TrimPrefix(entry, "?? "))
-		// An untracked file is entirely new, so the whole of it is the change.
-		ranges[key] = []lineRange{{first: 1, last: 1 << 30}}
 	}
 	return ranges, nil
-}
-
-// parseHunks reads the new-side ranges out of a unified diff: the file changes with "+++ b/<path>" and the
-// range is the second number of the "@@" header.
-func parseHunks(diff string, ranges map[string][]lineRange) {
-	current := ""
-	for _, line := range strings.Split(diff, "\n") {
-		switch {
-		case strings.HasPrefix(line, "+++ "):
-			current = diffPath(line)
-		case strings.HasPrefix(line, "@@ ") && current != "":
-			if span, ok := hunkRange(line); ok {
-				ranges[current] = append(ranges[current], span)
-			}
-		}
-	}
-}
-
-// diffPath is the new-side path of a "+++ " header, or empty for a deleted file.
-func diffPath(header string) string {
-	path := strings.TrimPrefix(strings.TrimPrefix(header, "+++ "), "b/")
-	if path == "/dev/null" {
-		return ""
-	}
-	return path
-}
-
-// hunkRange reads one "@@ -a,b +c,d @@" header as the range of lines the change occupies on the new side.
-func hunkRange(header string) (lineRange, bool) {
-	for _, field := range strings.Fields(header) {
-		if !strings.HasPrefix(field, "+") {
-			continue
-		}
-		first, count, ok := plusSpec(field)
-		if !ok || count == 0 {
-			return lineRange{}, false
-		}
-		return lineRange{first: first, last: first + count - 1}, true
-	}
-	return lineRange{}, false
-}
-
-// plusSpec parses the "+c,d" half of a hunk header; a missing count means one line.
-func plusSpec(field string) (first, count int, ok bool) {
-	parts := strings.SplitN(strings.TrimPrefix(field, "+"), ",", 2)
-	first, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, 0, false
-	}
-	count = 1
-	if len(parts) == 2 {
-		if parsed, err := strconv.Atoi(parts[1]); err == nil {
-			count = parsed
-		}
-	}
-	return first, count, true
 }
 
 // languageOf names the language of a path and whether it is source at all.
