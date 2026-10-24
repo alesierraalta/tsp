@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/alesierraalta/tsp/internal/verify"
 )
 
 // verifyTestRepo builds a repository with one commit and one unstaged change, so runVerify has a
@@ -84,5 +86,25 @@ func TestVerifyExitCodes(t *testing.T) {
 				t.Fatalf("a usable verifier must publish the artifact: %v", err)
 			}
 		})
+	}
+}
+
+// A host that reviews the change itself (RDD) writes the verdict document and TSP publishes it: the
+// RDD flow must work on a machine where the standalone session command never runs.
+func TestVerifyPublishesAHostVerdict(t *testing.T) {
+	dir := t.TempDir()
+	session := filepath.Join(dir, "must-not-run")
+	body := `{"verdict":"pinned","findings":[],"notes":"RDD admitted the review"}`
+	if err := os.WriteFile(filepath.Join(dir, verify.VerdictFile), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runVerify([]string{"--publish", dir, "--base", "abc1234", "--session-cmd", session, "--json"}); code != 2 {
+		t.Fatalf("publish with a session command = exit %d, want 2", code)
+	}
+	if code := runVerify([]string{"--publish", dir, "--base", "abc1234", "--json"}); code != 0 {
+		t.Fatalf("published pinned verdict = exit %d, want 0", code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, verify.ArtifactName)); err != nil {
+		t.Fatalf("artifact: %v", err)
 	}
 }
