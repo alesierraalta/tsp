@@ -111,8 +111,8 @@ func Run(cwd string, d Deps) Result {
 	if planErr == nil {
 		warn = ignoredPlanWarning(root, planRelPath, d)
 	}
-	if d.Base != "" && (d.Waive != "" || len(d.Paths) > 0) {
-		return Result{Exit: 2, Text: warn + "--base checks a commit range: --no-test-needed and --paths answer for the working tree and cannot be combined with it"}
+	if d.Base != "" && (d.Waive != "" || len(d.Paths) > 0 || d.PlanPath != "") {
+		return Result{Exit: 2, Text: warn + "--base checks a commit range: --no-test-needed and --paths answer for the working tree, and a plan file records one session, so neither combines with it"}
 	}
 	statusOut, all, err := d.changedPaths(root)
 	if err != nil {
@@ -145,6 +145,19 @@ func Run(cwd string, d Deps) Result {
 		res := recordWaiver(root, files, d)
 		res.Files = files
 		res.Text = warn + scope + changedLine(files) + "\n" + res.Text
+		return res
+	}
+	// A commit range is judged on its own tests, never on the plan document: a plan records the session
+	// that wrote it, so an unfinished target in the repository's plan would otherwise block every
+	// unrelated pull request. The witness question is the range's answer.
+	if d.Base != "" {
+		if d.RedCheck == nil {
+			suite, base, candidate := d.Suite, d.Base, all
+			d.RedCheck = func(root string) (Witness, error) { return redCheck(root, suite, base, candidate) }
+		}
+		res := witnessVerdict(root, files, d)
+		res.Files = files
+		res.Text = warn + scope + changedLine(files) + "\nthe plan document is not consulted for a commit range: it records a session, not a candidate\n" + res.Text
 		return res
 	}
 	if planErr != nil {
