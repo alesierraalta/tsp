@@ -1,0 +1,52 @@
+{
+  "layers": [
+    {
+      "name": "cli",
+      "paths": ["cmd/"],
+      "imports": ["github.com/alesierraalta/tsp/cmd"]
+    },
+    {
+      "name": "analyzers",
+      "paths": [
+        "internal/quality/",
+        "internal/arch/",
+        "internal/scan/",
+        "internal/mutate/",
+        "internal/verify/",
+        "internal/gitdiff/",
+        "internal/hookcmd/"
+      ],
+      "imports": [
+        "github.com/alesierraalta/tsp/internal/quality",
+        "github.com/alesierraalta/tsp/internal/arch",
+        "github.com/alesierraalta/tsp/internal/scan",
+        "github.com/alesierraalta/tsp/internal/mutate",
+        "github.com/alesierraalta/tsp/internal/verify",
+        "github.com/alesierraalta/tsp/internal/gitdiff",
+        "github.com/alesierraalta/tsp/internal/hookcmd"
+      ]
+    },
+    {
+      "name": "bench",
+      "paths": ["internal/bench/"],
+      "imports": ["github.com/alesierraalta/tsp/internal/bench"]
+    },
+    {
+      "name": "gate",
+      "paths": ["internal/gate/"],
+      "imports": ["github.com/alesierraalta/tsp/internal/gate"]
+    }
+  ],
+  "forbid": [
+    {
+      "from": "analyzers",
+      "to": "bench",
+      "why": "a probe answers about one change; the experiment harness must not be how a review is judged"
+    },
+    {
+      "from": "analyzers",
+      "to": "gate",
+      "why": "a probe has to run outside a session, so it cannot depend on the turn gate"
+    }
+  ]
+}
