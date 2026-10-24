@@ -45,6 +45,7 @@ type Report struct {
 	PathBinary     string        `json:"path_binary,omitempty"`  // where tpp resolves on PATH
 	BinariesDiffer bool          `json:"binaries_differ"`        // both exist and are different files
 	Capabilities   []Capability  `json:"capabilities"`
+	Hosts          []HostStatus  `json:"hosts,omitempty"`
 	Problems       []string      `json:"problems"`
 	Healthy        bool          `json:"healthy"`
 }
@@ -125,6 +126,7 @@ func (r Report) String() string {
 	fmt.Fprintf(&b, "%s · config dir %s\n\nskills\n", header, r.ConfigDir)
 	r.writeSkills(&b)
 	r.writeHook(&b)
+	r.writeHosts(&b)
 	r.writeCapabilities(&b)
 	r.writeVerdict(&b)
 	return b.String()
