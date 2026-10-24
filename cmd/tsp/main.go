@@ -102,6 +102,11 @@ commands:
            gate. Exit 0 no survivor at the threshold, 1 survivors, 2 nothing was measured
            (--cwd, --base, --max-mutants, --workers, --timeout, --fail-on-survivors, --json).
 
+  scan     bring a scanner's real findings into the change: runs gitleaks when it is installed, or
+           reads a SARIF report another tool wrote, and keeps only the files the change touched.
+           Exit 0 nothing at the gated level, 1 findings, 2 nothing was scanned
+           (--cwd, --base, --sarif, --level, --timeout, --json).
+
 flags shared by gate, setup, sync, doctor, uninstall, feedback, repair:
   --config-dir <dir>   Claude config directory (default: ~/.claude)
 
@@ -232,6 +237,8 @@ func main() {
 		os.Exit(runVerify(os.Args[2:]))
 	case "mutate":
 		os.Exit(runMutate(os.Args[2:]))
+	case "scan":
+		os.Exit(runScan(os.Args[2:]))
 	case "findings":
 		os.Exit(runFindings(os.Args[2:]))
 	case "status":
