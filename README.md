@@ -486,6 +486,7 @@ Additional commands:
 | `tsp check --base <ref>` | The same question for the commit range `<ref>...HEAD`, which is the candidate CI has: the tests are run against `<ref>`'s code, so a test that only passes because the change is next to it pins nothing. |
 | `tsp redcheck` | Runs added or changed tests against HEAD's code to identify defect witnesses. |
 | `tsp mutate [--base <ref>] [--fail-on-survivors <n>]` | Mutates the production source the change touched and reports the mutants no test kills; the engine (gremlins) stays external, the scope, budget and gate stay here. Exit 0 no survivor at the threshold, 1 survivors, 2 nothing measured. |
+| `tsp scan [--base <ref>] [--sarif <report>] [--level <l>]` | Brings a scanner's real findings into the change: runs gitleaks when installed, or reads any SARIF report, keeps only the files the change touched, and gates at `--level` (default `warning`). Exit 0 nothing at that level, 1 findings, 2 nothing scanned. |
 | `tsp findings record\|check\|verdict` | Records defect witnesses, checks their state at the next review, or records a verdict. |
 | `tsp probe env [dir] [--json]` | Reports undelivered environment settings (read-only). |
 | `tsp plan upgrade [--run <slug>] [--path <path>]` | Upgrades a plan to the current contract. |
@@ -577,6 +578,31 @@ nothing, which is how a repository learns its current number without turning the
 `go install github.com/go-gremlins/gremlins/cmd/gremlins@latest` puts the Go engine on `PATH`.
 JavaScript (`stryker`) and Python (`mutmut`) have no adapter yet: the run exits 2 and says so instead
 of passing a stack it cannot measure.
+
+### Real findings from real scanners
+
+A security review done by the same model that wrote the code is an opinion with a deadline. `tsp scan`
+brings a scanner's findings into the change, with the scope and the gate kept here:
+
+```
+tsp scan                        # gitleaks, when installed, over the changed files
+tsp scan --sarif report.sarif   # a report another tool already wrote
+```
+
+Structured results arrive as SARIF — the format semgrep, gitleaks, trivy and CodeQL all emit — so a
+scanner needs no adapter to be useful. Only findings on files the change touched survive: a report is
+about a repository, the answer is about a change.
+
+| Exit | Meaning |
+|---|---|
+| 0 | nothing at the gated level (`--level`, default `warning`) |
+| 1 | a finding reaches that level |
+| 2 | nothing was scanned: no engine installed, an unreadable report, or an unknown `--level` |
+
+The default gate is `warning`, not `error`, because the scanners disagree about severity: gitleaks
+reports a leaked credential with no level at all, and SARIF's own default for a missing level is
+warning. Gating at `error` would let a real secret through; gating at `warning` blocks it and still
+leaves `note`-level advice readable.
 
 ### Running the gate in CI
 
