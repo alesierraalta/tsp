@@ -98,3 +98,20 @@ func TestSummarySaysHowManyFindingsAControlInvented(t *testing.T) {
 		t.Fatalf("summary = %s, want a quiet control to keep the plain word", summary)
 	}
 }
+
+// A control where the agent never wrote a plan measured nothing. Reading it as "clean" turns an
+// abstention into a pass, which is the one mistake that makes a negative control worthless.
+func TestPlanlessControlNeverReadsAsClean(t *testing.T) {
+	summary := Summary(Aggregate{Cases: []Result{
+		{Case: "c01-clean", Run: 1, Control: true, Turns: 6},
+	}})
+	if strings.Contains(summary, "| c01-clean | clean |") {
+		t.Fatalf("summary = %s, want a plan-less control never reported as clean", summary)
+	}
+	if !strings.Contains(summary, "| c01-clean | no plan |") {
+		t.Fatalf("summary = %s, want the abstention named", summary)
+	}
+	if !strings.Contains(summary, "controls: 1 runs") || !strings.Contains(summary, "inventions on controls: 0 finding rows") {
+		t.Fatalf("summary = %s, want the control totals still named when no plan exists", summary)
+	}
+}
