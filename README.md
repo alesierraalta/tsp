@@ -483,6 +483,7 @@ Additional commands:
 | Command | What it does |
 |---|---|
 | `tsp check` | Says what the repository still owes from git, tests, and an optional plan. |
+| `tsp check --base <ref>` | The same question for the commit range `<ref>...HEAD`, which is the candidate CI has: the tests are run against `<ref>`'s code, so a test that only passes because the change is next to it pins nothing. |
 | `tsp redcheck` | Runs added or changed tests against HEAD's code to identify defect witnesses. |
 | `tsp findings record\|check\|verdict` | Records defect witnesses, checks their state at the next review, or records a verdict. |
 | `tsp probe env [dir] [--json]` | Reports undelivered environment settings (read-only). |
@@ -511,6 +512,17 @@ reminder, not an approval gate.
 Telemetry: every decision appends one JSON line to `~/.claude/telemetry/testing-gate.jsonl`
 (override with `TESTING_GATE_LOG`), so the invocation rate is measurable over time. Its `repo`, `session`
 and `plan` fields are pseudonyms, not names.
+
+### Running the gate in CI
+
+`tsp check --base origin/main` asks the same question in CI that the Stop gate asks at the end of a
+turn, and exits non-zero when the answer is a debt: a production source file changed in the range and
+no test came with it, or the tests that came cannot run against the code the range started from. The
+flag matters because the working tree in CI *is* `HEAD`: a check that read `git status` there would
+find nothing changed and pass every pull request. `tsp check` reads the tree by default and the range
+when you name one; the two working-tree flags, `--no-test-needed` and `--paths`, are refused alongside
+`--base`, because a waiver and a per-path answer are both about a tree. This repository runs it on its
+own pull requests in `.github/workflows/testing-gate.yml`.
 
 ## Skills
 
