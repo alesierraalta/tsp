@@ -485,6 +485,7 @@ Additional commands:
 | `tsp check` | Says what the repository still owes from git, tests, and an optional plan. |
 | `tsp check --base <ref>` | The same question for the commit range `<ref>...HEAD`, which is the candidate CI has: the tests are run against `<ref>`'s code, so a test that only passes because the change is next to it pins nothing. |
 | `tsp redcheck` | Runs added or changed tests against HEAD's code to identify defect witnesses. |
+| `tsp mutate [--base <ref>] [--fail-on-survivors <n>]` | Mutates the production source the change touched and reports the mutants no test kills; the engine (gremlins) stays external, the scope, budget and gate stay here. Exit 0 no survivor at the threshold, 1 survivors, 2 nothing measured. |
 | `tsp findings record\|check\|verdict` | Records defect witnesses, checks their state at the next review, or records a verdict. |
 | `tsp probe env [dir] [--json]` | Reports undelivered environment settings (read-only). |
 | `tsp plan upgrade [--run <slug>] [--path <path>]` | Upgrades a plan to the current contract. |
@@ -546,6 +547,36 @@ tsp verify --publish <package dir> --base <commit the verdict is about>
 TSP reads the host's `verdict.json` with exactly the rules it applies to a session it ran itself, and
 publishes the same `.tsp-verify.json`. One judgement, one artifact, two ways to obtain it; neither flow
 needs the other installed.
+
+### What the tests do not kill
+
+`tsp verify` says whether the tests pin *the* defect. `tsp mutate` says where the change is unpinned
+at all: it mutates the production source the change touched and reports every mutant the tests fail
+to kill. The engine is external and per stack — [gremlins](https://github.com/go-gremlins/gremlins)
+for Go today — and the harness owns the four things a project should not have to relearn: the scope is
+the changed packages, the budget refuses a change too wide to pay for *before* the expensive run, the
+result is normalized to `file:line`, and the gate is the survivor count rather than the engine's own
+efficacy percentage.
+
+```
+tsp mutate --base origin/main            # the commit range CI has
+tsp mutate                                # the working tree
+```
+
+| Exit | Meaning |
+|---|---|
+| 0 | no mutant survived at the threshold (`--fail-on-survivors`, default 0) |
+| 1 | at least one mutant survived: a test does not pin what the change does |
+| 2 | nothing was measured — no engine for this stack, or a change above `--max-mutants` |
+
+Exit 2 is the point. A mutation run that measured nothing and a mutation run that found nothing look
+identical from the outside, and only one of them says the tests are worth something; the tool never
+reports the second when it means the first. `--fail-on-survivors -1` publishes the survivors and gates
+nothing, which is how a repository learns its current number without turning the tool off.
+
+`go install github.com/go-gremlins/gremlins/cmd/gremlins@latest` puts the Go engine on `PATH`.
+JavaScript (`stryker`) and Python (`mutmut`) have no adapter yet: the run exits 2 and says so instead
+of passing a stack it cannot measure.
 
 ### Running the gate in CI
 

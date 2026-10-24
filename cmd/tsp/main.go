@@ -97,6 +97,11 @@ commands:
            (--template | --file <path> | --summary | --pending | --mark-reviewed <token>)
   version  print the version
 
+  mutate   mutate the production source the change touched and report the mutants no test kills.
+           The engine is external (gremlins for Go); the harness owns the scope, the budget and the
+           gate. Exit 0 no survivor at the threshold, 1 survivors, 2 nothing was measured
+           (--cwd, --base, --max-mutants, --workers, --timeout, --fail-on-survivors, --json).
+
 flags shared by gate, setup, sync, doctor, uninstall, feedback, repair:
   --config-dir <dir>   Claude config directory (default: ~/.claude)
 
@@ -225,6 +230,8 @@ func main() {
 		os.Exit(runRedcheck(os.Args[2:]))
 	case "verify":
 		os.Exit(runVerify(os.Args[2:]))
+	case "mutate":
+		os.Exit(runMutate(os.Args[2:]))
 	case "findings":
 		os.Exit(runFindings(os.Args[2:]))
 	case "status":
