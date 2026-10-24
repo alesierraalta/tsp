@@ -46,11 +46,22 @@ type Discovery struct {
 	ClaudeConfigDir string
 }
 
-var knownHosts = []string{"claude", "opencode", "gemini", "codex"}
+var knownHosts = []string{"claude", "opencode", "gemini", "antigravity", "codex"}
 
 // KnownHosts returns the host names accepted by --hosts, in report order.
 func KnownHosts() []string {
 	return append([]string(nil), knownHosts...)
+}
+
+// geminiCLIEvidence tells the Gemini CLI apart from Anti-Gravity, which keeps its own tree under the
+// same parent directory. The CLI installs settings.json the first time it runs; a directory holding
+// Anti-Gravity's tree and no settings file is agy, not a CLI with no configuration.
+func geminiCLIEvidence(configDir string) bool {
+	if info, err := os.Stat(filepath.Join(configDir, "settings.json")); err == nil && !info.IsDir() {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(configDir, "antigravity"))
+	return errors.Is(err, os.ErrNotExist)
 }
 
 // DiscoverHosts finds installed hosts under home. The optional Claude directory is the
@@ -66,6 +77,9 @@ func DiscoverHosts(home string, claudeConfigDir ...string) Discovery {
 		{Name: "claude", ConfigDir: claudeDir, SkillsDir: filepath.Join(claudeDir, "skills")},
 		{Name: "opencode", ConfigDir: filepath.Join(home, ".config", "opencode"), SkillsDir: filepath.Join(home, ".config", "opencode", "skills")},
 		{Name: "gemini", ConfigDir: filepath.Join(home, ".gemini"), SkillsDir: filepath.Join(home, ".gemini", "skills")},
+		// Anti-Gravity keeps its own tree under the Gemini config directory and reads skills from
+		// there, not from ~/.gemini/skills: two hosts, two directories, both discovered.
+		{Name: "antigravity", ConfigDir: filepath.Join(home, ".gemini", "antigravity"), SkillsDir: filepath.Join(home, ".gemini", "antigravity", "skills")},
 		{Name: "codex", ConfigDir: filepath.Join(home, ".codex"), SkillsDir: filepath.Join(home, ".codex", "skills")},
 	}
 	for _, candidate := range candidates {
@@ -103,6 +117,9 @@ func DiscoverHosts(home string, claudeConfigDir ...string) Discovery {
 		case !info.IsDir():
 			result.Problems = append(result.Problems, fmt.Sprintf("%s config path is not a directory: %s", candidate.Name, candidate.ConfigDir))
 		default:
+			if candidate.Name == "gemini" && !geminiCLIEvidence(candidate.ConfigDir) {
+				continue
+			}
 			result.Hosts = append(result.Hosts, candidate)
 		}
 	}

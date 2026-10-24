@@ -87,7 +87,18 @@ func runSetup(args []string) int {
 func doctorReport(configDir, runMode string) doctor.Report {
 	report := doctor.RunWith(configDir, exec.LookPath, probeHook)
 	report.Mode = runMode
+	report.Hosts = doctor.HostInventory(hostHome(configDir), configDir)
 	return report
+}
+
+// hostHome is the directory host discovery looks under. It is derived from the config dir rather
+// than read from the environment: an isolated run (a test, a --config-dir sandbox) then reports the
+// hosts beside that config dir instead of the hosts of the machine running it.
+func hostHome(configDir string) string {
+	if configDir == "" {
+		return ""
+	}
+	return filepath.Dir(configDir)
 }
 
 // hookBinary is the program the wired hook runs. The doctor resolves it only when a tpp is on PATH to
