@@ -22,6 +22,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/alesierraalta/tsp/internal/gitdiff"
 )
 
 // ErrUnusable marks a run that measured nothing: no engine, a change above the budget, or an engine
@@ -87,7 +89,7 @@ type Options struct {
 func Run(ctx context.Context, opts Options) (Report, error) {
 	d := opts.Deps
 	if d.Git == nil {
-		d.Git = gitAt
+		d.Git = gitdiff.Default
 	}
 	if d.LookPath == nil {
 		d.LookPath = exec.LookPath
@@ -96,9 +98,8 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		d.Run = runAt
 	}
 
-	rootOut, err := d.Git(opts.Cwd, "rev-parse", "--show-toplevel")
-	root := strings.TrimSpace(rootOut)
-	if err != nil || root == "" {
+	root, err := gitdiff.Root(opts.Cwd, d.Git)
+	if err != nil {
 		return Report{}, fmt.Errorf("%w: not a git repository: nothing to mutate", ErrUnusable)
 	}
 
@@ -263,27 +264,13 @@ func readGremlins(path string) (gremlins, error) {
 	return g, nil
 }
 
-// changedPaths is the candidate's paths: the commit range when Base names one, the working tree otherwise.
+// changedPaths is the candidate's paths, read the one way every command reads them.
 func changedPaths(root, base string, d Deps) ([]string, error) {
-	if base != "" {
-		out, err := d.Git(root, "diff", "--name-only", "--no-renames", base+"...HEAD")
-		if err != nil {
-			return nil, fmt.Errorf("%w: git diff failed for --base %s", ErrUnusable, base)
-		}
-		return lines(out), nil
-	}
-	out, err := d.Git(root, "status", "--porcelain", "-z", "-uall")
+	paths, err := gitdiff.Changed(root, base, d.Git)
 	if err != nil {
-		return nil, fmt.Errorf("%w: git status failed", ErrUnusable)
+		return nil, fmt.Errorf("%w: %v", ErrUnusable, err)
 	}
-	var names []string
-	for _, entry := range strings.Split(out, "\x00") {
-		if len(entry) < 4 {
-			continue
-		}
-		names = append(names, entry[3:])
-	}
-	return names, nil
+	return paths, nil
 }
 
 // goTargets keeps the Go packages the change touched: a test file is not source to mutate, and a
@@ -315,22 +302,6 @@ func goTargets(changed []string) []string {
 	}
 	sort.Strings(targets)
 	return targets
-}
-
-func lines(out string) []string {
-	var names []string
-	for _, line := range strings.Split(out, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			names = append(names, line)
-		}
-	}
-	return names
-}
-
-func gitAt(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	out, err := cmd.Output()
-	return string(out), err
 }
 
 func runAt(ctx context.Context, dir, name string, args ...string) (string, error) {
