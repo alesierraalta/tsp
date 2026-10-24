@@ -300,6 +300,36 @@ func readVerdict(path string) (Verdict, error) {
 	return v, nil
 }
 
+// Publish validates the verdict a host left in an existing package and publishes the artifact, so a
+// change reviewed by a harness that freezes and judges its own candidate (RDD) needs no second model:
+// the host writes the same verdict document, and TSP reads it with the same rules it applies to a
+// session it ran itself. An unusable document is refused, never published.
+func Publish(packageDir, base string, now time.Time) (Result, error) {
+	if strings.TrimSpace(base) == "" {
+		return Result{}, fmt.Errorf("%w: --publish needs the base the verdict is about", ErrUnusable)
+	}
+	abs, err := filepath.Abs(packageDir)
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrUnusable, err)
+	}
+	verdict, err := readVerdict(filepath.Join(abs, VerdictFile))
+	if err != nil {
+		return Result{}, err
+	}
+	result := Result{
+		Verdict:      verdict,
+		PackageDir:   abs,
+		ArtifactPath: filepath.Join(abs, ArtifactName),
+		Base:         base,
+		At:           now,
+		Kept:         true,
+	}
+	if err := publish(result); err != nil {
+		return Result{}, err
+	}
+	return result, nil
+}
+
 // publish writes the artifact a later command reads. It carries the verdict and where it came from,
 // never the session's raw output, so the artifact cannot be mistaken for an approval transcript.
 func publish(result Result) error {

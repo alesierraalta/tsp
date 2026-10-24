@@ -513,6 +513,40 @@ Telemetry: every decision appends one JSON line to `~/.claude/telemetry/testing-
 (override with `TESTING_GATE_LOG`), so the invocation rate is measurable over time. Its `repo`, `session`
 and `plan` fields are pseudonyms, not names.
 
+### Verifying a change blindly
+
+The writer is the worst judge of its own tests: a session that wrote a test believes it. `tsp verify`
+freezes the candidate in a throwaway read-only worktree and asks a **second** session what the first
+one's tests actually prove, with no path to the writer's conversation. The second session gets five
+documents — the diff, the plan, the `check` output, the `redcheck` output, and the task — and answers
+with a verdict document only.
+
+```
+tsp verify --session-cmd "claude -p 'read the package and write verdict.json'" --task "what I was asked to do"
+```
+
+| Verdict | Meaning | Exit |
+|---|---|---|
+| `pinned` | the tests fail on the code the change started from and name the defect | 0 |
+| `unpinned` | the tests pass on that code, so they pin nothing | 1 |
+| `insufficient` | the change cannot be judged from what was handed over | 1 |
+
+An unusable answer is never published: a malformed `verdict.json`, an unknown verdict word, a finding
+without a file, a positive line, a claim and evidence, or `unpinned` with no findings at all all exit 2
+— *a rejection without evidence is an opinion*. The published artifact is `.tsp-verify.json` beside
+the package, which names the base commit and records `blind: true`.
+
+**The RDD flow uses the same artifact.** If your harness already freezes the candidate and admits a
+verdict (gentle-ai's receipt-driven review does), there is no reason to run a second model:
+
+```
+tsp verify --publish <package dir> --base <commit the verdict is about>
+```
+
+TSP reads the host's `verdict.json` with exactly the rules it applies to a session it ran itself, and
+publishes the same `.tsp-verify.json`. One judgement, one artifact, two ways to obtain it; neither flow
+needs the other installed.
+
 ### Running the gate in CI
 
 `tsp check --base origin/main` asks the same question in CI that the Stop gate asks at the end of a
