@@ -15,6 +15,7 @@ import (
 type fakeRepo struct {
 	root     string
 	status   string
+	diffOut  string
 	rootErr  error
 	plan     string
 	planPath string
@@ -38,6 +39,8 @@ func (f *fakeRepo) deps() Deps {
 			switch args[0] {
 			case "rev-parse":
 				return f.root + "\n", nil
+			case "diff":
+				return f.diffOut, nil
 			case "check-ignore":
 				// `git check-ignore -q` exits 0 (no error) only when the path is ignored.
 				if f.ignored {

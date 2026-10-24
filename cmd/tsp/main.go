@@ -1007,6 +1007,7 @@ func runCheck(args []string) int {
 	path := fs.String("path", "", "plan file relative to the repository root")
 	suite := fs.String("suite", "", "command that runs the changed tests when there is no plan (default: their Go packages, pytest on changed .py tests, or node --test on them)")
 	waive := fs.String("no-test-needed", "", "record in "+check.WaiverName+" that the current change needs no new test, with this reason; editing the code again voids it")
+	base := fs.String("base", "", "check the commit range <base>...HEAD instead of the working tree: what CI does, where the tree holds HEAD and nothing looks changed")
 	// One path per occurrence, never a comma-split list: a changed file may itself carry a comma in
 	// its name, and folding it into a joined value would name paths that do not exist — the check
 	// would then answer "nothing to check" while the change really owes a test.
@@ -1051,7 +1052,7 @@ func runCheck(args []string) int {
 		fmt.Fprintf(os.Stderr, "check: --cwd %s is not a directory: name an existing directory inside the repository\n", *cwd)
 		return 2
 	}
-	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named})
+	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named, Base: strings.TrimSpace(*base)})
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
 }
