@@ -521,8 +521,11 @@ no test came with it, or the tests that came cannot run against the code the ran
 flag matters because the working tree in CI *is* `HEAD`: a check that read `git status` there would
 find nothing changed and pass every pull request. `tsp check` reads the tree by default and the range
 when you name one; the two working-tree flags, `--no-test-needed` and `--paths`, are refused alongside
-`--base`, because a waiver and a per-path answer are both about a tree. This repository runs it on its
-own pull requests in `.github/workflows/testing-gate.yml`.
+`--base`, because a waiver and a per-path answer are both about a tree. A plan file is refused there too,
+and never consulted: a plan records the session that wrote it, so an unfinished target in the
+repository's plan would otherwise block every unrelated pull request. The range's answer is whether its
+own tests pin anything. This repository runs it on its own pull requests in
+`.github/workflows/testing-gate.yml`.
 
 ## Skills
 

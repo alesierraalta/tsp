@@ -173,7 +173,7 @@ update [--check]  --check only checks and refreshes the cache; it never installs
 restore [--id <backup-id>] [--dry-run]   (default: the latest backup)
 repair [--config-dir <dir>] [--dry-run] [--force]
 feature list|enable|disable <id> [--preview]
---path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them. Without --path, use the plan declared in .tpp.json when there is one, else docs/testing/test-plan.md
+--path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them, and check --base refuses a plan file altogether: a plan records a session, not a commit range. Without --path, use the plan declared in .tpp.json when there is one, else docs/testing/test-plan.md
 --run: a lowercase slug identifying the active run; plan gaps uses the declaration when omitted, while --all forces whole-document counts
 feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--summary] [--pending] [--mark-reviewed <token>]
 `
@@ -1007,7 +1007,7 @@ func runCheck(args []string) int {
 	path := fs.String("path", "", "plan file relative to the repository root")
 	suite := fs.String("suite", "", "command that runs the changed tests when there is no plan (default: their Go packages, pytest on changed .py tests, or node --test on them)")
 	waive := fs.String("no-test-needed", "", "record in "+check.WaiverName+" that the current change needs no new test, with this reason; editing the code again voids it")
-	base := fs.String("base", "", "check the commit range <base>...HEAD instead of the working tree: what CI does, where the tree holds HEAD and nothing looks changed")
+	base := fs.String("base", "", "check the commit range <base>...HEAD instead of the working tree: what CI does, where the tree holds HEAD and nothing looks changed; the plan document is not consulted for a range")
 	// One path per occurrence, never a comma-split list: a changed file may itself carry a comma in
 	// its name, and folding it into a joined value would name paths that do not exist — the check
 	// would then answer "nothing to check" while the change really owes a test.
