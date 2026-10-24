@@ -33,14 +33,18 @@ type DefectResult struct {
 
 // Result is the score of one workspace against its key.
 type Result struct {
-	Case                 string          `json:"case"`
-	Run                  int             `json:"run"`
-	Control              bool            `json:"control"`
-	Defects              []DefectResult  `json:"defects"`
-	Total                int             `json:"total"`
-	Found                int             `json:"found"`
-	Recall               float64         `json:"recall"`
-	FalsePositives       int             `json:"false_positives"`
+	Case           string         `json:"case"`
+	Run            int            `json:"run"`
+	Control        bool           `json:"control"`
+	Defects        []DefectResult `json:"defects"`
+	Total          int            `json:"total"`
+	Found          int            `json:"found"`
+	Recall         float64        `json:"recall"`
+	FalsePositives int            `json:"false_positives"`
+	// ControlInventions counts a clean control's finding rows, minus any a decision confirmed as a
+	// real defect. A control's whole purpose is a negative measurement: it has no keyed defect, so
+	// every row it reports is a claim about code this corpus calls correct.
+	ControlInventions    int             `json:"control_inventions,omitempty"`
 	UnmatchedFindings    int             `json:"unmatched_findings"`
 	PendingAdjudication  int             `json:"pending_adjudication"`
 	AdjudicatedTrue      int             `json:"adjudicated_true"`
@@ -299,6 +303,7 @@ func scoreMechanical(plan string, key Key) Result {
 	if plan == "" {
 		r.Recall = 0
 	}
+	noteControlInventions(&r)
 	return r
 }
 
@@ -543,4 +548,17 @@ func planFormat(section string, rows [][]string) string {
 		}
 	}
 	return FormatEmpty
+}
+
+// noteControlInventions records what a clean control invented instead of what it found. It is not an
+// adjudication: FalsePositives still waits for a decision, and a confirmed row stops counting.
+func noteControlInventions(r *Result) {
+	if !r.Control {
+		r.ControlInventions = 0
+		return
+	}
+	r.ControlInventions = r.FindingRows - r.AdjudicatedTrue
+	if r.ControlInventions < 0 {
+		r.ControlInventions = 0
+	}
 }

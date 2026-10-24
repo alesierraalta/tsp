@@ -297,6 +297,7 @@ func finishAdjudication(r Result, decisions []Decision) Result {
 		precision := float64(r.AdjudicatedTrue) / float64(denominator)
 		r.Precision = &precision
 	}
+	noteControlInventions(&r)
 	return r
 }
 

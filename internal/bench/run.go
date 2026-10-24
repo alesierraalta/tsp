@@ -198,6 +198,7 @@ type Aggregate struct {
 	UniqueCaught         int        `json:"unique_caught"`
 	DefectRuns           int        `json:"defect_runs"`
 	Controls             int        `json:"controls"`
+	ControlInventions    int        `json:"control_inventions,omitempty"`
 	Inconclusive         int        `json:"inconclusive"`
 	UnstableCases        []string   `json:"unstable_cases,omitempty"`
 	AdjudicatedTrue      int        `json:"adjudicated_true"`
@@ -473,6 +474,7 @@ func foldResult(agg *Aggregate, u unit, res Result) {
 		agg.Caught += res.Caught
 		agg.ClaimedPinned += res.ClaimedPinned
 		agg.FalsePositives += res.FalsePositives
+		agg.ControlInventions += res.ControlInventions
 		if !res.PlanFound {
 			agg.NoPlan++
 		}
@@ -490,7 +492,7 @@ func foldResult(agg *Aggregate, u unit, res Result) {
 func finalizeAggregate(agg *Aggregate) {
 	counts := CountUnique(agg.Cases)
 	agg.Defects, agg.Found, agg.Caught = 0, 0, 0
-	agg.ClaimedPinned, agg.FalsePositives = 0, 0
+	agg.ClaimedPinned, agg.FalsePositives, agg.ControlInventions = 0, 0, 0
 	agg.Invalid, agg.Failed, agg.NoPlan, agg.LightActivated, agg.MicroActivated = 0, 0, 0, 0, 0
 	agg.AdjudicatedTrue, agg.AdjudicatedFalse, agg.OutOfScope = 0, 0, 0
 	agg.PendingAdjudication = 0
@@ -519,6 +521,7 @@ func finalizeAggregate(agg *Aggregate) {
 			complete = false
 		}
 		agg.FalsePositives += r.FalsePositives
+		agg.ControlInventions += r.ControlInventions
 		if !r.PlanFound {
 			agg.NoPlan++
 		}
@@ -974,7 +977,7 @@ func Summary(agg Aggregate) string {
 		caught := fmt.Sprintf("%d/%d", c.Caught, c.Total)
 		precision := casePrecision(c)
 		if c.Control {
-			reported, pinned, caught = "clean", "clean", "clean"
+			reported, pinned, caught = controlCell(c.ControlInventions), "clean", "clean"
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %d | %.3f | %d | %.1f | %s | %s |\n",
 			c.Case, reported, pinned, caught, lightTag(c), microTag(c), c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note, precision)
@@ -983,11 +986,20 @@ func Summary(agg Aggregate) string {
 	return b.String()
 }
 
+// controlCell says a clean control stayed clean, or how many findings it invented instead. A quiet
+// control keeps the plain word so an arm that stayed quiet never reads like one that did not.
+func controlCell(inventions int) string {
+	if inventions <= 0 {
+		return "clean"
+	}
+	return fmt.Sprintf("clean, %d invented", inventions)
+}
+
 func aggregateTotals(agg Aggregate) string {
-	line := fmt.Sprintf("reported (defect-runs): %d/%d · reported (unique defects): %d/%d · claimed a pinning test: %d defect-runs · caught (defect-runs): %d/%d · caught (unique defects): %d/%d · precision: %s · out of scope: %d finding rows · inconclusive: %d runs · controls: %d runs · false positives: %d finding rows · failed: %d runs · invalid: %d runs · no plan: %d runs · light runs: %d · micro runs: %d · cost (USD): $%.3f",
+	line := fmt.Sprintf("reported (defect-runs): %d/%d · reported (unique defects): %d/%d · claimed a pinning test: %d defect-runs · caught (defect-runs): %d/%d · caught (unique defects): %d/%d · precision: %s · out of scope: %d finding rows · inconclusive: %d runs · controls: %d runs · inventions on controls: %d finding rows · false positives: %d finding rows · failed: %d runs · invalid: %d runs · no plan: %d runs · light runs: %d · micro runs: %d · cost (USD): $%.3f",
 		agg.Found, agg.Defects, agg.UniqueFound, agg.UniqueDefects, agg.ClaimedPinned, agg.Caught, agg.Defects, agg.UniqueCaught, agg.UniqueDefects,
 		precisionSummary(agg.Precision, agg.AdjudicatedTrue, agg.AdjudicatedFalse, agg.PendingAdjudication), agg.OutOfScope, agg.Inconclusive, agg.Controls,
-		agg.FalsePositives, agg.Failed, agg.Invalid, agg.NoPlan, agg.LightActivated, agg.MicroActivated, agg.CostUSD)
+		agg.ControlInventions, agg.FalsePositives, agg.Failed, agg.Invalid, agg.NoPlan, agg.LightActivated, agg.MicroActivated, agg.CostUSD)
 	if len(agg.UnstableCases) > 0 {
 		line += " · unstable cases: " + strings.Join(agg.UnstableCases, ", ")
 	}
