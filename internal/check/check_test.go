@@ -541,3 +541,28 @@ func TestNoTestNeededIsRefusedWhenAPlanExists(t *testing.T) {
 		t.Fatal("a refused waiver must write nothing")
 	}
 }
+
+// A commit range is judged on its own tests, never on the plan document: an unfinished target in the
+// repository's plan must not block an unrelated pull request.
+func TestBaseModeAsksForAWitnessEvenWhenThePlanOwes(t *testing.T) {
+	repo := &fakeRepo{
+		root:    "/r",
+		plan:    owing,
+		diffOut: "src/app.js\x00tests/app.test.js\x00",
+		witness: Witness{TestFiles: []string{"tests/app.test.js"}, Red: []string{"rejects empty"}},
+	}
+	res := Run(".", Deps{Git: repo.deps().Git, RedCheck: repo.deps().RedCheck, ReadFile: repo.deps().ReadFile, Exists: repo.deps().Exists, Base: "origin/main"})
+	if res.Exit != 0 || !strings.Contains(res.Text, "the plan document is not consulted") || !strings.Contains(res.Text, "1 new test(s) fail on HEAD's code") {
+		t.Fatalf("exit = %d, want 0 with the range's witness verdict:\n%s", res.Exit, res.Text)
+	}
+}
+
+// A plan file records one session, so naming one beside a commit range is a usage error, not a
+// silently ignored flag.
+func TestBaseModeRefusesAPlanFile(t *testing.T) {
+	repo := &fakeRepo{root: "/r", plan: owing, diffOut: "src/app.js\x00"}
+	res := Run(".", Deps{Git: repo.deps().Git, ReadFile: repo.deps().ReadFile, Exists: repo.deps().Exists, Base: "origin/main", PlanPath: "docs/testing/test-plan.md"})
+	if res.Exit != 2 || !strings.Contains(res.Text, "a plan file records one session") {
+		t.Fatalf("exit = %d, want 2 naming the refusal:\n%s", res.Exit, res.Text)
+	}
+}
