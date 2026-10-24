@@ -686,8 +686,10 @@ func TestTheNoteAboutAnUnkeptPlanReachesTheResultFile(t *testing.T) {
 
 func TestSummaryRendersCleanControlCells(t *testing.T) {
 	got := Summary(Aggregate{Cases: []Result{{Case: "clean", Control: true}}})
-	if !strings.Contains(got, "| clean | clean | clean | clean |") || !strings.Contains(got, "| - |") {
-		t.Fatalf("summary = %s, want clean reported, pinned, caught cells and no precision", got)
+	// This control recorded no plan, so it measured nothing: the cells say so instead of borrowing
+	// the word a control earns only when a plan reported no finding.
+	if !strings.Contains(got, "| clean | no plan | no plan | no plan |") || !strings.Contains(got, "| - |") {
+		t.Fatalf("summary = %s, want the abstention named in the reported, pinned and caught cells", got)
 	}
 	if strings.Contains(got, "| clean | 0/0") {
 		t.Fatalf("summary renders a clean control as a fraction: %s", got)

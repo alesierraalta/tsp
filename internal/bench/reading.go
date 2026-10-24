@@ -103,7 +103,8 @@ func planlessSummary(a Aggregate) string {
 	b.WriteString("| case | reported | pinned | caught | light | micro | false positives | cost USD | turns | minutes | note | precision (pending) |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, r := range a.Cases {
 		if r.Control {
-			fmt.Fprintf(&b, "| %s | clean | clean | clean | - | - | - | %.3f | %d | %.1f | | - |\n", r.Case, r.CostUSD, r.Turns, r.Seconds/60)
+			cell := controlCell(r.ControlInventions, r.PlanFound)
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | - | - | - | %.3f | %d | %.1f | %s | - |\n", r.Case, cell, cell, cell, r.CostUSD, r.Turns, r.Seconds/60, strings.TrimSpace(noPlanTag(r)))
 			continue
 		}
 		note := strings.TrimSpace(invalidTag(r) + noPlanTag(r))
@@ -119,8 +120,32 @@ func planlessSummary(a Aggregate) string {
 	return b.String()
 }
 
+// controlRuns and controlInventions name the two numbers a control arm publishes.
+func controlRuns(a Aggregate) int {
+	runs, _ := controlTotals(a)
+	return runs
+}
+
+func controlInventions(a Aggregate) int {
+	_, inventions := controlTotals(a)
+	return inventions
+}
+
+// controlTotals derives the control counts from the cases the summary is about to print, so the
+// header can never claim a number the rows below it contradict.
+func controlTotals(a Aggregate) (runs, inventions int) {
+	for _, r := range a.Cases {
+		if !r.Control {
+			continue
+		}
+		runs++
+		inventions += r.ControlInventions
+	}
+	return runs, inventions
+}
+
 func planlessTotals(a Aggregate) string {
-	return fmt.Sprintf("caught (defect-runs): %d/%d · caught (unique defects): %d/%d · failed: %d runs · invalid: %d runs · cost (USD): $%.3f", a.Caught, a.Defects, a.UniqueCaught, a.UniqueDefects, a.Failed, a.Invalid, a.CostUSD)
+	return fmt.Sprintf("caught (defect-runs): %d/%d · caught (unique defects): %d/%d · failed: %d runs · invalid: %d runs · controls: %d runs · inventions on controls: %d finding rows · cost (USD): $%.3f", a.Caught, a.Defects, a.UniqueCaught, a.UniqueDefects, a.Failed, a.Invalid, controlRuns(a), controlInventions(a), a.CostUSD)
 }
 
 func wilson(k, n int) (float64, float64) {

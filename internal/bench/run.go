@@ -977,7 +977,7 @@ func Summary(agg Aggregate) string {
 		caught := fmt.Sprintf("%d/%d", c.Caught, c.Total)
 		precision := casePrecision(c)
 		if c.Control {
-			reported, pinned, caught = controlCell(c.ControlInventions), "clean", "clean"
+			reported, pinned, caught = controlCell(c.ControlInventions, c.PlanFound), "clean", "clean"
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %d | %.3f | %d | %.1f | %s | %s |\n",
 			c.Case, reported, pinned, caught, lightTag(c), microTag(c), c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note, precision)
@@ -986,9 +986,13 @@ func Summary(agg Aggregate) string {
 	return b.String()
 }
 
-// controlCell says a clean control stayed clean, or how many findings it invented instead. A quiet
-// control keeps the plain word so an arm that stayed quiet never reads like one that did not.
-func controlCell(inventions int) string {
+// controlCell says what a clean control measured: it stayed clean, invented a number of findings, or
+// never wrote a plan and therefore measured nothing. A quiet control keeps the plain word so an arm
+// that stayed quiet never reads like one that did not, and an abstention never reads as a pass.
+func controlCell(inventions int, planFound bool) string {
+	if !planFound {
+		return "no plan"
+	}
 	if inventions <= 0 {
 		return "clean"
 	}
@@ -998,8 +1002,8 @@ func controlCell(inventions int) string {
 func aggregateTotals(agg Aggregate) string {
 	line := fmt.Sprintf("reported (defect-runs): %d/%d · reported (unique defects): %d/%d · claimed a pinning test: %d defect-runs · caught (defect-runs): %d/%d · caught (unique defects): %d/%d · precision: %s · out of scope: %d finding rows · inconclusive: %d runs · controls: %d runs · inventions on controls: %d finding rows · false positives: %d finding rows · failed: %d runs · invalid: %d runs · no plan: %d runs · light runs: %d · micro runs: %d · cost (USD): $%.3f",
 		agg.Found, agg.Defects, agg.UniqueFound, agg.UniqueDefects, agg.ClaimedPinned, agg.Caught, agg.Defects, agg.UniqueCaught, agg.UniqueDefects,
-		precisionSummary(agg.Precision, agg.AdjudicatedTrue, agg.AdjudicatedFalse, agg.PendingAdjudication), agg.OutOfScope, agg.Inconclusive, agg.Controls,
-		agg.ControlInventions, agg.FalsePositives, agg.Failed, agg.Invalid, agg.NoPlan, agg.LightActivated, agg.MicroActivated, agg.CostUSD)
+		precisionSummary(agg.Precision, agg.AdjudicatedTrue, agg.AdjudicatedFalse, agg.PendingAdjudication), agg.OutOfScope, agg.Inconclusive, controlRuns(agg),
+		controlInventions(agg), agg.FalsePositives, agg.Failed, agg.Invalid, agg.NoPlan, agg.LightActivated, agg.MicroActivated, agg.CostUSD)
 	if len(agg.UnstableCases) > 0 {
 		line += " · unstable cases: " + strings.Join(agg.UnstableCases, ", ")
 	}
