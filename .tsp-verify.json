@@ -1,0 +1,15 @@
+{
+  "verdict": "unpinned",
+  "findings": [
+    {
+      "file": "cmd/tsp/quality_test.go",
+      "line": 29,
+      "claim": "The test does not independently prove that complexity is detected: it only requires a nonzero exit for a fixture that also contains a duplicated block, so duplication alone can satisfy the assertion while complexity detection is defective.",
+      "evidence": "Ran `rtk tgrep -n -- 'runProbeQuality' ../frozen/cmd/tsp/quality_test.go`; it printed line 29 with only `code != 1` asserted. The fixture constructs both `Sprawl` and two copies of `block` before that assertion (confirmed by reading `cmd/tsp/quality_test.go`). The attempted `rtk proxy go -C ../frozen test ./internal/bench ./internal/check ./internal/arch ./cmd/tsp` timed out after 30 seconds."
+    }
+  ],
+  "notes": "The quality regression test conflates two independent reported rules, so the claimed complexity behavior can remain broken while the duplicate finding still makes the combined exit-code assertion pass. The targeted test run was unavailable because the command timed out; this verdict is based on the checked test fixture and assertion, not a claim that the suite passed.",
+  "base": "10adf451~1",
+  "at": "2026-10-25T04:23:06Z",
+  "blind": true
+}
