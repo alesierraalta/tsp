@@ -43,6 +43,7 @@ type Report struct {
 	Engine   string        `json:"engine"`
 	Scanned  []string      `json:"scanned,omitempty"`
 	Findings []Finding     `json:"findings,omitempty"`
+	Notes    []string      `json:"notes,omitempty"`
 	Elapsed  time.Duration `json:"elapsed"`
 }
 
@@ -136,6 +137,20 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		return Report{}, err
 	}
 	out.Engine = "gitleaks"
+	// A secrets scan is one class of finding, not the whole scan: when semgrep is installed its rules are
+	// another engine over the same change, and when it is absent the note says only secrets were read. A
+	// missing engine that says nothing is how a clean report lies.
+	if rules, note := semgrepFindings(ctx, root, engine, changed, d, work); rules != nil || note != "" {
+		if note != "" {
+			out.Notes = append(out.Notes, note)
+		}
+		if len(rules) > 0 {
+			out.Findings = append(out.Findings, rules...)
+			out.Engine = "gitleaks+semgrep"
+		} else if note == "" {
+			out.Engine = "gitleaks+semgrep"
+		}
+	}
 	out.Elapsed = time.Since(started)
 	sort.Slice(out.Findings, func(i, j int) bool {
 		if out.Findings[i].File != out.Findings[j].File {
@@ -150,6 +165,27 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 // A nil scope means the caller did not narrow the report, so everything it says counts; an empty
 // non-nil scope means the change touched nothing, so nothing survives. The two are different answers
 // and conflating them would report an untouched file as part of the change.
+// semgrepFindings runs semgrep over the changed files when it is installed, and reports why it could
+// not when it is not: the note is the difference between "no rule fired" and "no rule ran".
+func semgrepFindings(ctx context.Context, root, _ string, changed []string, d Deps, work string) ([]Finding, string) {
+	binary, err := d.LookPath("semgrep")
+	if err != nil {
+		return nil, "semgrep is not installed, so only secrets were scanned: install it with \"pipx install semgrep\" to read rules too"
+	}
+	out := filepath.Join(work, "semgrep.sarif")
+	args := append([]string{"scan", "--config", "auto", "--sarif", "--output", out, "--quiet"}, changed...)
+	if _, err := d.Run(ctx, root, binary, args...); err != nil {
+		if _, statErr := os.Stat(out); statErr != nil {
+			return nil, "semgrep could not scan the change: " + err.Error()
+		}
+	}
+	rep, err := ReadSarif(out, changed)
+	if err != nil {
+		return nil, "semgrep wrote a report this reader could not read: " + err.Error()
+	}
+	return rep.Findings, ""
+}
+
 func ReadSarif(path string, scope []string) (Report, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
