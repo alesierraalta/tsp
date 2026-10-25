@@ -562,7 +562,7 @@ func TestBaseModeAsksForAWitnessEvenWhenThePlanOwes(t *testing.T) {
 func TestBaseModeRefusesAPlanFile(t *testing.T) {
 	repo := &fakeRepo{root: "/r", plan: owing, diffOut: "src/app.js\x00"}
 	res := Run(".", Deps{Git: repo.deps().Git, ReadFile: repo.deps().ReadFile, Exists: repo.deps().Exists, Base: "origin/main", PlanPath: "docs/testing/test-plan.md"})
-	if res.Exit != 2 || !strings.Contains(res.Text, "a plan file records one session") {
+	if res.Exit != 2 || !strings.Contains(res.Text, "a plan file answer for the working tree") {
 		t.Fatalf("exit = %d, want 2 naming the refusal:\n%s", res.Exit, res.Text)
 	}
 }
@@ -579,5 +579,52 @@ func TestBaseModeReportsTheCodeOnlyTheChangeHas(t *testing.T) {
 	res := Run(".", Deps{Git: repo.deps().Git, RedCheck: repo.deps().RedCheck, ReadFile: repo.deps().ReadFile, Exists: repo.deps().Exists, Base: "origin/main"})
 	if res.Exit != 0 || !strings.Contains(res.Text, "the base commit does not define") || !strings.Contains(res.Text, "internal/quality") {
 		t.Fatalf("exit = %d, want 0 naming the package the change introduces:\n%s", res.Exit, res.Text)
+	}
+}
+
+// A range can warrant no test exactly as a working tree can: the release bump is the case that exposed
+// it. The waiver travels in the commit, and the range check names it instead of demanding a witness.
+func TestBaseModeHonoursAWaiverCommittedWithTheRange(t *testing.T) {
+	repo := &fakeRepo{
+		root:    "/r",
+		plan:    owing,
+		diffOut: "internal/buildinfo/buildinfo.go\x00",
+		plans: map[string]string{
+			WaiverName: `{"fingerprint":"sha256:x","files":["internal/buildinfo/buildinfo.go"],"reason":"the release number is not a behaviour","recorded":"2026-10-24T00:00:00Z"}`,
+		},
+	}
+	res := Run(".", Deps{Git: repo.deps().Git, ReadFile: repo.deps().ReadFile, Exists: repo.deps().Exists, Base: "origin/main"})
+	if res.Exit != 0 || !strings.Contains(res.Text, "no test is required for this range") || !strings.Contains(res.Text, "the release number is not a behaviour") {
+		t.Fatalf("exit = %d, want 0 naming the committed waiver:\n%s", res.Exit, res.Text)
+	}
+	if repo.judged != 0 {
+		t.Fatalf("the witness question was asked %d times, want 0 with a committed waiver", repo.judged)
+	}
+}
+
+// A waiver for other files covers nothing: the range it was written for is the only range it answers.
+func TestBaseModeIgnoresAWaiverForOtherFiles(t *testing.T) {
+	repo := &fakeRepo{
+		root:    "/r",
+		plan:    owing,
+		diffOut: "internal/buildinfo/buildinfo.go\x00",
+		plans: map[string]string{
+			WaiverName: `{"fingerprint":"sha256:x","files":["internal/other.go"],"reason":"unrelated","recorded":"2026-10-24T00:00:00Z"}`,
+		},
+	}
+	res := Run(".", Deps{Git: repo.deps().Git, ReadFile: repo.deps().ReadFile, Exists: repo.deps().Exists, Base: "origin/main"})
+	if res.Exit == 0 || strings.Contains(res.Text, "no test is required for this range") {
+		t.Fatalf("exit = %d, want the range judged on its own test:\n%s", res.Exit, res.Text)
+	}
+}
+
+// Recording one for a range is allowed, because the alternative is a tautological test or a red gate.
+func TestBaseModeRecordsAWaiverForTheRange(t *testing.T) {
+	root := t.TempDir()
+	repo := &fakeRepo{root: root, plan: owing, diffOut: "internal/buildinfo/buildinfo.go\x00"}
+	repo.plans = map[string]string{"internal/buildinfo/buildinfo.go": "package buildinfo\n"}
+	res := Run(".", Deps{Git: repo.deps().Git, ReadFile: repo.deps().ReadFile, Exists: repo.deps().Exists, Base: "origin/main", Waive: "the release number is not a behaviour"})
+	if res.Exit != 0 || !strings.Contains(res.Text, "recorded in "+WaiverName) {
+		t.Fatalf("exit = %d, want 0 recording the waiver:\n%s", res.Exit, res.Text)
 	}
 }

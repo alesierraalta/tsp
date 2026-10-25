@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -113,8 +114,8 @@ func Run(cwd string, d Deps) Result {
 	if planErr == nil {
 		warn = ignoredPlanWarning(root, planRelPath, d)
 	}
-	if d.Base != "" && (d.Waive != "" || len(d.Paths) > 0 || d.PlanPath != "") {
-		return Result{Exit: 2, Text: warn + "--base checks a commit range: --no-test-needed and --paths answer for the working tree, and a plan file records one session, so neither combines with it"}
+	if d.Base != "" && (len(d.Paths) > 0 || d.PlanPath != "") {
+		return Result{Exit: 2, Text: warn + "--base checks a commit range: --paths and a plan file answer for the working tree, so neither combines with it. --no-test-needed does, because a range can warrant no test too: it records the waiver the commit carries"}
 	}
 	statusOut, all, err := d.changedPaths(root)
 	if err != nil {
@@ -135,7 +136,7 @@ func Run(cwd string, d Deps) Result {
 	if len(files) == 0 {
 		return Result{Text: warn + scope + "no production source is changed: nothing to check"}
 	}
-	if d.Waive != "" && planErr == nil {
+	if d.Waive != "" && planErr == nil && d.Base == "" {
 		return Result{Exit: 2, Files: files, Text: warn + "--no-test-needed applies only without a plan: " + planRelPath + " is this change's record"}
 	}
 	if len(d.Paths) > 0 {
@@ -153,6 +154,16 @@ func Run(cwd string, d Deps) Result {
 	// that wrote it, so an unfinished target in the repository's plan would otherwise block every
 	// unrelated pull request. The witness question is the range's answer.
 	if d.Base != "" {
+		if reason, ok := rangeWaived(root, files, d); ok {
+			res := Result{Files: files, Text: warn + scope + changedLine(files) + "\nno test is required for this range: " + WaiverName + " records why — " + reason}
+			return res
+		}
+		if d.Waive != "" {
+			res := recordWaiver(root, files, d)
+			res.Files = files
+			res.Text = warn + scope + changedLine(files) + "\n" + res.Text
+			return res
+		}
 		if d.RedCheck == nil {
 			suite, base, candidate := d.Suite, d.Base, all
 			d.RedCheck = func(root string) (Witness, error) { return redCheck(root, suite, base, candidate) }
@@ -472,6 +483,28 @@ func recordWaiver(root string, files []string, d Deps) Result {
 }
 
 // waived reports whether the recorded waiver covers exactly the change in the tree now.
+// rangeWaived reports whether the waiver committed with the range names exactly its production files.
+// A range is judged by the files it changed, never by the content of a working tree CI does not have:
+// that is why the committed file list, not the content fingerprint, is the match.
+func rangeWaived(root string, files []string, d Deps) (string, bool) {
+	raw, err := d.ReadFile(filepath.Join(root, WaiverName))
+	if err != nil {
+		return "", false
+	}
+	var w waiver
+	if json.Unmarshal([]byte(raw), &w) != nil || strings.TrimSpace(w.Reason) == "" || len(w.Files) != len(files) {
+		return "", false
+	}
+	want := append([]string(nil), w.Files...)
+	got := append([]string(nil), files...)
+	sort.Strings(want)
+	sort.Strings(got)
+	if !slices.Equal(want, got) {
+		return "", false
+	}
+	return w.Reason, true
+}
+
 func waived(root string, files []string, d Deps) (string, bool) {
 	raw, err := d.ReadFile(filepath.Join(root, WaiverName))
 	if err != nil {
