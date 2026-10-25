@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"github.com/alesierraalta/tsp/internal/sync"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,5 +106,18 @@ func TestReportRendersTheHostsBlock(t *testing.T) {
 	}
 	if !strings.Contains(text, "antigravity") || !strings.Contains(text, "absent") {
 		t.Fatalf("hosts block does not name antigravity's absent transport:\n%s", text)
+	}
+}
+
+// An AfterAgent gate is a wired gate: the event name follows the host, not the gate.
+func TestGeminiWithAnAfterAgentHookIsWired(t *testing.T) {
+	dir := t.TempDir()
+	settings := `{"hooks":{"AfterAgent":[{"matcher":"","hooks":[{"type":"command","command":"tsp gate"}]}]}}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(settings), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	kind, note := transportFor(sync.Host{Name: "gemini", ConfigDir: dir})
+	if kind != TransportWired || !strings.Contains(note, "AfterAgent") {
+		t.Fatalf("kind = %q note = %q, want wired on AfterAgent", kind, note)
 	}
 }

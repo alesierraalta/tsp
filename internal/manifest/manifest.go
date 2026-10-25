@@ -68,7 +68,7 @@ func Components() []Component {
 	components = append(components, Component{
 		ID:      "stop-gate",
 		Kind:    KindHook,
-		Hosts:   []string{"claude"},
+		Hosts:   []string{"claude", "gemini", "codex"},
 		Default: true,
 	})
 	components = append(components, Component{

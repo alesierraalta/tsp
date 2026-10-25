@@ -860,10 +860,11 @@ on top is knowing what THIS session did, which the repository cannot tell you.
 |---|---|
 | Claude Code | verified: `sync` wires the Stop hook, `gate` reads its payload and answers in its schema, `doctor` runs the wired command and requires exit zero |
 | Anything that runs a command | verified: `check`, `plan init`, `plan check`, `plan gaps` need no host at all |
-| Gemini CLI | not implemented: its `settings.json` takes command hooks under different event names, and its payload and output schemas are not verified here |
+| Gemini CLI | verified on this machine: `sync` wires the gate onto `AfterAgent` in `~/.gemini/settings.json` (the same payload shape as Claude's `Stop`), leaving other hooks untouched, and `doctor` reports it as `wired: AfterAgent hook in settings.json`. Its output schema is not exercised here: the gate writes what the host reads, and nothing has watched `AfterAgent` fire |
 | Pi | opt-in extension: `tsp sync --hosts pi` installs it and Pi exposes a native `/tsp` command with `/tpp` compatibility alias (`check`, `feedback --summary`, `doctor`); its dispatch and the TSP offer are tested in CI (`assets/hosts/pi/tsp.test.mjs`), and the offer was watched in a live Pi 1.3.0 session. The native Pi Stop hook is **not verified** — payload contract read from the pi-hooks package, never watched firing |
 | Anti-Gravity (`agy`) | skills only: `sync` installs into `~/.gemini/antigravity/skills`, which is where `agy` reads them; no Stop hook is wired, because `agy` reads hooks from `~/.gemini/antigravity-cli/hooks` and TSP does not write them yet |
-| Codex, OpenCode | not implemented: each has its own extension surface, and guessing a payload schema would ship a hook that silently never fires |
+| Codex CLI | written, not yet trusted: `sync` adds the gate to `Stop` in `~/.codex/hooks.json` beside the hooks already there, and `doctor` says so. The Codex CLI records a `trusted_hash` per hook and runs nothing it has not trusted, so the entry fires only after you approve it there; TSP does not synthesise the hash |
+| OpenCode | skills only: the plugin is installed and inert on purpose — its `session.idle` path ran an unbound repository-wide check, so it stays quiet until a session-scoped binding exists. Manual `tsp check` from a shell is unaffected |
 
 Nothing above is a promise about a host that is not listed as verified. A hook that looks wired and
 never answers is the failure this project keeps finding, so a host counts as supported when its

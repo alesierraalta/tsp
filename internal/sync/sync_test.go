@@ -467,11 +467,12 @@ func TestSyncSkipsIdenticalCopiesPerHost(t *testing.T) {
 	}
 }
 
-func TestSyncWritesNoHookOutsideClaude(t *testing.T) {
+func TestSyncWiresTheGateOnlyOnHostsThatFireOne(t *testing.T) {
 	hosts := testAllHosts(t)
+	gated := map[string]bool{"claude": true, "gemini": true, "codex": true}
 	before := map[string][]byte{}
 	for _, host := range hosts {
-		if host.Name == "claude" {
+		if gated[host.Name] {
 			continue
 		}
 		path := filepath.Join(host.ConfigDir, "settings.json")
@@ -484,13 +485,23 @@ func TestSyncWritesNoHookOutsideClaude(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, host := range hosts {
+		if gated[host.Name] {
+			name := "settings.json"
+			if host.Name == "codex" {
+				name = "hooks.json"
+			}
+			raw, err := os.ReadFile(filepath.Join(host.ConfigDir, name))
+			if err != nil {
+				t.Fatalf("%s %s: %v", host.Name, name, err)
+			}
+			if !strings.Contains(string(raw), " gate") {
+				t.Fatalf("%s %s carries no gate: %s", host.Name, name, raw)
+			}
+			continue
+		}
 		path := filepath.Join(host.ConfigDir, "settings.json")
 		got, err := os.ReadFile(path)
-		if host.Name == "claude" {
-			if err != nil {
-				t.Fatalf("Claude settings.json: %v", err)
-			}
-		} else if err != nil || string(got) != string(before[host.Name]) {
+		if err != nil || string(got) != string(before[host.Name]) {
 			t.Fatalf("%s settings.json changed: %v %q", host.Name, err, got)
 		}
 	}
@@ -844,4 +855,29 @@ func mustStat(t *testing.T, path string) error {
 	t.Helper()
 	_, err := os.Stat(path)
 	return err
+}
+
+// The Gemini CLI fires AfterAgent where Claude Code fires Stop, and the payload shape is the same, so the
+// gate is wired onto the event that host actually runs instead of the one Claude named.
+func TestGeminiGetsTheGateOnAfterAgent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if _, _, err := persistWiredHook(path, map[string]any{}, nil, "tsp gate", HookEventGemini, false); err != nil {
+		t.Fatalf("wiring: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var settings map[string]any
+	if json.Unmarshal(raw, &settings) != nil {
+		t.Fatalf("settings are not JSON: %s", raw)
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	if _, ok := hooks[HookEventGemini]; !ok {
+		t.Fatalf("settings = %s, want the gate on %s", raw, HookEventGemini)
+	}
+	if _, ok := hooks["Stop"]; ok {
+		t.Fatalf("settings = %s, want no Stop hook on a host that never fires one", raw)
+	}
 }
