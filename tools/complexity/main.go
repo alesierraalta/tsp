@@ -23,6 +23,8 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+
+	"github.com/alesierraalta/tsp/internal/quality"
 )
 
 func main() {
@@ -94,98 +96,5 @@ func sortRows(rows []row) []row {
 	return rows
 }
 
-// scoreFunc applies the E63 rule to one function or method.
-func scoreFunc(fn *ast.FuncDecl) int {
-	s := 1
-	walkStmts(&s, fn.Body.List, 0)
-	return s
-}
-
-// walkStmts scores a statement list at the given nesting depth.
-func walkStmts(s *int, stmts []ast.Stmt, depth int) {
-	for _, st := range stmts {
-		walkStmt(s, st, depth)
-	}
-}
-
-// walkStmt scores one statement; controls add 1+depth, case/default/else
-// clauses add 1, and their bodies nest one level deeper.
-func walkStmt(s *int, st ast.Stmt, depth int) {
-	switch st := st.(type) {
-	case *ast.IfStmt:
-		*s += 1 + depth
-		walkStmt(s, st.Init, depth)
-		walkNode(s, st.Cond, depth)
-		walkStmts(s, st.Body.List, depth+1)
-		if st.Else != nil {
-			*s += 1
-			walkStmt(s, st.Else, depth+1)
-		}
-	case *ast.ForStmt:
-		*s += 1 + depth
-		walkStmt(s, st.Init, depth)
-		walkNode(s, st.Cond, depth)
-		walkStmt(s, st.Post, depth)
-		walkStmts(s, st.Body.List, depth+1)
-	case *ast.RangeStmt:
-		*s += 1 + depth
-		walkNode(s, st.Key, depth)
-		walkNode(s, st.Value, depth)
-		walkNode(s, st.X, depth)
-		walkStmts(s, st.Body.List, depth+1)
-	case *ast.SwitchStmt:
-		*s += 1 + depth
-		walkStmt(s, st.Init, depth)
-		walkNode(s, st.Tag, depth)
-		walkStmts(s, st.Body.List, depth+1)
-	case *ast.TypeSwitchStmt:
-		*s += 1 + depth
-		walkStmt(s, st.Init, depth)
-		walkStmts(s, st.Body.List, depth+1)
-	case *ast.SelectStmt:
-		*s += 1 + depth
-		if st.Body != nil {
-			walkStmts(s, st.Body.List, depth+1)
-		}
-	case *ast.CaseClause:
-		*s += 1
-		for _, e := range st.List {
-			walkNode(s, e, depth)
-		}
-		walkStmts(s, st.Body, depth)
-	case *ast.CommClause:
-		*s += 1
-		walkStmt(s, st.Comm, depth)
-		walkStmts(s, st.Body, depth)
-	case *ast.BlockStmt:
-		walkStmts(s, st.List, depth)
-	case *ast.LabeledStmt:
-		walkStmt(s, st.Stmt, depth)
-	case nil:
-	default:
-		walkNode(s, st, depth)
-	}
-}
-
-// walkNode scores expressions: every && and || adds one, and a function
-// literal's body is walked one level deeper — it adds a nesting level but
-// does not reset the enclosing depth.
-func walkNode(s *int, n ast.Node, depth int) {
-	if n == nil {
-		return
-	}
-	ast.Inspect(n, func(m ast.Node) bool {
-		switch m := m.(type) {
-		case *ast.BinaryExpr:
-			if m.Op == token.LAND || m.Op == token.LOR {
-				*s++
-			}
-		case *ast.FuncLit:
-			if m.Body != nil {
-				walkStmts(s, m.Body.List, depth+1)
-			}
-			return false
-		}
-		return true
-	})
-}
+// scoreFunc is the rule itself, kept in internal/quality so the probe and this tool cannot drift apart.
+var scoreFunc = quality.Score
