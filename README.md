@@ -184,7 +184,7 @@ that names a layer nobody declared is refused (a typo must not silently disable 
 named under `not_checked`: the Go toolchain already refuses an import cycle, so a cycle a build accepts
 cannot exist, and reporting one would be an opinion. Exit codes are the probe's usual **1** findings,
 **0** clean, **2** nothing measurable — a repository without a declaration exits 2, because "no rule
-was enforced" is not "the architecture is clean". JavaScript and TypeScript imports are not parsed yet.
+was enforced" is not "the architecture is clean". JavaScript and TypeScript imports are read without a parser — `from`, `require` and dynamic `import` are matched per line — so a cycle between two of them is not reported, and a specifier inside a comment counts at worst as one extra line.
 
 ## How it works
 
