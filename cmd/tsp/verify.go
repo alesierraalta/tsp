@@ -81,23 +81,35 @@ func reportVerify(result verify.Result, asJSON bool) int {
 		}
 		fmt.Println(string(encoded))
 	} else {
-		fmt.Printf("tsp verify: verdict %s, %d finding(s), candidate on %s\n", result.Verdict.Verdict, len(result.Verdict.Findings), result.Base)
-		for _, finding := range result.Verdict.Findings {
-			fmt.Printf("  %s:%d %s — %s\n", finding.File, finding.Line, finding.Claim, finding.Evidence)
-		}
-		if result.Verdict.Notes != "" {
-			fmt.Printf("  notes: %s\n", result.Verdict.Notes)
-		}
-		if result.Kept && result.FrozenDir != "" {
-			fmt.Printf("tsp verify: kept %s (frozen tree) and %s (package)\n", result.FrozenDir, result.PackageDir)
-		} else if result.Kept {
-			fmt.Printf("tsp verify: published the verdict the host wrote in %s\n", result.PackageDir)
-		}
+		printVerifyText(result)
 	}
+	return verifyExit(result)
+}
+
+// verifyExit turns a verdict into the process status every caller of this command shares: 1 when
+// the second session refused the change, 0 when it did not.
+func verifyExit(result verify.Result) int {
 	if result.Blocking() {
 		return 1
 	}
 	return 0
+}
+
+// printVerifyText states the verdict, the evidence behind each finding, and where the candidate
+// went, so a reader can disagree with the machine in the same breath.
+func printVerifyText(result verify.Result) {
+	fmt.Printf("tsp verify: verdict %s, %d finding(s), candidate on %s\n", result.Verdict.Verdict, len(result.Verdict.Findings), result.Base)
+	for _, finding := range result.Verdict.Findings {
+		fmt.Printf("  %s:%d %s — %s\n", finding.File, finding.Line, finding.Claim, finding.Evidence)
+	}
+	if result.Verdict.Notes != "" {
+		fmt.Printf("  notes: %s\n", result.Verdict.Notes)
+	}
+	if result.Kept && result.FrozenDir != "" {
+		fmt.Printf("tsp verify: kept %s (frozen tree) and %s (package)\n", result.FrozenDir, result.PackageDir)
+	} else if result.Kept {
+		fmt.Printf("tsp verify: published the verdict the host wrote in %s\n", result.PackageDir)
+	}
 }
 
 // readOptional reads a file the caller named, or returns an empty string so the package records

@@ -8,7 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/alesierraalta/tsp/internal/assets"
@@ -52,7 +52,7 @@ func Components() []Component {
 		panic("embedded skills missing: " + err.Error())
 	}
 
-	components := make([]Component, 0, len(entries)+2)
+	var components []Component
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -181,6 +181,6 @@ func filesFor(component Component) ([]File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("walk embedded component %q: %w", component.ID, err)
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].Source < files[j].Source })
+	slices.SortFunc(files, func(a, b File) int { return strings.Compare(a.Source, b.Source) })
 	return files, nil
 }

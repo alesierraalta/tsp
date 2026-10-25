@@ -114,3 +114,44 @@ func TestBudgetRefusesAWiderChange(t *testing.T) {
 		}
 	}
 }
+
+// A dry run counts mutants, and the live run reports what happened to each one. When the engine
+// reports fewer statuses than it promised, the gap is a number, not a silent kill.
+func TestUnreportedMutantsAreCounted(t *testing.T) {
+	report := Report{MutationCount: 21, Killed: 2, NotCovered: 1}
+	if got := report.Unreported(); got != 18 {
+		t.Fatalf("unreported = %d, want 18", got)
+	}
+	report.NotViable = 18
+	if got := report.Unreported(); got != 0 {
+		t.Fatalf("unreported = %d, want 0 once every mutant has a status", got)
+	}
+}
+
+// A run where every mutant timed out judged nothing. Reporting zero survivors there would call
+// an unmeasured change clean, so the run is unusable instead.
+func TestEveryMutantTimedOutIsUnusable(t *testing.T) {
+	dry := `{"files":[{"file_name":"a.go","mutations":[{"type":"X","status":"RUNNABLE","line":1},{"type":"X","status":"RUNNABLE","line":2}]}],"mutants_total":2}`
+	real := `{"files":[{"file_name":"a.go","mutations":[{"type":"X","status":"TIMED_OUT","line":1},{"type":"X","status":"TIMED_OUT","line":2}]}],"mutants_total":2}`
+	f := &fakeDeps{changed: "a.go\n", engine: "/bin/gremlins", dry: dry, real: real}
+	rep, err := Run(context.Background(), Options{Cwd: "/repo", Base: "main", MaxMutants: 10, Deps: f.deps()})
+	if !errors.Is(err, ErrUnusable) {
+		t.Fatalf("err = %v, want ErrUnusable", err)
+	}
+	if rep.TimedOut != 2 {
+		t.Fatalf("timed out = %d, want 2", rep.TimedOut)
+	}
+	if !strings.Contains(err.Error(), "no mutant was judged") {
+		t.Fatalf("error does not name the cause: %v", err)
+	}
+}
+
+// The coefficient reaches the engine: without it the engine's default budget is what produced
+// timeouts on a slow package.
+func TestTimeoutCoefficientReachesTheEngine(t *testing.T) {
+	args := unleashArgs("./internal/manifest", Options{TimeoutCoefficient: 8}, "", "out.json")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--timeout-coefficient 8") {
+		t.Fatalf("coefficient missing from %q", joined)
+	}
+}

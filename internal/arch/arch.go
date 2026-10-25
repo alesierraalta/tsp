@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -100,6 +101,18 @@ func Load(path string, read func(string) ([]byte, error)) (Declaration, error) {
 	if err != nil {
 		return Declaration{}, fmt.Errorf("%w: no architecture rules at %s: write one, or pass --rules", ErrUnusable, path)
 	}
+	declared, err := decodeDeclaration(path, body)
+	if err != nil {
+		return Declaration{}, err
+	}
+	if err := validateDeclaration(path, declared); err != nil {
+		return Declaration{}, err
+	}
+	return declared, nil
+}
+
+// decodeDeclaration reads the file into a declaration and refuses one that enforces nothing.
+func decodeDeclaration(path string, body []byte) (Declaration, error) {
 	var declared Declaration
 	decoder := json.NewDecoder(strings.NewReader(string(body)))
 	decoder.DisallowUnknownFields()
@@ -109,24 +122,39 @@ func Load(path string, read func(string) ([]byte, error)) (Declaration, error) {
 	if len(declared.Layers) == 0 {
 		return Declaration{}, fmt.Errorf("%w: %s declares no layer, so no rule can be enforced", ErrUnusable, path)
 	}
-	known := make(map[string]bool, len(declared.Layers))
-	for _, layer := range declared.Layers {
-		if strings.TrimSpace(layer.Name) == "" {
-			return Declaration{}, fmt.Errorf("%w: %s has a layer with no name", ErrUnusable, path)
-		}
-		if known[layer.Name] {
-			return Declaration{}, fmt.Errorf("%w: %s declares the layer %q twice", ErrUnusable, path, layer.Name)
-		}
-		known[layer.Name] = true
+	return declared, nil
+}
+
+// validateDeclaration refuses a rule naming a layer that does not exist: a typo there would
+// silently enforce nothing.
+func validateDeclaration(path string, declared Declaration) error {
+	known, err := declaredLayerNames(path, declared.Layers)
+	if err != nil {
+		return err
 	}
 	for _, forbid := range declared.Forbid {
 		for _, side := range []string{forbid.From, forbid.To} {
 			if !known[side] {
-				return Declaration{}, fmt.Errorf("%w: %s forbids an edge involving %q, which no layer declares", ErrUnusable, path, side)
+				return fmt.Errorf("%w: %s forbids an edge involving %q, which no layer declares", ErrUnusable, path, side)
 			}
 		}
 	}
-	return declared, nil
+	return nil
+}
+
+// declaredLayerNames collects the declared layer names, refusing an unnamed or repeated one.
+func declaredLayerNames(path string, layers []Layer) (map[string]bool, error) {
+	known := make(map[string]bool, len(layers))
+	for _, layer := range layers {
+		if strings.TrimSpace(layer.Name) == "" {
+			return nil, fmt.Errorf("%w: %s has a layer with no name", ErrUnusable, path)
+		}
+		if known[layer.Name] {
+			return nil, fmt.Errorf("%w: %s declares the layer %q twice", ErrUnusable, path, layer.Name)
+		}
+		known[layer.Name] = true
+	}
+	return known, nil
 }
 
 // Run reports the declared edges the change added.
@@ -177,51 +205,67 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 func edges(root string, files []string, ranges map[string][]gitdiff.Range, declared Declaration, module string, d Deps) ([]Finding, error) {
 	var findings []Finding
 	for _, rel := range files {
-		abs := filepath.Join(root, filepath.FromSlash(rel))
-		body, err := d.ReadFile(abs)
-		if err != nil {
-			continue
-		}
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, abs, body, parser.ImportsOnly)
-		if err != nil {
-			continue
-		}
-		from := layerOfPath(declared, rel)
-		if from == "" {
-			continue
-		}
-		for _, spec := range file.Imports {
-			importPath := strings.Trim(spec.Path.Value, `"`)
-			if module != "" && !ownedBy(importPath, module) {
-				continue
-			}
-			if !inRange(ranges[rel], fset.Position(spec.Pos()).Line) {
-				continue
-			}
-			to := layerOfImport(declared, importPath)
-			if to == "" {
-				continue
-			}
-			rule, refused := forbidden(declared, from, to)
-			if !refused {
-				continue
-			}
-			findings = append(findings, Finding{
-				Rule:    RuleForbiddenEdge,
-				File:    rel,
-				Line:    fset.Position(spec.Pos()).Line,
-				Message: refusal(from, to, importPath, rule),
-			})
+		findings = append(findings, fileEdges(root, rel, ranges, declared, module, d)...)
+	}
+	sortFindings(findings)
+	return findings, nil
+}
+
+// fileEdges reports the refused import edges of one changed file.
+func fileEdges(root, rel string, ranges map[string][]gitdiff.Range, declared Declaration, module string, d Deps) []Finding {
+	abs := filepath.Join(root, filepath.FromSlash(rel))
+	body, err := d.ReadFile(abs)
+	if err != nil {
+		return nil
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, abs, body, parser.ImportsOnly)
+	if err != nil {
+		return nil
+	}
+	from := layerOfPath(declared, rel)
+	if from == "" {
+		return nil
+	}
+	var findings []Finding
+	for _, spec := range file.Imports {
+		if finding, found := refusedEdge(rel, spec, fset, ranges[rel], declared, module, from); found {
+			findings = append(findings, finding)
 		}
 	}
+	return findings
+}
+
+// refusedEdge judges one import spec: owned by this module, on a changed line, between two
+// declared layers, and refused by a rule.
+func refusedEdge(rel string, spec *ast.ImportSpec, fset *token.FileSet, ranges []gitdiff.Range, declared Declaration, module, from string) (Finding, bool) {
+	importPath := strings.Trim(spec.Path.Value, `"`)
+	if module != "" && !ownedBy(importPath, module) {
+		return Finding{}, false
+	}
+	line := fset.Position(spec.Pos()).Line
+	if !inRange(ranges, line) {
+		return Finding{}, false
+	}
+	to := layerOfImport(declared, importPath)
+	if to == "" {
+		return Finding{}, false
+	}
+	rule, refused := forbidden(declared, from, to)
+	if !refused {
+		return Finding{}, false
+	}
+	return Finding{Rule: RuleForbiddenEdge, File: rel, Line: line, Message: refusal(from, to, importPath, rule)}, true
+}
+
+// sortFindings orders findings by file then line so a report reads the same twice.
+func sortFindings(findings []Finding) {
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].File != findings[j].File {
 			return findings[i].File < findings[j].File
 		}
 		return findings[i].Line < findings[j].Line
 	})
-	return findings, nil
 }
 
 // refusal states the edge and the repository's own reason for refusing it.

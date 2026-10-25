@@ -176,6 +176,15 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 		}
 		return rep, fmt.Errorf("the changed tests could not be run test by test with %q: %s", suite, detail)
 	}
+	// One package that does not build at base hides inside an aggregate run: its tests never report, so they cannot
+	// fail, and the other packages keep the report looking judged. A test that cannot be built at base cannot pass
+	// there either, so it is a witness when the change itself compiles and passes it.
+	if agentFiles != nil && len(rep.Red) == 0 && strings.Contains(out, "[build failed]") {
+		if packages := newCodeWitness(root, suite, files, timeout, out); len(packages) > 0 {
+			rep.NewCode = packages
+			return rep, nil
+		}
+	}
 	for name, passed := range after {
 		if newParentCovers(after, before, name) {
 			continue
@@ -207,19 +216,35 @@ var undefinedSymbol = regexp.MustCompile(`(?m)^\s*(\S+\.go):(\d+):(?:\d+:)?\s*un
 // too stays unjudgeable instead of being excused.
 func newCodeWitness(root, suite string, files []string, timeout time.Duration, baseOut string) []string {
 	own, _, _, err := perTest(root, suite, timeout, files...)
-	if err != nil || len(own) == 0 {
+	if err != nil || !everyTestPasses(own) {
 		return nil
 	}
+	packages := packagesNamedByFailure(files, baseOut)
+	sort.Strings(packages)
+	return packages
+}
+
+// everyTestPasses reports whether the change's own code ran each of its tests and all of them
+// passed. A single outcome for the whole run means the tests did not build, and a failure says
+// nothing about the base commit, so neither case is a witness.
+func everyTestPasses(own map[string]bool) bool {
+	if len(own) == 0 {
+		return false
+	}
 	if _, whole := own["suite"]; whole {
-		// One outcome for the whole run: the change's own code did not build the tests either.
-		return nil
+		return false
 	}
 	for _, passed := range own {
 		if !passed {
-			// A test that fails with the change says nothing about the base commit.
-			return nil
+			return false
 		}
 	}
+	return true
+}
+
+// packagesNamedByFailure keeps the directories the base commit's failure actually names: a build
+// error names the test file, and a package the change created names the missing directory.
+func packagesNamedByFailure(files []string, baseOut string) []string {
 	seen := map[string]bool{}
 	var packages []string
 	for _, file := range files {
@@ -228,18 +253,22 @@ func newCodeWitness(root, suite string, files []string, timeout time.Duration, b
 			continue
 		}
 		seen[dir] = true
-		// The failure has to name this package: a build error names the test file, and a package the change
-		// created names the directory that is missing from the base tree.
-		named := strings.Contains(baseOut, path.Base(file))
-		if dir != "." {
-			named = named || strings.Contains(baseOut, "/"+dir) || strings.Contains(baseOut, `"`+dir+`"`)
-		}
-		if named {
+		if failureNames(dir, file, baseOut) {
 			packages = append(packages, dir)
 		}
 	}
-	sort.Strings(packages)
 	return packages
+}
+
+// failureNames reports whether the failure output mentions this file or its directory.
+func failureNames(dir, file, baseOut string) bool {
+	if strings.Contains(baseOut, path.Base(file)) {
+		return true
+	}
+	if dir == "." {
+		return false
+	}
+	return strings.Contains(baseOut, "/"+dir) || strings.Contains(baseOut, `"`+dir+`"`)
 }
 
 var cargoUnitTest = regexp.MustCompile(`(?s)#\[\s*test\s*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z_0-9]*)\s*\(`)

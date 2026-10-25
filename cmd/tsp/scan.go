@@ -27,11 +27,8 @@ func runScan(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-
-	switch strings.ToLower(strings.TrimSpace(*level)) {
-	case "note", "warning", "error":
-	default:
-		fmt.Fprintf(os.Stderr, "scan: unknown level %q: name note, warning or error\n", *level)
+	if err := validScanLevel(*level); err != nil {
+		fmt.Fprintln(os.Stderr, "scan:", err)
 		return 2
 	}
 
@@ -50,25 +47,43 @@ func runScan(args []string) int {
 		return 2
 	}
 
-	if *asJSON {
-		encoded, marshalErr := json.MarshalIndent(report, "", "  ")
-		if marshalErr != nil {
-			fmt.Fprintln(os.Stderr, "scan:", marshalErr)
-			return 2
-		}
-		fmt.Println(string(encoded))
-	} else if len(report.Findings) == 0 && len(report.Scanned) == 0 {
-		fmt.Println("tsp scan: the change touched nothing, so there was nothing to scan")
-	} else if len(report.Findings) == 0 {
-		fmt.Printf("tsp scan: %s scanned the change and reported nothing\n", report.Engine)
-	} else {
-		fmt.Printf("tsp scan: %d finding(s) from %s in %s\n", len(report.Findings), report.Engine, report.Elapsed.Round(time.Millisecond))
-		for _, finding := range report.Findings {
-			fmt.Printf("  %s:%d %s %s — %s\n", finding.File, finding.Line, finding.Level, finding.Rule, finding.Message)
-		}
-	}
+	printScanReport(report, *asJSON)
 	if report.Blocking(*level) {
 		return 1
 	}
 	return 0
+}
+
+// validScanLevel refuses a level the gate cannot compare.
+func validScanLevel(level string) error {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "note", "warning", "error":
+		return nil
+	}
+	return fmt.Errorf("unknown level %q: name note, warning or error", level)
+}
+
+// printScanReport writes the finding lines, or says plainly that nothing was scanned.
+func printScanReport(report scan.Report, asJSON bool) {
+	if asJSON {
+		encoded, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "scan:", err)
+			return
+		}
+		fmt.Println(string(encoded))
+		return
+	}
+	if len(report.Findings) == 0 && len(report.Scanned) == 0 {
+		fmt.Println("tsp scan: the change touched nothing, so there was nothing to scan")
+		return
+	}
+	if len(report.Findings) == 0 {
+		fmt.Printf("tsp scan: %s scanned the change and reported nothing\n", report.Engine)
+		return
+	}
+	fmt.Printf("tsp scan: %d finding(s) from %s in %s\n", len(report.Findings), report.Engine, report.Elapsed.Round(time.Millisecond))
+	for _, finding := range report.Findings {
+		fmt.Printf("  %s:%d %s %s — %s\n", finding.File, finding.Line, finding.Level, finding.Rule, finding.Message)
+	}
 }
