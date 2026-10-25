@@ -1,0 +1,9 @@
+{
+  "fingerprint": "sha256:5c3019545f559aa9b133b81a0453a83bdba34e8d6412ee9757001fa10afd01c8",
+  "files": [
+    "cmd/tsp/main.go",
+    "internal/mutate/javascript.go"
+  ],
+  "reason": "pure refactor: runBenchGate, runJavaScript and jsTargets were split with no behaviour change, and the existing tests pin every exit code and printed string",
+  "recorded": "2026-10-25T19:58:54Z"
+}
