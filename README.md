@@ -640,7 +640,8 @@ reports the second when it means the first. `--fail-on-survivors -1` publishes t
 nothing, which is how a repository learns its current number without turning the tool off.
 
 `go install github.com/go-gremlins/gremlins/cmd/gremlins@latest` puts the Go engine on `PATH`.
-JavaScript (`stryker`) and Python (`mutmut`) have no adapter yet: the run exits 2 and says so instead
+JavaScript (`stryker`) and Python (`mutmut`) have no adapter yet, and a change written in one of them
+is refused by name rather than reported as "no Go source changed": the run exits 2 and says so instead
 of passing a stack it cannot measure.
 
 ### Real findings from real scanners

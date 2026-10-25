@@ -115,6 +115,11 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	targets := goTargets(changed)
 	report := Report{Targets: targets, Budget: opts.MaxMutants}
 	if len(targets) == 0 {
+		// "no Go source changed" is the truth for a Go change and a lie for everything else: a Python
+		// change reported as nothing-to-do is the false green this package exists to refuse.
+		if stack := otherStack(changed); stack != "" {
+			return report, fmt.Errorf("%w: the change is %s, and this version drives an engine only for Go: nothing was measured, so no mutant can be reported as killed", ErrUnusable, stack)
+		}
 		return report, nil
 	}
 	engine, err := findEngine(d)
@@ -335,6 +340,20 @@ func changedPaths(root, base string, d Deps) ([]string, error) {
 
 // goTargets keeps the Go packages the change touched: a test file is not source to mutate, and a
 // dependency tree is nobody's change.
+// otherStack names the stack a change is written in when it is not Go, so the refusal says which
+// engine is missing instead of claiming there was nothing to measure.
+func otherStack(changed []string) string {
+	for _, path := range changed {
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".py":
+			return "python (mutmut)"
+		case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx":
+			return "javascript (stryker)"
+		}
+	}
+	return ""
+}
+
 func goTargets(changed []string) []string {
 	seen := map[string]bool{}
 	var targets []string

@@ -155,3 +155,44 @@ func TestTimeoutCoefficientReachesTheEngine(t *testing.T) {
 		t.Fatalf("coefficient missing from %q", joined)
 	}
 }
+
+// A Python change used to come back as "no production Go source changed", which reads as nothing to do.
+// It is a refusal: no engine was driven, so no mutant was measured.
+func TestPythonChangeIsRefusedByName(t *testing.T) {
+	_, err := Run(context.Background(), Options{
+		Cwd:  "/repo",
+		Deps: Deps{Git: changeOnly("src/shop.py")},
+	})
+	if !errors.Is(err, ErrUnusable) {
+		t.Fatalf("err = %v, want ErrUnusable", err)
+	}
+	if !strings.Contains(err.Error(), "python (mutmut)") {
+		t.Fatalf("err = %v, want the stack and engine named", err)
+	}
+}
+
+// Go source with no production file (only a test) stays quiet, because that genuinely is nothing.
+func TestGoChangeWithoutProductionSourceIsQuiet(t *testing.T) {
+	report, err := Run(context.Background(), Options{
+		Cwd:  "/repo",
+		Deps: Deps{Git: changeOnly("internal/mutate/mutate_test.go")},
+	})
+	if err != nil {
+		t.Fatalf("err = %v, want a quiet run", err)
+	}
+	if len(report.Targets) != 0 {
+		t.Fatalf("targets = %v, want none", report.Targets)
+	}
+}
+
+// changeOnly answers the two git questions a run asks: the root, and the changed paths.
+func changeOnly(changed string) func(string, ...string) (string, error) {
+	return func(_ string, args ...string) (string, error) {
+		for _, a := range args {
+			if a == "rev-parse" {
+				return "/repo\n", nil
+			}
+		}
+		return changed, nil
+	}
+}
