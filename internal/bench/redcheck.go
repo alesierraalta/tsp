@@ -26,6 +26,9 @@ type RedCheckReport struct {
 	TestFiles   []string      `json:"test_files"`
 	Red         []string      `json:"red"`
 	PinsNothing []string      `json:"pins_nothing"`
+	// NewCode names the identifiers the changed tests reference and the base commit does not define. They are
+	// the reason a package a change introduces cannot be judged by running its tests against base at all.
+	NewCode []string `json:"new_code,omitempty"`
 }
 
 // RedCheck runs the tests added or changed in the repository holding dir against the code its HEAD commit
@@ -154,6 +157,15 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 	// Without one outcome per test name (a build failure, a runner the parser cannot read) nothing is known about
 	// any single test, and a failed build must never read as a red witness.
 	if _, wholeSuite := after["suite"]; len(after) == 0 || (len(after) == 1 && wholeSuite) {
+		// A package the change creates cannot compile at base: its tests name symbols base never defined. That is
+		// a witness only when the change's own code compiles the same tests, and it is reported as one, apart from
+		// the tests that failed without a build problem.
+		if agentFiles != nil {
+			if packages := newCodeWitness(root, suite, files, timeout, out); len(packages) > 0 {
+				rep.NewCode = packages
+				return rep, nil
+			}
+		}
 		detail := tail(out, 600)
 		if len(rep.Uncollected) > 0 {
 			var diagnostics []string
@@ -185,6 +197,49 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 	sort.Strings(rep.Red)
 	sort.Strings(rep.PinsNothing)
 	return rep, nil
+}
+
+// undefinedSymbol is what the Go toolchain prints for a file that refers to a name its build does not define.
+var undefinedSymbol = regexp.MustCompile(`(?m)^\s*(\S+\.go):(\d+):(?:\d+:)?\s*undefined: (\S+)$`)
+
+// newCodeWitness names the packages whose changed tests cannot be built from the base commit at all. The answer
+// needs the change's own code to compile and pass those same tests, so a test that is broken against the change
+// too stays unjudgeable instead of being excused.
+func newCodeWitness(root, suite string, files []string, timeout time.Duration, baseOut string) []string {
+	own, _, _, err := perTest(root, suite, timeout, files...)
+	if err != nil || len(own) == 0 {
+		return nil
+	}
+	if _, whole := own["suite"]; whole {
+		// One outcome for the whole run: the change's own code did not build the tests either.
+		return nil
+	}
+	for _, passed := range own {
+		if !passed {
+			// A test that fails with the change says nothing about the base commit.
+			return nil
+		}
+	}
+	seen := map[string]bool{}
+	var packages []string
+	for _, file := range files {
+		dir := path.Dir(file)
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		// The failure has to name this package: a build error names the test file, and a package the change
+		// created names the directory that is missing from the base tree.
+		named := strings.Contains(baseOut, path.Base(file))
+		if dir != "." {
+			named = named || strings.Contains(baseOut, "/"+dir) || strings.Contains(baseOut, `"`+dir+`"`)
+		}
+		if named {
+			packages = append(packages, dir)
+		}
+	}
+	sort.Strings(packages)
+	return packages
 }
 
 var cargoUnitTest = regexp.MustCompile(`(?s)#\[\s*test\s*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z_0-9]*)\s*\(`)
@@ -326,9 +381,6 @@ func pytestInterpreter(root string, files []string) string {
 	}
 	return "\"" + strings.ReplaceAll(strings.ReplaceAll(best, "\\", "\\\\"), "\"", "\\\"") + "\""
 }
-
-// extractHead writes the files HEAD records into dst, the code the agent's edits must not decide the verdict.
-func extractHead(root, dst string) error { return extractRev(root, "HEAD", dst) }
 
 // extractRev writes the tree rev records in the repository at root into dst, without its history.
 func extractRev(root, rev, dst string) error {
