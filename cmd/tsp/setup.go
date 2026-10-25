@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/alesierraalta/tsp/internal/lang"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,6 +89,11 @@ func doctorReport(configDir, runMode string) doctor.Report {
 	report := doctor.RunWith(configDir, exec.LookPath, probeHook)
 	report.Mode = runMode
 	report.Hosts = doctor.HostInventory(hostHome(configDir), configDir)
+	// Languages answer for the repository the command runs in, not for the install: the tools a stack
+	// needs are what the user has to install next, and no other command was naming them.
+	if wd, err := os.Getwd(); err == nil {
+		report.Languages = lang.Detect(wd, lang.Deps{}, nil).Languages
+	}
 	return report
 }
 

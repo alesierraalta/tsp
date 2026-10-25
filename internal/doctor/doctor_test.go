@@ -3,6 +3,7 @@ package doctor
 import (
 	"encoding/json"
 	"errors"
+	"github.com/alesierraalta/tsp/internal/lang"
 	"os"
 	"path/filepath"
 	"strings"
@@ -449,5 +450,25 @@ func TestBinaryComparisonLooksUpTppBeforeRddPlus(t *testing.T) {
 				t.Fatalf("PathBinary = %q, want %q", r.PathBinary, tc.wantPath)
 			}
 		})
+	}
+}
+
+// Doctor answers for the machine, and a stack whose tool is missing is the part of that answer the
+// reader has to act on: the section names the install line instead of listing a language and stopping.
+func TestDoctorNamesTheStackAndTheToolItCannotRun(t *testing.T) {
+	report := Report{Languages: []lang.Language{{
+		Name:  "python",
+		Files: 3,
+		Tools: []lang.Tool{
+			{Name: "tests", Command: "python3", Available: true},
+			{Name: "mutation", Command: "mutmut", Install: "pipx install mutmut"},
+		},
+	}}}
+	text := report.String()
+	if !strings.Contains(text, "languages in this repository:") {
+		t.Fatalf("doctor printed no language section:\n%s", text)
+	}
+	if !strings.Contains(text, "python") || !strings.Contains(text, "mutation missing (pipx install mutmut)") {
+		t.Fatalf("doctor printed no missing tool:\n%s", text)
 	}
 }
