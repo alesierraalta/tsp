@@ -28,8 +28,9 @@ const (
 
 // skillHosts is the host set the skill tree installs into. A wildcard would also claim the
 // opt-in Pi host, whose managed root is Pi's extension directory; naming the hosts keeps a
-// pi-only sync to the extension and keeps skills out of extension directories.
-var skillHosts = []string{"claude", "opencode", "gemini", "codex"}
+// pi-only sync to the extension and keeps skills out of extension directories. Every host
+// discovery recognizes belongs here, or it is reported by doctor and never written to.
+var skillHosts = []string{"claude", "opencode", "gemini", "antigravity", "codex"}
 
 // extensionEntry is the destination name inside an extension directory: the payload's embed
 // name (tpp.ts) never decides where the host loads it from.

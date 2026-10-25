@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/alesierraalta/tsp/internal/manifest"
 )
 
 func TestDiscoverySkipsAHostWithNoConfigDir(t *testing.T) {
@@ -121,5 +123,26 @@ func TestDiscoveryDoesNotMistakeAntigravityForTheGeminiCli(t *testing.T) {
 	discovery := DiscoverHosts(home, "")
 	if got := hostNames(discovery.Hosts); len(got) != 1 || got[0] != "antigravity" {
 		t.Fatalf("discovered hosts = %v, want only antigravity", got)
+	}
+}
+
+// A host discovery offers must also be a host the skill tree claims. The two lists are one
+// decision kept in two places: when they drift, doctor reports the host and sync never writes
+// to it, which is exactly what happened to Anti-Gravity.
+func TestEveryDiscoveredHostReceivesSkills(t *testing.T) {
+	for _, name := range KnownHosts() {
+		if name == "pi" {
+			continue // opt-in extension host: its payload is the adapter, never the skill tree
+		}
+		claimed := false
+		for _, component := range manifest.Components() {
+			if component.Kind == manifest.KindSkill && manifest.AppliesTo(name, component) {
+				claimed = true
+				break
+			}
+		}
+		if !claimed {
+			t.Fatalf("%s is discovered but no skill component claims it: add it to manifest.skillHosts", name)
+		}
 	}
 }
