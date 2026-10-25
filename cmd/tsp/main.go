@@ -9,14 +9,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"strings"
-	"time"
-
 	"github.com/alesierraalta/tsp/internal/admit"
 	"github.com/alesierraalta/tsp/internal/base"
 	"github.com/alesierraalta/tsp/internal/bench"
@@ -37,6 +29,14 @@ import (
 	"github.com/alesierraalta/tsp/internal/sync"
 	"github.com/alesierraalta/tsp/internal/tui"
 	"github.com/alesierraalta/tsp/internal/update"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // exitArtifact is what the CLI returns when its machine-readable output could not be written: the run
@@ -1763,6 +1763,8 @@ func runBench(args []string) int {
 		return runBenchRescore(args[1:])
 	case "adjudicate":
 		return runBenchAdjudicate(args[1:])
+	case "gate":
+		return runBenchGate(args[1:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		return 2
@@ -2587,4 +2589,61 @@ func sandboxRefusal(image, output string, err error) error {
 // admitCommandProblem is evidence.CheckAdmitCommand under a name runPlan's --evidence flag does not shadow.
 func admitCommandProblem(id, admit string) (reason, detail string) {
 	return evidence.CheckAdmitCommand(id, admit)
+}
+
+// runBenchGate refuses to call a run good when it measured nothing, lost recall it used to have, or
+// spent more than the operator allowed. Every floor is the operator's: the package only compares.
+func runBenchGate(args []string) int {
+	usage := "bench gate needs a results directory: [--baseline <dir>] [--min-recall <f>] [--max-regression <f>] [--max-cost-usd <f>] <results>"
+	var gate bench.Gate
+	var results string
+	fail := func(format string, a ...any) int {
+		fmt.Fprintf(os.Stderr, format+"\n", a...)
+		return 2
+	}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--baseline", "--min-recall", "--max-regression", "--max-cost-usd":
+			if i+1 >= len(args) {
+				return fail("bench gate: %s needs a value", args[i])
+			}
+			value, err := strconv.ParseFloat(args[i+1], 64)
+			if args[i] == "--baseline" {
+				gate.BaselineDir = args[i+1]
+			} else if err != nil {
+				return fail("bench gate: %s needs a number, got %q", args[i], args[i+1])
+			} else {
+				switch args[i] {
+				case "--min-recall":
+					gate.MinRecall = value
+				case "--max-regression":
+					gate.MaxRegression = value
+				case "--max-cost-usd":
+					gate.MaxCostUSD = value
+				}
+			}
+			i++
+		default:
+			if results != "" {
+				return fail("bench gate takes one results directory, got %q and %q", results, args[i])
+			}
+			results = args[i]
+		}
+	}
+	if results == "" {
+		return fail("%s", usage)
+	}
+	verdict, err := bench.Judge(results, gate)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "bench gate:", err)
+		return 2
+	}
+	for _, reason := range verdict.Reasons {
+		fmt.Println("bench gate:", reason)
+	}
+	if !verdict.Passed {
+		return 1
+	}
+	fmt.Printf("bench gate: recall %.3f over %d defect(s), cost %.4f\n", verdict.Recall, verdict.Defects, verdict.CostUSD)
+	return 0
 }
