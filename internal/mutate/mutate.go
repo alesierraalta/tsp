@@ -103,22 +103,11 @@ type Options struct {
 
 // Run measures the change and returns what the tests failed to kill.
 func Run(ctx context.Context, opts Options) (Report, error) {
-	d := opts.Deps
-	if d.Git == nil {
-		d.Git = gitdiff.Default
-	}
-	if d.LookPath == nil {
-		d.LookPath = exec.LookPath
-	}
-	if d.Run == nil {
-		d.Run = runAt
-	}
-
+	d := engineDeps(opts.Deps)
 	root, err := gitdiff.Root(opts.Cwd, d.Git)
 	if err != nil {
 		return Report{}, fmt.Errorf("%w: not a git repository: nothing to mutate", ErrUnusable)
 	}
-
 	changed, err := changedPaths(root, opts.Base, d)
 	if err != nil {
 		return Report{}, err
@@ -128,58 +117,103 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	if len(targets) == 0 {
 		return report, nil
 	}
-
-	engine, err := d.LookPath("gremlins")
+	engine, err := findEngine(d)
 	if err != nil {
-		return report, fmt.Errorf("%w: gremlins is not installed, so no mutant was measured: install it with \"go install github.com/go-gremlins/gremlins/cmd/gremlins@latest\"", ErrUnusable)
+		return report, err
 	}
 	report.Engine = "gremlins"
-
-	work, err := os.MkdirTemp("", "tsp-mutate-")
+	work, err := workspace()
 	if err != nil {
-		return report, fmt.Errorf("%w: %v", ErrUnusable, err)
+		return report, err
 	}
 	defer os.RemoveAll(work)
 
-	// The dry run is the budget's evidence: it finds every mutant without running a test, so a change
-	// too wide to pay for is refused before anything expensive happens. Engines report paths relative
-	// to the package they analysed, so the packages are analysed one at a time and every mutant is
-	// attributed to the package it came from.
-	for i, target := range targets {
-		dryPath := filepath.Join(work, fmt.Sprintf("dry-%d.json", i))
-		if _, err := d.Run(ctx, root, engine, unleashArgs(target, opts, "-d", dryPath)...); err != nil {
-			return report, fmt.Errorf("%w: gremlins could not analyse %s: %v", ErrUnusable, target, err)
-		}
-		dry, err := readGremlins(dryPath)
-		if err != nil {
-			return report, err
-		}
-		report.MutationCount += dry.total()
-	}
-	if opts.MaxMutants > 0 && report.MutationCount > opts.MaxMutants {
-		return report, fmt.Errorf("%w: this change reaches %d mutants, above the --max-mutants budget of %d: narrow the change or raise the budget", ErrUnusable, report.MutationCount, opts.MaxMutants)
+	if err := countMutants(ctx, &report, opts, d, root, engine, work); err != nil {
+		return report, err
 	}
 	if report.MutationCount == 0 {
 		return report, nil
 	}
 
 	started := time.Now()
-	for i, target := range targets {
-		livePath := filepath.Join(work, fmt.Sprintf("live-%d.json", i))
-		if _, err := d.Run(ctx, root, engine, unleashArgs(target, opts, "", livePath)...); err != nil {
-			return report, fmt.Errorf("%w: gremlins could not run the mutants of %s: %v", ErrUnusable, target, err)
-		}
-		live, err := readGremlins(livePath)
-		if err != nil {
-			return report, err
-		}
-		normalize(&report, packageDir(target), live)
+	if err := judgeMutants(ctx, &report, opts, d, root, engine, work); err != nil {
+		return report, err
 	}
 	report.Elapsed = time.Since(started)
 	if report.Killed+report.Survived == 0 && report.MutationCount > 0 {
 		return report, fmt.Errorf("%w: no mutant was judged (%d timed out, %d not covered, %d not viable): the tests are slower than the engine's budget, so raise --timeout-coefficient or narrow the change", ErrUnusable, report.TimedOut, report.NotCovered, report.NotViable)
 	}
 	return report, nil
+}
+
+// engineDeps fills the three boundaries a run crosses, so a test can replace each one.
+func engineDeps(d Deps) Deps {
+	if d.Git == nil {
+		d.Git = gitdiff.Default
+	}
+	if d.LookPath == nil {
+		d.LookPath = exec.LookPath
+	}
+	if d.Run == nil {
+		d.Run = runAt
+	}
+	return d
+}
+
+// findEngine names the one engine this package drives, and refuses to measure instead of guessing
+// when it is not installed.
+func findEngine(d Deps) (string, error) {
+	engine, err := d.LookPath("gremlins")
+	if err != nil {
+		return "", fmt.Errorf("%w: gremlins is not installed, so no mutant was measured: install it with \"go install github.com/go-gremlins/gremlins/cmd/gremlins@latest\"", ErrUnusable)
+	}
+	return engine, nil
+}
+
+// workspace is the scratch directory the engine writes its JSON into.
+func workspace() (string, error) {
+	work, err := os.MkdirTemp("", "tsp-mutate-")
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrUnusable, err)
+	}
+	return work, nil
+}
+
+// countMutants is the budget's evidence: the dry run finds every mutant without running a test, so
+// a change too wide to pay for is refused before anything expensive happens. Engines report paths
+// relative to the package they analysed, so the packages are counted one at a time.
+func countMutants(ctx context.Context, report *Report, opts Options, d Deps, root, engine, work string) error {
+	for i, target := range report.Targets {
+		dryPath := filepath.Join(work, fmt.Sprintf("dry-%d.json", i))
+		if _, err := d.Run(ctx, root, engine, unleashArgs(target, opts, "-d", dryPath)...); err != nil {
+			return fmt.Errorf("%w: gremlins could not analyse %s: %v", ErrUnusable, target, err)
+		}
+		dry, err := readGremlins(dryPath)
+		if err != nil {
+			return err
+		}
+		report.MutationCount += dry.total()
+	}
+	if opts.MaxMutants > 0 && report.MutationCount > opts.MaxMutants {
+		return fmt.Errorf("%w: this change reaches %d mutants, above the --max-mutants budget of %d: narrow the change or raise the budget", ErrUnusable, report.MutationCount, opts.MaxMutants)
+	}
+	return nil
+}
+
+// judgeMutants runs the tests once per mutant and keeps the verdicts in the report.
+func judgeMutants(ctx context.Context, report *Report, opts Options, d Deps, root, engine, work string) error {
+	for i, target := range report.Targets {
+		livePath := filepath.Join(work, fmt.Sprintf("live-%d.json", i))
+		if _, err := d.Run(ctx, root, engine, unleashArgs(target, opts, "", livePath)...); err != nil {
+			return fmt.Errorf("%w: gremlins could not run the mutants of %s: %v", ErrUnusable, target, err)
+		}
+		live, err := readGremlins(livePath)
+		if err != nil {
+			return err
+		}
+		normalize(report, packageDir(target), live)
+	}
+	return nil
 }
 
 // packageDir turns an engine target ("./internal/mode") into the prefix its reported paths carry.

@@ -23,12 +23,7 @@ func TestDiscoverySkipsAHostWithNoConfigDir(t *testing.T) {
 }
 
 func TestDiscoveryFindsTheFourKnownHosts(t *testing.T) {
-	home := t.TempDir()
-	for _, dir := range []string{".claude", filepath.Join(".config", "opencode"), ".gemini", ".codex"} {
-		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+	home := homeWith(t, ".claude", filepath.Join(".config", "opencode"), ".gemini", ".codex")
 
 	discovery := DiscoverHosts(home, "")
 	if got := hostNames(discovery.Hosts); len(got) != 4 || got[0] != "claude" || got[1] != "opencode" || got[2] != "gemini" || got[3] != "codex" {
@@ -113,12 +108,7 @@ func TestDiscoveryFindsAntigravityBesideTheGeminiCli(t *testing.T) {
 // Gemini CLI, and installing a second copy of every skill for a host that is not there is the
 // misreport S2 forbids.
 func TestDiscoveryDoesNotMistakeAntigravityForTheGeminiCli(t *testing.T) {
-	home := t.TempDir()
-	for _, dir := range []string{filepath.Join(".gemini", "antigravity", "skills"), filepath.Join(".gemini", "antigravity-cli")} {
-		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+	home := homeWith(t, filepath.Join(".gemini", "antigravity", "skills"), filepath.Join(".gemini", "antigravity-cli"))
 
 	discovery := DiscoverHosts(home, "")
 	if got := hostNames(discovery.Hosts); len(got) != 1 || got[0] != "antigravity" {
@@ -145,4 +135,17 @@ func TestEveryDiscoveredHostReceivesSkills(t *testing.T) {
 			t.Fatalf("%s is discovered but no skill component claims it: add it to manifest.skillHosts", name)
 		}
 	}
+}
+
+// homeWith builds a throwaway home holding exactly these directories, so a discovery test states
+// what exists instead of writing it out each time.
+func homeWith(t *testing.T, dirs ...string) string {
+	t.Helper()
+	home := t.TempDir()
+	for _, dir := range dirs {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return home
 }

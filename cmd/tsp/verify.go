@@ -74,23 +74,21 @@ func runVerify(args []string) int {
 // reportVerify prints a published result and returns the exit code its verdict carries.
 func reportVerify(result verify.Result, asJSON bool) int {
 	if asJSON {
-		return printVerifyJSON(result)
+		encoded, err := json.MarshalIndent(result.Verdict, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "verify:", err)
+			return 2
+		}
+		fmt.Println(string(encoded))
+	} else {
+		printVerifyText(result)
 	}
-	printVerifyText(result)
-	if result.Blocking() {
-		return 1
-	}
-	return 0
+	return verifyExit(result)
 }
 
-// printVerifyJSON writes the verdict the second session produced, and nothing else.
-func printVerifyJSON(result verify.Result) int {
-	encoded, err := json.MarshalIndent(result.Verdict, "", "  ")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "verify:", err)
-		return 2
-	}
-	fmt.Println(string(encoded))
+// verifyExit turns a verdict into the process status every caller of this command shares: 1 when
+// the second session refused the change, 0 when it did not.
+func verifyExit(result verify.Result) int {
 	if result.Blocking() {
 		return 1
 	}
