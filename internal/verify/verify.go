@@ -262,7 +262,12 @@ func applyCandidate(repo, frozen, pkg string, opts Options) error {
 
 func orNotRun(text, name string) string {
 	if strings.TrimSpace(text) == "" {
-		return name + " was not run for this candidate\n"
+		// A session that must re-run the suite itself will usually give up: commands inside the frozen tree
+		// take longer than one tool call's budget, and an abstention reads like a clean candidate. Say what
+		// is missing and what to do instead, so the answer is a verdict rather than a timeout.
+		return name + " was not run for this candidate. It was not handed over by the caller: run it yourself\n" +
+			"in the frozen tree with the suite the change names, or answer \"insufficient\" and say which\n" +
+			"command you could not finish. Do not treat a missing record as a passing one.\n"
 	}
 	if strings.HasSuffix(text, "\n") {
 		return text

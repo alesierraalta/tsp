@@ -8,6 +8,9 @@ import (
 
 // TestProbeQualityReportsOnARealChange drives the probe over a real repository: a complex function and a
 // copied block inside the change exit 1, and a change the probe cannot measure exits 2 instead of passing.
+// One fixture carries both violations on purpose: it proves the command wires the rules into an exit code.
+// Each rule is pinned on its own in internal/quality (TestComplexityCountsOnlyWhatTheChangeTouches and its
+// duplication sibling), so a rule breaking there fails there, not here.
 func TestProbeQualityReportsOnARealChange(t *testing.T) {
 	dir := t.TempDir()
 	verifyGit(t, dir, "init", "-q")

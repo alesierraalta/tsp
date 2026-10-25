@@ -161,6 +161,11 @@ func TestRunRecordsOutputsThatWereNotProduced(t *testing.T) {
 	if !strings.Contains(string(data), "check was not run") {
 		t.Fatalf("%s = %q, want it to say check was not run", CheckFile, data)
 	}
+	// A missing record must send the session to do the work, not read as a passing artifact: re-running the
+	// suite inside the frozen tree is the only honest alternative, and answering insufficient is the fallback.
+	if !strings.Contains(string(data), "run it yourself") || !strings.Contains(string(data), "Do not treat a missing record as a passing one") {
+		t.Fatalf("%s = %q, want it to say what to do instead of a missing record", CheckFile, data)
+	}
 }
 
 func TestRunBlocksOnFindings(t *testing.T) {
