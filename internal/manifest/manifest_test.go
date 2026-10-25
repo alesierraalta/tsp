@@ -132,6 +132,27 @@ func TestComponentFilesRefusesAComponentWithNoPayload(t *testing.T) {
 	if err == nil {
 		t.Fatalf("ComponentFiles(%q) returned files %v without an error", "stop-gate", files)
 	}
+	// The reason matters: a hook has no payload, and "does not exist" would send a reader looking
+	// for a component that is right there.
+	if !strings.Contains(err.Error(), "has no payload") {
+		t.Fatalf("error = %q, want it to say the component has no payload", err)
+	}
+}
+
+// A component's files come back sorted, so a manifest digest does not depend on map order.
+func TestComponentFilesAreSorted(t *testing.T) {
+	files, err := ComponentFiles("test-strategy")
+	if err != nil {
+		t.Fatalf("ComponentFiles: %v", err)
+	}
+	if len(files) < 2 {
+		t.Fatalf("test-strategy has %d files: the ordering cannot be observed", len(files))
+	}
+	for i := 1; i < len(files); i++ {
+		if files[i-1].Source > files[i].Source {
+			t.Fatalf("files are out of order: %q before %q", files[i-1].Source, files[i].Source)
+		}
+	}
 }
 
 // The Pi extension is an opt-in component whose payload is exactly one embedded file,

@@ -57,6 +57,8 @@ type Report struct {
 	Killed        int           `json:"killed"`
 	Survived      int           `json:"survived"`
 	NotCovered    int           `json:"not_covered"`
+	NotViable     int           `json:"not_viable"`
+	TimedOut      int           `json:"timed_out"`
 	Survivors     []Mutation    `json:"survivors,omitempty"`
 	Elapsed       time.Duration `json:"elapsed"`
 }
@@ -66,6 +68,17 @@ type Report struct {
 // its current number without turning the tool off.
 func (r Report) Blocking(threshold int) bool {
 	return threshold >= 0 && r.Survived > threshold
+}
+
+// Unreported is the gap between the mutants the dry run counted and the statuses the live run
+// reported back. Mortality is not a vote: a mutant nobody reported is one nobody judged, so the
+// number is printed rather than left to look like a kill.
+func (r Report) Unreported() int {
+	accounted := r.Killed + r.Survived + r.NotCovered + r.NotViable + r.TimedOut
+	if accounted >= r.MutationCount {
+		return 0
+	}
+	return r.MutationCount - accounted
 }
 
 // Deps are the process boundaries, injected so the decision is testable without a repository.
@@ -82,7 +95,10 @@ type Options struct {
 	MaxMutants int           // 0 means no budget; a change above it is refused before the run
 	Timeout    time.Duration // 0 means the engine's own default
 	Workers    int           // 0 lets the engine decide
-	Deps       Deps
+	// TimeoutCoefficient multiplies the engine's per-mutant test budget. Zero keeps its default,
+	// which is short enough that a slow package reports timeouts instead of verdicts.
+	TimeoutCoefficient int
+	Deps               Deps
 }
 
 // Run measures the change and returns what the tests failed to kill.
@@ -160,6 +176,9 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		normalize(&report, packageDir(target), live)
 	}
 	report.Elapsed = time.Since(started)
+	if report.Killed+report.Survived == 0 && report.MutationCount > 0 {
+		return report, fmt.Errorf("%w: no mutant was judged (%d timed out, %d not covered, %d not viable): the tests are slower than the engine's budget, so raise --timeout-coefficient or narrow the change", ErrUnusable, report.TimedOut, report.NotCovered, report.NotViable)
+	}
 	return report, nil
 }
 
@@ -183,6 +202,9 @@ func unleashArgs(target string, opts Options, dryFlag, out string) []string {
 	if opts.Workers > 0 {
 		args = append(args, "--workers", fmt.Sprint(opts.Workers))
 	}
+	if opts.TimeoutCoefficient > 0 {
+		args = append(args, "--timeout-coefficient", fmt.Sprint(opts.TimeoutCoefficient))
+	}
 	return args
 }
 
@@ -200,6 +222,10 @@ func normalize(report *Report, pkg string, result gremlins) {
 				report.Survivors = append(report.Survivors, Mutation{File: rel, Line: m.Line, Operator: m.Type, Status: StatusLived})
 			case StatusNotCovered:
 				report.NotCovered++
+			case StatusNotViable:
+				report.NotViable++
+			case StatusTimedOut:
+				report.TimedOut++
 			}
 		}
 	}

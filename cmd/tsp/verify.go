@@ -74,30 +74,44 @@ func runVerify(args []string) int {
 // reportVerify prints a published result and returns the exit code its verdict carries.
 func reportVerify(result verify.Result, asJSON bool) int {
 	if asJSON {
-		encoded, err := json.MarshalIndent(result.Verdict, "", "  ")
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "verify:", err)
-			return 2
-		}
-		fmt.Println(string(encoded))
-	} else {
-		fmt.Printf("tsp verify: verdict %s, %d finding(s), candidate on %s\n", result.Verdict.Verdict, len(result.Verdict.Findings), result.Base)
-		for _, finding := range result.Verdict.Findings {
-			fmt.Printf("  %s:%d %s — %s\n", finding.File, finding.Line, finding.Claim, finding.Evidence)
-		}
-		if result.Verdict.Notes != "" {
-			fmt.Printf("  notes: %s\n", result.Verdict.Notes)
-		}
-		if result.Kept && result.FrozenDir != "" {
-			fmt.Printf("tsp verify: kept %s (frozen tree) and %s (package)\n", result.FrozenDir, result.PackageDir)
-		} else if result.Kept {
-			fmt.Printf("tsp verify: published the verdict the host wrote in %s\n", result.PackageDir)
-		}
+		return printVerifyJSON(result)
 	}
+	printVerifyText(result)
 	if result.Blocking() {
 		return 1
 	}
 	return 0
+}
+
+// printVerifyJSON writes the verdict the second session produced, and nothing else.
+func printVerifyJSON(result verify.Result) int {
+	encoded, err := json.MarshalIndent(result.Verdict, "", "  ")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "verify:", err)
+		return 2
+	}
+	fmt.Println(string(encoded))
+	if result.Blocking() {
+		return 1
+	}
+	return 0
+}
+
+// printVerifyText states the verdict, the evidence behind each finding, and where the candidate
+// went, so a reader can disagree with the machine in the same breath.
+func printVerifyText(result verify.Result) {
+	fmt.Printf("tsp verify: verdict %s, %d finding(s), candidate on %s\n", result.Verdict.Verdict, len(result.Verdict.Findings), result.Base)
+	for _, finding := range result.Verdict.Findings {
+		fmt.Printf("  %s:%d %s — %s\n", finding.File, finding.Line, finding.Claim, finding.Evidence)
+	}
+	if result.Verdict.Notes != "" {
+		fmt.Printf("  notes: %s\n", result.Verdict.Notes)
+	}
+	if result.Kept && result.FrozenDir != "" {
+		fmt.Printf("tsp verify: kept %s (frozen tree) and %s (package)\n", result.FrozenDir, result.PackageDir)
+	} else if result.Kept {
+		fmt.Printf("tsp verify: published the verdict the host wrote in %s\n", result.PackageDir)
+	}
 }
 
 // readOptional reads a file the caller named, or returns an empty string so the package records
