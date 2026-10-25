@@ -548,7 +548,7 @@ Additional commands:
 | `tsp check --base <ref>` | The same question for the commit range `<ref>...HEAD`, which is the candidate CI has: the tests are run against `<ref>`'s code, so a test that only passes because the change is next to it pins nothing. |
 | `tsp redcheck` | Runs added or changed tests against HEAD's code to identify defect witnesses. |
 | `tsp mutate [--base <ref>] [--fail-on-survivors <n>]` | Mutates the production source the change touched and reports the mutants no test kills; the engine (gremlins) stays external, the scope, budget and gate stay here. Exit 0 no survivor at the threshold, 1 survivors, 2 nothing measured. |
-| `tsp scan [--base <ref>] [--sarif <report>] [--level <l>]` | Brings a scanner's real findings into the change: runs gitleaks when installed, or reads any SARIF report, keeps only the files the change touched, and gates at `--level` (default `warning`). Exit 0 nothing at that level, 1 findings, 2 nothing scanned. |
+| `tsp scan [--base <ref>] [--sarif <report>] [--level <l>]` | Brings a scanner's real findings into the change: runs gitleaks when installed and semgrep beside it when it is too, or reads any SARIF report, keeps only the files the change touched, and gates at `--level` (default `warning`). Exit 0 nothing at that level, 1 findings, 2 nothing scanned. |
 | `tsp findings record\|check\|verdict` | Records defect witnesses, checks their state at the next review, or records a verdict. |
 | `tsp probe env [dir] [--json]` | Reports undelivered environment settings (read-only). |
 | `tsp probe quality [--cwd <dir>] [--base <ref>]` | Reports complexity and copied blocks inside the lines a change touches, and names the languages it cannot measure. Exit 0 clean, 1 findings, 2 nothing measurable. |
@@ -649,7 +649,7 @@ A security review done by the same model that wrote the code is an opinion with 
 brings a scanner's findings into the change, with the scope and the gate kept here:
 
 ```
-tsp scan                        # gitleaks, when installed, over the changed files
+tsp scan                        # gitleaks (secrets) and semgrep (rules) over the changed files
 tsp scan --sarif report.sarif   # a report another tool already wrote
 ```
 
@@ -662,6 +662,11 @@ about a repository, the answer is about a change.
 | 0 | nothing at the gated level (`--level`, default `warning`) |
 | 1 | a finding reaches that level |
 | 2 | nothing was scanned: no engine installed, an unreadable report, or an unknown `--level` |
+
+`semgrep` is a second engine, not a replacement: with it installed the scan reads secrets **and** rules
+over the same changed files, and the report names both. Without it the scan still runs and prints
+`semgrep is not installed, so only secrets were scanned`, because a clean report that stayed silent
+about the rule engine would read as a clean rules pass.
 
 The default gate is `warning`, not `error`, because the scanners disagree about severity: gitleaks
 reports a leaked credential with no level at all, and SARIF's own default for a missing level is

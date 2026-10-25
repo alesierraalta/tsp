@@ -102,3 +102,65 @@ func fakeGit(changed string) func(string, ...string) (string, error) {
 		return changed, nil
 	}
 }
+
+// scanFake writes the SARIF the parser reads wherever the engine was told to put it.
+func scanFake(t *testing.T) func(context.Context, string, string, ...string) (string, error) {
+	t.Helper()
+	return func(_ context.Context, _ string, name string, args ...string) (string, error) {
+		for i, a := range args {
+			if a == "--output" || a == "--report-path" {
+				if i+1 < len(args) {
+					return "", os.WriteFile(args[i+1], []byte(sarifReport), 0o644)
+				}
+			}
+		}
+		return "", nil
+	}
+}
+
+// A scan that only ran gitleaks has read secrets, not rules: the report names the engines that ran, so
+// "no findings" cannot pass for "no rule looked".
+func TestScanRunsSemgrepBesideGitleaks(t *testing.T) {
+	report, err := Run(context.Background(), Options{
+		Cwd:  "/repo",
+		Base: "base",
+		Deps: Deps{
+			Git:      fakeGit("app/main.py\n"),
+			LookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
+			Run:      scanFake(t),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Engine != "gitleaks+semgrep" || len(report.Notes) != 0 {
+		t.Fatalf("engine = %q notes = %v, want both engines and no note", report.Engine, report.Notes)
+	}
+	if len(report.Findings) == 0 {
+		t.Fatal("want the rule the report carries, so a merge that drops findings fails here")
+	}
+}
+
+// Without semgrep the scan still reports, and says so: silence here reads as a clean rules pass.
+func TestScanWithoutSemgrepSaysOnlySecretsWereRead(t *testing.T) {
+	report, err := Run(context.Background(), Options{
+		Cwd:  "/repo",
+		Base: "base",
+		Deps: Deps{
+			Git: fakeGit("app/main.py\n"),
+			LookPath: func(name string) (string, error) {
+				if name == "semgrep" {
+					return "", errors.New("missing")
+				}
+				return "/usr/bin/" + name, nil
+			},
+			Run: scanFake(t),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Notes) != 1 || !strings.Contains(report.Notes[0], "only secrets were scanned") {
+		t.Fatalf("notes = %v, want the missing-engine note", report.Notes)
+	}
+}
