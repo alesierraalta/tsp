@@ -15,6 +15,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -87,7 +88,7 @@ type Options struct {
 // DefaultNotChecked names what this probe does not measure, so a clean report cannot read as a
 // stronger claim than it is.
 var DefaultNotChecked = []string{
-	"cycles: the Go toolchain refuses an import cycle, so a cycle a build accepts cannot exist; JavaScript and TypeScript imports are not parsed yet",
+	"cycles: the Go toolchain refuses an import cycle, so a cycle a build accepts cannot exist; a JavaScript or TypeScript cycle is not reported here",
 	"layers: a package that matches no declared layer is not judged",
 }
 
@@ -218,13 +219,16 @@ func fileEdges(root, rel string, ranges map[string][]gitdiff.Range, declared Dec
 	if err != nil {
 		return nil
 	}
+	from := layerOfPath(declared, rel)
+	if from == "" {
+		return nil
+	}
+	if jsExtensions[strings.ToLower(path.Ext(rel))] {
+		return jsEdges(rel, body, ranges[rel], declared, from)
+	}
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, abs, body, parser.ImportsOnly)
 	if err != nil {
-		return nil
-	}
-	from := layerOfPath(declared, rel)
-	if from == "" {
 		return nil
 	}
 	var findings []Finding
@@ -256,6 +260,27 @@ func refusedEdge(rel string, spec *ast.ImportSpec, fset *token.FileSet, ranges [
 		return Finding{}, false
 	}
 	return Finding{Rule: RuleForbiddenEdge, File: rel, Line: line, Message: refusal(from, to, importPath, rule)}, true
+}
+
+// jsEdges judges the imports of one JavaScript or TypeScript file the same way a Go file is judged:
+// a specifier on a changed line that lands in a refused layer is a finding.
+func jsEdges(rel string, body []byte, ranges []gitdiff.Range, declared Declaration, from string) []Finding {
+	var findings []Finding
+	for _, spec := range jsImports(body) {
+		if !inRange(ranges, spec.Line) {
+			continue
+		}
+		importPath, to := jsLayer(declared, rel, spec.Path)
+		if to == "" {
+			continue
+		}
+		rule, refused := forbidden(declared, from, to)
+		if !refused {
+			continue
+		}
+		findings = append(findings, Finding{Rule: RuleForbiddenEdge, File: rel, Line: spec.Line, Message: refusal(from, to, importPath, rule)})
+	}
+	return findings
 }
 
 // sortFindings orders findings by file then line so a report reads the same twice.
@@ -305,9 +330,12 @@ func layerNames(declared Declaration) []string {
 // changedGoFiles keeps the changed Go production files, sorted.
 func changedGoFiles(ranges map[string][]gitdiff.Range) []string {
 	files := make([]string, 0, len(ranges))
-	for path := range ranges {
-		slash := filepath.ToSlash(path)
-		if strings.HasSuffix(slash, ".go") && !strings.HasSuffix(slash, "_test.go") {
+	for changed := range ranges {
+		slash := filepath.ToSlash(changed)
+		if strings.HasSuffix(slash, "_test.go") || strings.HasSuffix(slash, ".test.ts") || strings.HasSuffix(slash, ".test.tsx") {
+			continue
+		}
+		if strings.HasSuffix(slash, ".go") || jsExtensions[strings.ToLower(path.Ext(slash))] {
 			files = append(files, slash)
 		}
 	}
