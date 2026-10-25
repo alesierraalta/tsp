@@ -76,7 +76,7 @@ func printMutateReport(report mutate.Report, failOn int) {
 		fmt.Println("tsp mutate: no production Go source changed, so no mutant was measured")
 		return
 	}
-	fmt.Printf("tsp mutate: %d mutant(s) from %d package(s), %d killed, %d survived, %d not covered, %d not viable, %d timed out, %s\n",
+	fmt.Printf("tsp mutate: %d mutant(s) from %d target(s), %d killed, %d survived, %d not covered, %d not viable, %d timed out, %s\n",
 		report.MutationCount, len(report.Targets), report.Killed, report.Survived, report.NotCovered, report.NotViable, report.TimedOut, report.Elapsed.Round(time.Millisecond))
 	if report.TimedOut > 0 && report.Killed+report.Survived > 0 {
 		fmt.Printf("tsp mutate: %d mutant(s) timed out and were never judged: raise --timeout-coefficient before trusting this report\n", report.TimedOut)

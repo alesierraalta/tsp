@@ -117,6 +117,9 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	if len(targets) == 0 {
 		// "no Go source changed" is the truth for a Go change and a lie for everything else: a Python
 		// change reported as nothing-to-do is the false green this package exists to refuse.
+		if python := pythonTargets(changed); len(python) > 0 {
+			return runPython(ctx, opts, d, root, python)
+		}
 		if stack := otherStack(changed); stack != "" {
 			return report, fmt.Errorf("%w: the change is %s, and this version drives an engine only for Go: nothing was measured, so no mutant can be reported as killed", ErrUnusable, stack)
 		}

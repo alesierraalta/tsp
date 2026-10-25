@@ -157,8 +157,8 @@ func TestTimeoutCoefficientReachesTheEngine(t *testing.T) {
 }
 
 // A Python change used to come back as "no production Go source changed", which reads as nothing to do.
-// It is a refusal: no engine was driven, so no mutant was measured.
-func TestPythonChangeIsRefusedByName(t *testing.T) {
+// It is now measured by mutmut, and without the engine installed the refusal names it.
+func TestPythonChangeWithoutTheEngineIsRefusedByName(t *testing.T) {
 	_, err := Run(context.Background(), Options{
 		Cwd:  "/repo",
 		Deps: Deps{Git: changeOnly("src/shop.py")},
@@ -166,8 +166,8 @@ func TestPythonChangeIsRefusedByName(t *testing.T) {
 	if !errors.Is(err, ErrUnusable) {
 		t.Fatalf("err = %v, want ErrUnusable", err)
 	}
-	if !strings.Contains(err.Error(), "python (mutmut)") {
-		t.Fatalf("err = %v, want the stack and engine named", err)
+	if !strings.Contains(err.Error(), "mutmut") {
+		t.Fatalf("err = %v, want the engine named", err)
 	}
 }
 
