@@ -718,3 +718,15 @@ func TestSummaryNamesDefectRunAndUniqueUnitsAndPending(t *testing.T) {
 		t.Fatalf("pending precision must be none, not 0.00:\n%s", got)
 	}
 }
+
+// A clean control that reports nothing has proved nothing unless it did the work: the instruction names
+// the plan artifact, and forbids inventing a defect to justify the run.
+func TestControlPromptAsksForThePlanAndForbidsInvention(t *testing.T) {
+	prompt := agentPrompt(Key{Control: ControlClean}, Options{})
+	if !strings.Contains(prompt, "at docs/testing/test-plan.md") || !strings.Contains(prompt, "do not invent a defect") {
+		t.Fatalf("control prompt = %q, want the plan demand and the no-invention rule", prompt)
+	}
+	if other := agentPrompt(Key{}, Options{}); strings.Contains(other, "do not invent a defect") {
+		t.Fatalf("a defective case got the control instruction: %q", other)
+	}
+}

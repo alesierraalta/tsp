@@ -24,6 +24,10 @@ import (
 // Prompt is the whole instruction the agent receives: the skill must infer everything else.
 const Prompt = "haz el testing"
 
+// controlPrompt is appended to a clean control's instruction. Both readings are traps this removes:
+// inventing a defect to look useful, and reporting nothing without ever writing the plan.
+const controlPrompt = "This change may be correct: do not invent a defect to justify the work. Write the plan artifact anyway, at docs/testing/test-plan.md, plan every layer the change touches, and report how many findings you raised. Zero findings with a plan is the expected answer here; zero findings with no plan proves nothing."
+
 // agentPrompt is what a run is actually told. A case with no request gets the bare prompt the bench has
 // always sent, byte for byte; a case with one names it and nothing more. Choosing the mode stays the
 // skill's decision, because that is the thing a reading measures. A step whose whole instruction is the
@@ -35,6 +39,9 @@ func agentPrompt(key Key, opts Options) string {
 	prompt := Prompt
 	if opts.Prompt != "" {
 		prompt = opts.Prompt
+	}
+	if key.Control == ControlClean {
+		prompt += "\n\n" + controlPrompt
 	}
 	if request := key.RequestText(); request != "" {
 		prompt += "\n\nTest request: " + request
