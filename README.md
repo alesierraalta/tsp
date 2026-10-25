@@ -972,7 +972,16 @@ tsp bench rescore bench/results/<run>                        # re-read a finishe
 tsp bench verify-oracle --run bench/results/<kept-run>       # blind, bench-only contract judge (--keep required)
 tsp bench compare bench/results/<before> bench/results/<after>   # per-case reported and caught, side by side
 tsp bench compare --skill-versions <before> <after>          # two skill versions on an otherwise identical instrument
+tsp bench gate --baseline bench/baseline --max-regression 0.05 <run>   # refuse a run that lost recall
 ```
+
+`bench gate` is what a scheduled run needs and a printed number is not: it reads one results
+directory, compares it against the operator's floors (`--min-recall`, `--max-cost-usd`,
+`--max-regression` against a recorded baseline) and names every floor it missed, exit 1. A run whose
+aggregate records zero defects exits 2: a run that caught nothing out of nothing is not a zero score,
+it is no measurement. `.github/workflows/bench-nightly.yml` spends the money, needs a model
+credential, and says so when the secret is absent instead of reporting a green run that measured
+nothing.
 
 `bench compare` ends with a verdict on the caught difference: a 95% Wilson/Newcombe interval, and
 whether it includes zero ("within noise"). For example, 16/18 vs 15/18 at three runs per case is within
