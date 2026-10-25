@@ -5,6 +5,7 @@ package doctor
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/alesierraalta/tsp/internal/lang"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -34,20 +35,21 @@ type Capability struct {
 
 // Report is the doctor's verdict; Healthy is false only for missing git, skills, or hook.
 type Report struct {
-	ConfigDir      string        `json:"config_dir"`
-	Mode           string        `json:"mode"` // the --mode the checks ran under; the command sets it from the resolver
-	Skills         []SkillStatus `json:"skills"`
-	HookWired      bool          `json:"hook_wired"`
-	HookKind       string        `json:"hook_kind"`   // HookTpp, HookStandalone or HookNone
-	HookProbed     bool          `json:"hook_probed"` // the wired command answered a hook payload
-	HookCommand    string        `json:"hook_command,omitempty"`
-	WiredBinary    string        `json:"wired_binary,omitempty"` // the binary the wired Stop hook invokes
-	PathBinary     string        `json:"path_binary,omitempty"`  // where tpp resolves on PATH
-	BinariesDiffer bool          `json:"binaries_differ"`        // both exist and are different files
-	Capabilities   []Capability  `json:"capabilities"`
-	Hosts          []HostStatus  `json:"hosts,omitempty"`
-	Problems       []string      `json:"problems"`
-	Healthy        bool          `json:"healthy"`
+	ConfigDir      string          `json:"config_dir"`
+	Mode           string          `json:"mode"` // the --mode the checks ran under; the command sets it from the resolver
+	Skills         []SkillStatus   `json:"skills"`
+	HookWired      bool            `json:"hook_wired"`
+	HookKind       string          `json:"hook_kind"`   // HookTpp, HookStandalone or HookNone
+	HookProbed     bool            `json:"hook_probed"` // the wired command answered a hook payload
+	HookCommand    string          `json:"hook_command,omitempty"`
+	WiredBinary    string          `json:"wired_binary,omitempty"` // the binary the wired Stop hook invokes
+	PathBinary     string          `json:"path_binary,omitempty"`  // where tpp resolves on PATH
+	BinariesDiffer bool            `json:"binaries_differ"`        // both exist and are different files
+	Capabilities   []Capability    `json:"capabilities"`
+	Hosts          []HostStatus    `json:"hosts,omitempty"`
+	Languages      []lang.Language `json:"languages,omitempty"`
+	Problems       []string        `json:"problems"`
+	Healthy        bool            `json:"healthy"`
 }
 
 var capabilities = []Capability{
@@ -127,6 +129,7 @@ func (r Report) String() string {
 	r.writeSkills(&b)
 	r.writeHook(&b)
 	r.writeHosts(&b)
+	r.writeLanguages(&b)
 	r.writeCapabilities(&b)
 	r.writeVerdict(&b)
 	return b.String()
@@ -173,6 +176,27 @@ func (r Report) CapabilitiesString() string {
 	var b strings.Builder
 	r.writeCapabilities(&b)
 	return b.String()
+}
+
+// writeLanguages names the stacks in the working repository and whether the tools each one needs are
+// installed here. Doctor answers for the machine; a language whose tool is missing is the part of that
+// answer the user has to act on.
+func (r Report) writeLanguages(b *strings.Builder) {
+	if len(r.Languages) == 0 {
+		return
+	}
+	b.WriteString("languages in this repository:\n")
+	for _, language := range r.Languages {
+		var tools []string
+		for _, tool := range language.Tools {
+			if tool.Available {
+				tools = append(tools, tool.Name+" present")
+				continue
+			}
+			tools = append(tools, tool.Name+" missing ("+tool.Install+")")
+		}
+		fmt.Fprintf(b, "  %-10s %d file(s) · %s\n", language.Name, language.Files, strings.Join(tools, ", "))
+	}
 }
 
 // writeCapabilities lists what the host can do, marking the ones the discipline needs and saying what degrades

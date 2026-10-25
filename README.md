@@ -461,7 +461,7 @@ duplicates nothing of Gentle's: ODD, Engram memory, and the review lifecycle rem
 |---|---|
 | `tsp sync --hosts pi` | The explicit opt-in, and the only way Pi is ever installed — discovery never offers it. It installs only the `tpp` extension component at `~/.pi/agent/extensions/tpp/index.ts`, the path Pi loads; a pi-only sync writes no skills and no hook settings. |
 | `tsp setup --hosts pi` | Refused as a usage error (exit 2): setup's install and doctor pass are Claude-centered; only `sync` accepts `pi`. |
-| `tsp doctor` | Checks the selected Claude config directory — skill drift, Stop-hook wiring, capabilities. It does not check Pi extension health. |
+| `tsp doctor` | Checks the selected Claude config directory — skill drift, hook wiring per host, capabilities — and names the stacks in the current repository with the tools each one needs but this machine cannot run. It does not check Pi extension health. |
 | `tsp repair` | Claude-only: re-syncs the managed skills and re-wires Claude's Stop hook; the Pi extension is untouched. |
 
 Load the extension (`pi --extension <path>/tsp.ts`, or let Pi load it from
