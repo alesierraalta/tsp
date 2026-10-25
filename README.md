@@ -675,8 +675,12 @@ turn, and exits non-zero when the answer is a debt: a production source file cha
 no test came with it, or the tests that came cannot run against the code the range started from. The
 flag matters because the working tree in CI *is* `HEAD`: a check that read `git status` there would
 find nothing changed and pass every pull request. `tsp check` reads the tree by default and the range
-when you name one; the two working-tree flags, `--no-test-needed` and `--paths`, are refused alongside
-`--base`, because a waiver and a per-path answer are both about a tree. A plan file is refused there too,
+when you name one; `--paths` is refused alongside `--base`, because a per-path answer is about a tree.
+A waiver is not: a range can warrant no test exactly as a working tree can, so
+`tsp check --base origin/main --no-test-needed "the release number is not a behaviour"` records
+`.tsp-waiver.json` for the range, you commit it with the change, and the CI check then answers
+`no test is required for this range` and names the reason instead of demanding a witness it cannot get.
+A waiver written for other files covers nothing. A plan file is refused there too,
 and never consulted: a plan records the session that wrote it, so an unfinished target in the
 repository's plan would otherwise block every unrelated pull request. The range's answer is whether its
 own tests pin anything. This repository runs it on its own pull requests in

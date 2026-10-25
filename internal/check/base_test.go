@@ -35,24 +35,14 @@ func TestBaseLeavesAnUntouchedTreeQuiet(t *testing.T) {
 	}
 }
 
-// A waiver lives in the working tree; a commit range has none, so the two cannot be asked together.
+// A path list answers for the working tree a person is looking at, and a commit range has none, so the
+// two cannot be asked together. A waiver can, and is covered by TestBaseModeHonoursAWaiverCommittedWithTheRange.
 func TestBaseRefusesTheWorkingTreeFlags(t *testing.T) {
-	cases := []struct {
-		name string
-		set  func(*Deps)
-	}{
-		{"waiver", func(d *Deps) { d.Waive = "renamed a local" }},
-		{"paths", func(d *Deps) { d.Paths = []string{"src/app.go"} }},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			d := (&fakeRepo{root: "/repo"}).deps()
-			d.Base = "origin/main"
-			tc.set(&d)
-			res := Run(".", d)
-			if res.Exit != 2 || !strings.Contains(res.Text, "--base") {
-				t.Fatalf("verdict = %q (exit %d), want a refusal naming --base", res.Text, res.Exit)
-			}
-		})
+	d := (&fakeRepo{root: "/repo"}).deps()
+	d.Base = "origin/main"
+	d.Paths = []string{"src/app.go"}
+	res := Run(".", d)
+	if res.Exit != 2 || !strings.Contains(res.Text, "--base") {
+		t.Fatalf("verdict = %q (exit %d), want a refusal naming --base", res.Text, res.Exit)
 	}
 }
