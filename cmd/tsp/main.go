@@ -2594,44 +2594,10 @@ func admitCommandProblem(id, admit string) (reason, detail string) {
 // runBenchGate refuses to call a run good when it measured nothing, lost recall it used to have, or
 // spent more than the operator allowed. Every floor is the operator's: the package only compares.
 func runBenchGate(args []string) int {
-	usage := "bench gate needs a results directory: [--baseline <dir>] [--min-recall <f>] [--max-regression <f>] [--max-cost-usd <f>] <results>"
-	var gate bench.Gate
-	var results string
-	fail := func(format string, a ...any) int {
-		fmt.Fprintf(os.Stderr, format+"\n", a...)
+	gate, results, err := parseGateArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "bench gate:", err)
 		return 2
-	}
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--baseline", "--min-recall", "--max-regression", "--max-cost-usd":
-			if i+1 >= len(args) {
-				return fail("bench gate: %s needs a value", args[i])
-			}
-			value, err := strconv.ParseFloat(args[i+1], 64)
-			if args[i] == "--baseline" {
-				gate.BaselineDir = args[i+1]
-			} else if err != nil {
-				return fail("bench gate: %s needs a number, got %q", args[i], args[i+1])
-			} else {
-				switch args[i] {
-				case "--min-recall":
-					gate.MinRecall = value
-				case "--max-regression":
-					gate.MaxRegression = value
-				case "--max-cost-usd":
-					gate.MaxCostUSD = value
-				}
-			}
-			i++
-		default:
-			if results != "" {
-				return fail("bench gate takes one results directory, got %q and %q", results, args[i])
-			}
-			results = args[i]
-		}
-	}
-	if results == "" {
-		return fail("%s", usage)
 	}
 	verdict, err := bench.Judge(results, gate)
 	if err != nil {
@@ -2646,4 +2612,46 @@ func runBenchGate(args []string) int {
 	}
 	fmt.Printf("bench gate: recall %.3f over %d defect(s), cost %.4f\n", verdict.Recall, verdict.Defects, verdict.CostUSD)
 	return 0
+}
+
+// parseGateArgs reads the floors an operator set and the one run they judge. Every floor is optional
+// except the run itself, because a gate with no threshold still refuses a run that measured nothing.
+func parseGateArgs(args []string) (bench.Gate, string, error) {
+	var gate bench.Gate
+	var results string
+	for i := 0; i < len(args); i++ {
+		flag := args[i]
+		if flag != "--baseline" && flag != "--min-recall" && flag != "--max-regression" && flag != "--max-cost-usd" {
+			if results != "" {
+				return gate, "", fmt.Errorf("takes one results directory, got %q and %q", results, flag)
+			}
+			results = flag
+			continue
+		}
+		if i+1 >= len(args) {
+			return gate, "", fmt.Errorf("%s needs a value", flag)
+		}
+		value := args[i+1]
+		i++
+		if flag == "--baseline" {
+			gate.BaselineDir = value
+			continue
+		}
+		number, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return gate, "", fmt.Errorf("%s needs a number, got %q", flag, value)
+		}
+		switch flag {
+		case "--min-recall":
+			gate.MinRecall = number
+		case "--max-regression":
+			gate.MaxRegression = number
+		case "--max-cost-usd":
+			gate.MaxCostUSD = number
+		}
+	}
+	if results == "" {
+		return gate, "", errors.New("needs a results directory: [--baseline <dir>] [--min-recall <f>] [--max-regression <f>] [--max-cost-usd <f>] <results>")
+	}
+	return gate, results, nil
 }
