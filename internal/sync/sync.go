@@ -77,7 +77,7 @@ type Report struct {
 	ClaudeConfigDir string
 }
 
-var documentedOnlyHosts = []string{"opencode", "gemini", "codex"}
+var documentedOnlyHosts = []string{"opencode"}
 
 // String renders the report for a terminal.
 func (r Report) String() string {
@@ -251,8 +251,8 @@ func syncHost(host Host, binPath string, opts Options, installationState *state.
 	var settings map[string]any
 	var raw []byte
 	var err error
-	if host.Name == "claude" {
-		report.SettingsPath = filepath.Join(host.ConfigDir, "settings.json")
+	if _, hooked := hookEvent(host.Name); hooked {
+		report.SettingsPath = filepath.Join(host.ConfigDir, hookSettingsFile(host.Name))
 		settings, raw, err = loadSettings(report.SettingsPath)
 		if err != nil {
 			return report, err
@@ -504,10 +504,11 @@ func optsForceHint(warnings []string, path string) bool {
 
 // applyHook wires the Stop hook into the settings this run read and writes it only when the serialized bytes differ.
 func applyHook(host Host, binPath string, opts Options, settings map[string]any, raw []byte, report *HostReport) error {
-	if host.Name != "claude" {
+	event, ok := hookEvent(host.Name)
+	if !ok {
 		return nil
 	}
-	changed, removed, err := persistWiredHook(report.SettingsPath, settings, raw, HookCommand(binPath), opts.DryRun)
+	changed, removed, err := persistWiredHook(report.SettingsPath, settings, raw, HookCommand(binPath), event, opts.DryRun)
 	report.RemovedHooks = removed
 	report.SettingsChanged = changed
 	return err
@@ -523,13 +524,13 @@ func RewireStopHook(configDir, binPath string, dryRun bool) (changed bool, remov
 	if err != nil {
 		return false, nil, err
 	}
-	return persistWiredHook(settingsPath, settings, raw, HookCommand(binPath), dryRun)
+	return persistWiredHook(settingsPath, settings, raw, HookCommand(binPath), HookEventClaude, dryRun)
 }
 
 // persistWiredHook wires command into settings and writes settingsPath only when the serialized
 // bytes differ; dryRun stops before the write.
-func persistWiredHook(settingsPath string, settings map[string]any, raw []byte, command string, dryRun bool) (changed bool, removed []string, err error) {
-	_, removed = wireHook(settings, command)
+func persistWiredHook(settingsPath string, settings map[string]any, raw []byte, command, event string, dryRun bool) (changed bool, removed []string, err error) {
+	_, removed = wireHook(settings, command, event)
 	out, err := marshalSettings(settings)
 	if err != nil {
 		return false, removed, err
@@ -614,20 +615,52 @@ func payloadMode(source string) os.FileMode {
 	return 0o644
 }
 
+// Hook event names: Claude Code stops a turn on Stop, the Gemini CLI after an agent turn on AfterAgent.
+// The payload shape is the same, so the gate only needs the name of the event it hangs from.
+const (
+	HookEventClaude = "Stop"
+	HookEventGemini = "AfterAgent"
+)
+
+// hookSettingsFile is the file a host keeps its hooks in: Claude and the Gemini CLI read settings.json,
+// and the Codex CLI keeps hooks.json beside its config.toml.
+func hookSettingsFile(host string) string {
+	if host == "codex" {
+		return "hooks.json"
+	}
+	return "settings.json"
+}
+
+// hookEvent is the event a host fires when a turn ends, and whether this host fires one at all.
+func hookEvent(host string) (string, bool) {
+	switch host {
+	case "claude":
+		return HookEventClaude, true
+	case "gemini":
+		return HookEventGemini, true
+	case "codex":
+		return HookEventClaude, true
+	}
+	return "", false
+}
+
 // wireHook makes settings carry exactly one gate hook: previous gate entries (the Node hook,
 // the pre-repo binary, or an older tpp or tpp path) are dropped, and the desired command is added
 // only when absent. It returns whether settings changed and which commands were removed.
-func wireHook(settings map[string]any, command string) (bool, []string) {
+func wireHook(settings map[string]any, command, event string) (bool, []string) {
+	if settings == nil {
+		settings = map[string]any{}
+	}
 	hooks, _ := settings["hooks"].(map[string]any)
 	if hooks == nil {
 		hooks = map[string]any{}
 		settings["hooks"] = hooks
 	}
-	changed, removed, present := filterStopGates(settings, func(cmd string) bool { return cmd == command })
+	changed, removed, present := filterStopGates(settings, func(cmd string) bool { return cmd == command }, event)
 	if present {
 		return changed, removed
 	}
-	stop, _ := hooks["Stop"].([]any)
+	stop, _ := hooks[event].([]any)
 	stop = append(stop, map[string]any{
 		"matcher": "",
 		"hooks": []any{map[string]any{
@@ -637,14 +670,14 @@ func wireHook(settings map[string]any, command string) (bool, []string) {
 			"statusMessage": "Checking testing discipline...",
 		}},
 	})
-	hooks["Stop"] = stop
+	hooks[event] = stop
 	return true, removed
 }
 
 // unwireHook drops every tpp gate command from Stop and leaves every other hook alone; it
 // answers whether settings changed and which commands it removed.
-func unwireHook(settings map[string]any) (bool, []string) {
-	changed, removed, _ := filterStopGates(settings, func(string) bool { return false })
+func unwireHook(settings map[string]any, event string) (bool, []string) {
+	changed, removed, _ := filterStopGates(settings, func(string) bool { return false }, event)
 	return changed, removed
 }
 
@@ -652,12 +685,12 @@ func unwireHook(settings map[string]any) (bool, []string) {
 // dropped, every other hook is preserved, and an entry emptied by the drop goes away with it.
 // keep decides which gate commands stay wired (the one being wired, or none for an unwire);
 // present reports whether keep matched a command already there.
-func filterStopGates(settings map[string]any, keep func(cmd string) bool) (changed bool, removed []string, present bool) {
+func filterStopGates(settings map[string]any, keep func(cmd string) bool, event string) (changed bool, removed []string, present bool) {
 	hooks, _ := settings["hooks"].(map[string]any)
 	if hooks == nil {
 		return false, nil, false
 	}
-	stop, _ := hooks["Stop"].([]any)
+	stop, _ := hooks[event].([]any)
 	kept := make([]any, 0, len(stop))
 	for _, e := range stop {
 		entry, _ := e.(map[string]any)
@@ -688,7 +721,7 @@ func filterStopGates(settings map[string]any, keep func(cmd string) bool) (chang
 		kept = append(kept, entry)
 	}
 	if changed {
-		hooks["Stop"] = kept
+		hooks[event] = kept
 	}
 	return changed, removed, present
 }

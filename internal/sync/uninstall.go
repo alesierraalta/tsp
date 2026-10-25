@@ -203,7 +203,7 @@ func planUninstallHook(name string, hostState state.HostState, opts UninstallOpt
 	if err != nil {
 		return UninstallAction{}, err
 	}
-	changed, removed := unwireHook(settings)
+	changed, removed := unwireHook(settings, HookEventClaude)
 	plan.settings = settings
 	plan.settingsPath = settingsPath
 	plan.report.SettingsChanged = changed

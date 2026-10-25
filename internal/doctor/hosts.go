@@ -91,6 +91,17 @@ func transportFor(host sync.Host) (string, string) {
 			return TransportWired, "Stop hook in settings.json"
 		}
 		return TransportAbsent, "skills only: no Stop hook in settings.json (run: tsp sync)"
+	case "codex":
+		path := filepath.Join(host.ConfigDir, "hooks.json")
+		if kind, _ := hookWired(path); kind != HookNone {
+			return TransportWired, "Stop hook in hooks.json; the Codex CLI asks for hook trust before it runs one (tsp writes no trusted_hash)"
+		}
+		return TransportAbsent, "skills only: no Stop hook in hooks.json (run: tsp sync)"
+	case "gemini":
+		if kind, _ := hookWired(filepath.Join(host.ConfigDir, "settings.json")); kind != HookNone {
+			return TransportWired, "AfterAgent hook in settings.json"
+		}
+		return TransportAbsent, "skills only: no AfterAgent hook in settings.json (run: tsp sync)"
 	case "pi":
 		return TransportExtension, "extension at " + filepath.Join(host.SkillsDir, "tpp", "index.ts") + "; opt-in, installed with: tsp sync --hosts pi"
 	}

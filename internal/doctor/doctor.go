@@ -277,23 +277,27 @@ func hookWired(settingsPath string) (string, string) {
 		return HookNone, ""
 	}
 	hooks, _ := s["hooks"].(map[string]any)
-	stop, _ := hooks["Stop"].([]any)
-	for _, e := range stop {
-		entry, _ := e.(map[string]any)
-		list, _ := entry["hooks"].([]any)
-		for _, h := range list {
-			hook, _ := h.(map[string]any)
-			cmd, _ := hook["command"].(string)
-			trimmed := strings.TrimSpace(cmd)
-			if trimmed == "" {
-				continue
-			}
-			// "gate" counts only in the subcommand position, right after the executable.
-			if fields, _ := hookcmd.ShellWords(trimmed); len(fields) > 1 && fields[1] == "gate" {
-				return HookTpp, cmd
-			}
-			if gateBinaryRe.MatchString(trimmed) {
-				return HookStandalone, cmd
+	// The event a host fires at the end of a turn has a different name per host, so the gate is looked for
+	// wherever hooks live: a gate command wired to any event is a gate the host will run.
+	for _, entries := range hooks {
+		stop, _ := entries.([]any)
+		for _, e := range stop {
+			entry, _ := e.(map[string]any)
+			list, _ := entry["hooks"].([]any)
+			for _, h := range list {
+				hook, _ := h.(map[string]any)
+				cmd, _ := hook["command"].(string)
+				trimmed := strings.TrimSpace(cmd)
+				if trimmed == "" {
+					continue
+				}
+				// "gate" counts only in the subcommand position, right after the executable.
+				if fields, _ := hookcmd.ShellWords(trimmed); len(fields) > 1 && fields[1] == "gate" {
+					return HookTpp, cmd
+				}
+				if gateBinaryRe.MatchString(trimmed) {
+					return HookStandalone, cmd
+				}
 			}
 		}
 	}
