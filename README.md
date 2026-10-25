@@ -282,8 +282,10 @@ install them first, for example `sudo apt-get install -y curl git ca-certificate
 or `sudo apk add curl git` (Alpine).
 
 `tsp setup` installs the skills into the agent hosts it finds (Claude Code at `~/.claude`, Codex at
-`~/.codex`, Gemini CLI at `~/.gemini`, OpenCode at `~/.config/opencode`), so install your agent
-first. With none of them present setup exits 1 and says so; the binary stays installed, and
+`~/.codex`, Gemini CLI at `~/.gemini`, Anti-Gravity at `~/.gemini/antigravity`, OpenCode at
+`~/.config/opencode`), so install your agent first. A `~/.gemini` that holds only Anti-Gravity's
+tree is agy, not the Gemini CLI, and setup does not install a second copy for a host that is not
+there. With none of them present setup exits 1 and says so; the binary stays installed, and
 running `tsp setup` again after installing the agent finishes the job. Pi is never discovered: Pi
 users also run `tsp sync --hosts pi` to install the Pi extension.
 
@@ -293,6 +295,7 @@ flowchart LR
     scan -- "~/.claude" --> claude["Claude Code<br/>skills + Stop hook"]
     scan -- "~/.codex" --> codex["Codex<br/>skills"]
     scan -- "~/.gemini" --> gemini["Gemini CLI<br/>skills"]
+    scan -- "~/.gemini/antigravity" --> agy["Anti-Gravity<br/>skills"]
     scan -- "~/.config/opencode" --> oc["OpenCode<br/>skills"]
     scan -- none --> stop["exit 1<br/>nothing installed: no host found"]
     pisync["tsp sync --hosts pi"] --> pi["Pi<br/>/tsp extension, never discovered"]
@@ -372,7 +375,7 @@ unbound session gets. The gate always exits 0: it grades the turn and never brea
 `sync` installs the embedded skills into every host it finds: `~/.claude/skills`,
 `~/.config/opencode/skills`, `~/.gemini/skills`, and `~/.codex/skills`. Discovery never offers Pi —
 the Pi extension is the explicit `--hosts pi` opt-in described below. The Stop hook is wired only
-where its transport is known—Claude Code's `~/.claude/settings.json`; OpenCode, Gemini, and Codex
+where its transport is known—Claude Code's `~/.claude/settings.json`; OpenCode, Gemini, Anti-Gravity, and Codex
 receive skills but their transports are documented rather than wired. Claude's sync merges into
 `~/.claude/settings.json`: every existing hook and setting is preserved, the gate is added once,
 and running it again changes nothing. A file modified after tsp installed it is not replaced
@@ -685,6 +688,7 @@ on top is knowing what THIS session did, which the repository cannot tell you.
 | Anything that runs a command | verified: `check`, `plan init`, `plan check`, `plan gaps` need no host at all |
 | Gemini CLI | not implemented: its `settings.json` takes command hooks under different event names, and its payload and output schemas are not verified here |
 | Pi | opt-in extension: `tsp sync --hosts pi` installs it and Pi exposes a native `/tsp` command with `/tpp` compatibility alias (`check`, `feedback --summary`, `doctor`); its dispatch and the TSP offer are tested in CI (`assets/hosts/pi/tsp.test.mjs`), and the offer was watched in a live Pi 1.3.0 session. The native Pi Stop hook is **not verified** — payload contract read from the pi-hooks package, never watched firing |
+| Anti-Gravity (`agy`) | skills only: `sync` installs into `~/.gemini/antigravity/skills`, which is where `agy` reads them; no Stop hook is wired, because `agy` reads hooks from `~/.gemini/antigravity-cli/hooks` and TSP does not write them yet |
 | Codex, OpenCode | not implemented: each has its own extension surface, and guessing a payload schema would ship a hook that silently never fires |
 
 Nothing above is a promise about a host that is not listed as verified. A hook that looks wired and

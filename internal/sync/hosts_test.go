@@ -71,3 +71,55 @@ func TestDiscoveryNeverOffersPiAndPiHostFollowsTheExtensionConvention(t *testing
 		t.Fatalf("PiHost(home) = %+v, want the .pi config dir with agent/extensions as the managed root", host)
 	}
 }
+
+// Anti-Gravity keeps its skills under ~/.gemini/antigravity/skills, beside the Gemini CLI's own
+// ~/.gemini/skills. They are two hosts that read two different directories: installing into one
+// must not be reported as installing into the other.
+func TestDiscoveryFindsAntigravityBesideTheGeminiCli(t *testing.T) {
+	home := t.TempDir()
+	for _, dir := range []string{filepath.Join(".gemini", "skills"), filepath.Join(".gemini", "antigravity", "skills")} {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The Gemini CLI writes settings.json the first time it runs; TSP never does.
+	if err := os.WriteFile(filepath.Join(home, ".gemini", "settings.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	discovery := DiscoverHosts(home, "")
+	want := map[string]string{
+		"gemini":      filepath.Join(home, ".gemini", "skills"),
+		"antigravity": filepath.Join(home, ".gemini", "antigravity", "skills"),
+	}
+	seen := map[string]string{}
+	for _, host := range discovery.Hosts {
+		seen[host.Name] = host.SkillsDir
+	}
+	for name, skillsDir := range want {
+		if seen[name] != skillsDir {
+			t.Errorf("%s skills dir = %q, want %q", name, seen[name], skillsDir)
+		}
+	}
+	if len(discovery.Hosts) != 2 {
+		t.Fatalf("discovered hosts = %v, want gemini and antigravity", hostNames(discovery.Hosts))
+	}
+}
+
+// An Anti-Gravity-only machine has ~/.gemini because agy keeps its tree there. That is not the
+// Gemini CLI, and installing a second copy of every skill for a host that is not there is the
+// misreport S2 forbids.
+func TestDiscoveryDoesNotMistakeAntigravityForTheGeminiCli(t *testing.T) {
+	home := t.TempDir()
+	for _, dir := range []string{filepath.Join(".gemini", "antigravity", "skills"), filepath.Join(".gemini", "antigravity-cli")} {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	discovery := DiscoverHosts(home, "")
+	if got := hostNames(discovery.Hosts); len(got) != 1 || got[0] != "antigravity" {
+		t.Fatalf("discovered hosts = %v, want only antigravity", got)
+	}
+}
