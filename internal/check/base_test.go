@@ -7,6 +7,11 @@ import (
 
 // In CI the candidate is a commit range: the working tree holds HEAD, so a check that reads git
 // status finds nothing changed and passes every pull request.
+//
+// The fake repository here answers the range questions, so this test pins what the verdict says, not
+// that the base reaches the red check. That wiring is only exercised end to end: `tsp check --base` in
+// .github/workflows/testing-gate.yml is what runs it against a real base on every pull request, and a
+// regression there shows up as a gate that stops refusing untested source.
 func TestBaseChecksTheCommitRangeNotTheWorkingTree(t *testing.T) {
 	repo := &fakeRepo{root: "/repo", diffOut: "src/app.go\x00"}
 	d := repo.deps()
