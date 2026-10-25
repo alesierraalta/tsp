@@ -34,33 +34,33 @@ func jsTargets(changed []string) []string {
 	var targets []string
 	for _, path := range changed {
 		slash := filepath.ToSlash(strings.TrimSpace(path))
-		if !jsExtensions(slash) {
-			continue
-		}
-		if strings.Contains(slash, "node_modules/") || strings.HasPrefix(slash, "node_modules/") {
-			continue
-		}
-		if strings.HasPrefix(slash, "mutants/") || strings.HasPrefix(slash, "reports/") {
-			continue
-		}
-		base := slash[strings.LastIndex(slash, "/")+1:]
-		if strings.Contains(slash, "/__tests__/") {
-			continue
-		}
-		skip := false
-		for _, suffix := range jsTestSuffixes {
-			if strings.HasSuffix(base, suffix) {
-				skip = true
-			}
-		}
-		if skip || seen[slash] {
+		if !jsSource(slash) || seen[slash] {
 			continue
 		}
 		seen[slash] = true
 		targets = append(targets, slash)
 	}
-	sort.Strings(targets)
 	return targets
+}
+
+// jsSource answers whether a changed path is JavaScript source an engine can mutate: not a test, not an
+// installed package, not a tree an engine writes.
+func jsSource(slash string) bool {
+	if !jsExtensions(slash) {
+		return false
+	}
+	for _, ignored := range []string{"node_modules/", "mutants/", "reports/", "/__tests__/"} {
+		if strings.Contains(slash, ignored) {
+			return false
+		}
+	}
+	base := slash[strings.LastIndex(slash, "/")+1:]
+	for _, suffix := range jsTestSuffixes {
+		if strings.HasSuffix(base, suffix) {
+			return false
+		}
+	}
+	return true
 }
 
 // jsExtensions reports whether a path is one Stryker can mutate.
@@ -109,31 +109,14 @@ func runJavaScript(ctx context.Context, opts Options, d Deps, root string, targe
 	if err != nil {
 		return report, err
 	}
-	args := append(append([]string{}, prefix...), "run", "--reporters", "json", "--mutate", strings.Join(targets, ","))
-	if _, err := d.Run(ctx, root, binary, args...); err != nil {
-		if _, statErr := os.Stat(filepath.Join(root, jsReportPath)); statErr != nil {
-			return report, fmt.Errorf("%w: Stryker could not run: %v", ErrUnusable, err)
-		}
+	if err := runStryker(ctx, d, root, binary, prefix, targets); err != nil {
+		return report, err
 	}
 	mutants, err := readJSReport(filepath.Join(root, jsReportPath), targets)
 	if err != nil {
 		return report, err
 	}
-	for _, mutant := range mutants {
-		switch mutant.Status {
-		case StatusKilled:
-			report.Killed++
-		case StatusLived:
-			report.Survived++
-			report.Survivors = append(report.Survivors, mutant)
-		case StatusNotCovered:
-			report.NotCovered++
-		case StatusTimedOut:
-			report.TimedOut++
-		case StatusNotViable:
-			report.NotViable++
-		}
-	}
+	countJSMutants(&report, mutants)
 	report.MutationCount = len(mutants)
 	if report.MutationCount == 0 {
 		return report, fmt.Errorf("%w: Stryker ran and reported no mutant: the change has no JavaScript source Stryker can change", ErrUnusable)
@@ -198,4 +181,35 @@ func readJSReport(path string, scope []string) ([]Mutation, error) {
 		}
 	}
 	return out, nil
+}
+
+// runStryker drives the engine. Stryker exits non-zero when mutants survive, which is a result and not a
+// failure: the run only fails when no report was written at all.
+func runStryker(ctx context.Context, d Deps, root, binary string, prefix, targets []string) error {
+	args := append(append([]string{}, prefix...), "run", "--reporters", "json", "--mutate", strings.Join(targets, ","))
+	if _, err := d.Run(ctx, root, binary, args...); err != nil {
+		if _, statErr := os.Stat(filepath.Join(root, jsReportPath)); statErr != nil {
+			return fmt.Errorf("%w: Stryker could not run: %v", ErrUnusable, err)
+		}
+	}
+	return nil
+}
+
+// countJSMutants folds a report into the same counters every engine feeds.
+func countJSMutants(report *Report, mutants []Mutation) {
+	for _, mutant := range mutants {
+		switch mutant.Status {
+		case StatusKilled:
+			report.Killed++
+		case StatusLived:
+			report.Survived++
+			report.Survivors = append(report.Survivors, mutant)
+		case StatusNotCovered:
+			report.NotCovered++
+		case StatusTimedOut:
+			report.TimedOut++
+		case StatusNotViable:
+			report.NotViable++
+		}
+	}
 }
