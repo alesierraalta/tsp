@@ -120,6 +120,9 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		if python := pythonTargets(changed); len(python) > 0 {
 			return runPython(ctx, opts, d, root, python)
 		}
+		if js := jsTargets(changed); len(js) > 0 {
+			return runJavaScript(ctx, opts, d, root, js)
+		}
 		if stack := otherStack(changed); stack != "" {
 			return report, fmt.Errorf("%w: the change is %s, and this version drives an engine only for Go: nothing was measured, so no mutant can be reported as killed", ErrUnusable, stack)
 		}
