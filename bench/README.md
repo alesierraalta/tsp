@@ -288,6 +288,12 @@ denominator — its recall cells read `clean`, not `0/0` — and it measures the
 ledger: every finding row reported there is unmatched until decided, so a flow that invents
 findings shows up as rows to adjudicate and, once decided, as false positives.
 
+The control still publishes the number that needs no decision: `control_inventions` counts the
+finding rows a clean control produced, minus any a decision confirmed as a real defect. A quiet
+control scores zero; a control whose row says `clean, 2 invented` claimed two defects on code the
+corpus calls correct. Recall alone cannot tell those two flows apart, which is why a run is not
+reported without both sides.
+
 That is the **reported** measure. The **caught** measure asks whether the agent's tests distinguish
 the defective code from the correct one, plan or no plan: the test files the agent added or changed
 are carried onto `fixture/` + `fix/all/` (they must be green there) and onto `fixture/` +
