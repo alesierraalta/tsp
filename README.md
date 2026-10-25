@@ -328,14 +328,14 @@ line to add to `~/.profile` if needed. Downloads require curl or wget, tar, and 
 
 | Environment variable | Default | Purpose |
 |---|---|---|
-| `TSP_VERSION` | latest release | Pin a release, for example `v0.6.9` |
+| `TSP_VERSION` | latest release | Pin a release, for example `v0.7.0` |
 | `TSP_INSTALL_DIR` | `~/.local/bin` | Choose the binary directory |
 | `TSP_NO_SETUP` | `0` | Set to `1` to skip setup |
 
 When piping to sh, pass variables to sh, for example:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | TSP_VERSION=v0.6.9 sh
+curl -fsSL https://raw.githubusercontent.com/alesierraalta/tsp/main/install.sh | TSP_VERSION=v0.7.0 sh
 ```
 
 Requirements: the binary needs git; Python 3/pytest, Node.js, and Cargo are needed only for the
