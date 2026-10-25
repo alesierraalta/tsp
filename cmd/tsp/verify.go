@@ -28,9 +28,23 @@ func runVerify(args []string) int {
 	redcheckOut := fs.String("redcheck-output", "", "file holding the redcheck output for this candidate")
 	timeout := fs.Duration("timeout", 30*time.Minute, "time limit for the verifier session")
 	keep := fs.Bool("keep", false, "leave the frozen tree and package on disk")
+	publishDir := fs.String("publish", "", "publish the verdict a host already wrote into this package directory, instead of running a session: the RDD flow, where the review already happened")
 	asJSON := fs.Bool("json", false, "print the result as JSON")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	if strings.TrimSpace(*publishDir) != "" {
+		if strings.TrimSpace(*sessionCmd) != "" {
+			fmt.Fprintln(os.Stderr, "verify: --publish reads a verdict; --session-cmd runs a session to produce one: name one of them")
+			return 2
+		}
+		result, err := verify.Publish(*publishDir, *base, time.Now())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "verify:", err)
+			return 2
+		}
+		return reportVerify(result, *asJSON)
 	}
 
 	opts := verify.Options{
@@ -54,7 +68,12 @@ func runVerify(args []string) int {
 		return 2
 	}
 
-	if *asJSON {
+	return reportVerify(result, *asJSON)
+}
+
+// reportVerify prints a published result and returns the exit code its verdict carries.
+func reportVerify(result verify.Result, asJSON bool) int {
+	if asJSON {
 		encoded, err := json.MarshalIndent(result.Verdict, "", "  ")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "verify:", err)
@@ -69,8 +88,10 @@ func runVerify(args []string) int {
 		if result.Verdict.Notes != "" {
 			fmt.Printf("  notes: %s\n", result.Verdict.Notes)
 		}
-		if result.Kept {
+		if result.Kept && result.FrozenDir != "" {
 			fmt.Printf("tsp verify: kept %s (frozen tree) and %s (package)\n", result.FrozenDir, result.PackageDir)
+		} else if result.Kept {
+			fmt.Printf("tsp verify: published the verdict the host wrote in %s\n", result.PackageDir)
 		}
 	}
 	if result.Blocking() {

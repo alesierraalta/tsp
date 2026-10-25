@@ -15,6 +15,7 @@ import (
 type fakeRepo struct {
 	root     string
 	status   string
+	diffOut  string
 	rootErr  error
 	plan     string
 	planPath string
@@ -38,6 +39,8 @@ func (f *fakeRepo) deps() Deps {
 			switch args[0] {
 			case "rev-parse":
 				return f.root + "\n", nil
+			case "diff":
+				return f.diffOut, nil
 			case "check-ignore":
 				// `git check-ignore -q` exits 0 (no error) only when the path is ignored.
 				if f.ignored {
@@ -536,5 +539,45 @@ func TestNoTestNeededIsRefusedWhenAPlanExists(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, WaiverName)); err == nil {
 		t.Fatal("a refused waiver must write nothing")
+	}
+}
+
+// A commit range is judged on its own tests, never on the plan document: an unfinished target in the
+// repository's plan must not block an unrelated pull request.
+func TestBaseModeAsksForAWitnessEvenWhenThePlanOwes(t *testing.T) {
+	repo := &fakeRepo{
+		root:    "/r",
+		plan:    owing,
+		diffOut: "src/app.js\x00tests/app.test.js\x00",
+		witness: Witness{TestFiles: []string{"tests/app.test.js"}, Red: []string{"rejects empty"}},
+	}
+	res := Run(".", Deps{Git: repo.deps().Git, RedCheck: repo.deps().RedCheck, ReadFile: repo.deps().ReadFile, Exists: repo.deps().Exists, Base: "origin/main"})
+	if res.Exit != 0 || !strings.Contains(res.Text, "the plan document is not consulted") || !strings.Contains(res.Text, "1 new test(s) fail on HEAD's code") {
+		t.Fatalf("exit = %d, want 0 with the range's witness verdict:\n%s", res.Exit, res.Text)
+	}
+}
+
+// A plan file records one session, so naming one beside a commit range is a usage error, not a
+// silently ignored flag.
+func TestBaseModeRefusesAPlanFile(t *testing.T) {
+	repo := &fakeRepo{root: "/r", plan: owing, diffOut: "src/app.js\x00"}
+	res := Run(".", Deps{Git: repo.deps().Git, ReadFile: repo.deps().ReadFile, Exists: repo.deps().Exists, Base: "origin/main", PlanPath: "docs/testing/test-plan.md"})
+	if res.Exit != 2 || !strings.Contains(res.Text, "a plan file records one session") {
+		t.Fatalf("exit = %d, want 2 naming the refusal:\n%s", res.Exit, res.Text)
+	}
+}
+
+// A change that introduces a package cannot compile its tests against the base commit. That is what the
+// change is for, so the range check names it as a witness instead of failing the pull request.
+func TestBaseModeReportsTheCodeOnlyTheChangeHas(t *testing.T) {
+	repo := &fakeRepo{
+		root:    "/r",
+		plan:    owing,
+		diffOut: "internal/quality/quality.go\x00internal/quality/quality_test.go\x00",
+		witness: Witness{TestFiles: []string{"internal/quality/quality_test.go"}, NewCode: []string{"internal/quality"}},
+	}
+	res := Run(".", Deps{Git: repo.deps().Git, RedCheck: repo.deps().RedCheck, ReadFile: repo.deps().ReadFile, Exists: repo.deps().Exists, Base: "origin/main"})
+	if res.Exit != 0 || !strings.Contains(res.Text, "the base commit does not define") || !strings.Contains(res.Text, "internal/quality") {
+		t.Fatalf("exit = %d, want 0 naming the package the change introduces:\n%s", res.Exit, res.Text)
 	}
 }

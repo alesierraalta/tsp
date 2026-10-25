@@ -12,10 +12,15 @@ Three shapes cover every host seen so far.
 
 `tsp sync` installs the embedded skills into every host configuration directory it finds: Claude
 Code reads `~/.claude/skills`, OpenCode reads `~/.config/opencode/skills`, Gemini reads
-`~/.gemini/skills`, and Codex reads `~/.codex/skills`. Discovery never offers Pi — the Pi extension
+`~/.gemini/skills`, Anti-Gravity reads `~/.gemini/antigravity/skills`, and Codex reads
+`~/.codex/skills`. Anti-Gravity keeps its tree inside the Gemini config directory, so discovery
+asks for the CLI's `settings.json` before treating `~/.gemini` as the Gemini CLI; an agy-only
+machine is agy, not a CLI with no configuration. Discovery never offers Pi — the Pi extension
 is the explicit `tsp sync --hosts pi` opt-in below. The Stop hook is wired only where its transport
 is known—Claude Code's `~/.claude/settings.json`; OpenCode, Gemini, and Codex receive the skills, but
-their transports are documented rather than wired by `sync`.
+their transports are documented rather than wired by `sync`. `tsp doctor` prints one line per host
+with the skills it holds and the transport it really has, so no host claims a transport it does not
+have.
 
 **Command hooks.** The host runs a command when the agent stops and reads JSON back. Claude Code
 and Pi both work this way, and Pi's payload carries the same fields Claude's does

@@ -36,6 +36,13 @@ func TestCargoInlineWitnessIsReported(t *testing.T) {
 	command(t, d, "git", "add", "Cargo.toml", "lib.rs")
 	command(t, d, "git", "commit", "-qm", "Rust base")
 	put(t, d, "lib.rs", "pub fn value() -> i32 { 0 }\n#[test]\nfn promise() { assert_eq!(value(), 1); }\n")
+	// The runner's budget below belongs to the test, not to rustc: a cold machine compiles the crate on the first
+	// call, and a slow compile would read as "the runner said nothing" instead of a verdict.
+	warm := exec.Command("cargo", "test", "--no-run", "--quiet")
+	warm.Dir = d
+	if out, err := warm.CombinedOutput(); err != nil {
+		t.Skipf("cargo cannot build the fixture here: %v\n%s", err, out)
+	}
 	rep, err := bench.RedCheck(d, "cargo test", wait)
 	if err == nil || !strings.Contains(err.Error(), "promise: inline Rust unit tests are not supported; move the test to tests/") || len(rep.Red) != 0 {
 		t.Fatalf("redcheck: %+v %v", rep, err)

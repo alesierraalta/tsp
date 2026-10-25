@@ -97,6 +97,16 @@ commands:
            (--template | --file <path> | --summary | --pending | --mark-reviewed <token>)
   version  print the version
 
+  mutate   mutate the production source the change touched and report the mutants no test kills.
+           The engine is external (gremlins for Go); the harness owns the scope, the budget and the
+           gate. Exit 0 no survivor at the threshold, 1 survivors, 2 nothing was measured
+           (--cwd, --base, --max-mutants, --workers, --timeout, --fail-on-survivors, --json).
+
+  scan     bring a scanner's real findings into the change: runs gitleaks when it is installed, or
+           reads a SARIF report another tool wrote, and keeps only the files the change touched.
+           Exit 0 nothing at the gated level, 1 findings, 2 nothing was scanned
+           (--cwd, --base, --sarif, --level, --timeout, --json).
+
 flags shared by gate, setup, sync, doctor, uninstall, feedback, repair:
   --config-dir <dir>   Claude config directory (default: ~/.claude)
 
@@ -173,7 +183,7 @@ update [--check]  --check only checks and refreshes the cache; it never installs
 restore [--id <backup-id>] [--dry-run]   (default: the latest backup)
 repair [--config-dir <dir>] [--dry-run] [--force]
 feature list|enable|disable <id> [--preview]
---path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them. Without --path, use the plan declared in .tpp.json when there is one, else docs/testing/test-plan.md
+--path: relative values resolve against the worktree root; absolute values are taken as given except in check, which refuses them, and check --base refuses a plan file altogether: a plan records a session, not a commit range. Without --path, use the plan declared in .tpp.json when there is one, else docs/testing/test-plan.md
 --run: a lowercase slug identifying the active run; plan gaps uses the declaration when omitted, while --all forces whole-document counts
 feedback [--config-dir <dir>] [--template] [--file <path>] [--plan <path>] [--summary] [--pending] [--mark-reviewed <token>]
 `
@@ -225,6 +235,10 @@ func main() {
 		os.Exit(runRedcheck(os.Args[2:]))
 	case "verify":
 		os.Exit(runVerify(os.Args[2:]))
+	case "mutate":
+		os.Exit(runMutate(os.Args[2:]))
+	case "scan":
+		os.Exit(runScan(os.Args[2:]))
 	case "findings":
 		os.Exit(runFindings(os.Args[2:]))
 	case "status":
@@ -247,57 +261,97 @@ func main() {
 }
 
 func runProbe(args []string) int {
-	const help = "Usage of probe:\n  tsp probe env [dir] [--json]\nReports literal environment reads absent from deploy artifacts with deployed siblings.\nExit 1: findings; 0: clean (no text output); 2: usage error. Never writes to the scanned tree.\n"
-	fail := func(message string) int { fmt.Fprintln(os.Stderr, "probe:", message); return 2 }
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Fprint(os.Stderr, help)
+		fmt.Fprint(os.Stderr, probeHelp)
 		return 0
 	}
+	if len(args) > 0 && args[0] == "quality" {
+		return runProbeQuality(args[1:])
+	}
+	if len(args) > 0 && args[0] == "arch" {
+		return runProbeArch(args[1:])
+	}
 	if len(args) == 0 || args[0] != "env" {
-		return fail("expected env [dir] [--json]")
+		fmt.Fprintln(os.Stderr, "probe:", "expected env [dir] [--json], quality [--cwd <dir>] [--base <ref>], or arch [--cwd <dir>] [--base <ref>] [--rules <file>]")
+		return 2
 	}
-	dir := "."
-	haveDir, asJSON := false, false
-	for _, arg := range args[1:] {
-		switch {
-		case arg == "--help" || arg == "-h":
-			fmt.Fprint(os.Stderr, help)
-			return 0
-		case arg == "--json":
-			asJSON = true
-		case strings.HasPrefix(arg, "-"):
-			return fail("unknown flag " + arg)
-		case haveDir:
-			return fail("expected at most one directory")
-		default:
-			dir = arg
-			haveDir = true
-		}
+	return runProbeEnv(args[1:])
+}
+
+// probeHelp names every probe and what its exit codes mean.
+const probeHelp = "Usage of probe:\n  tsp probe env [dir] [--json]\n  tsp probe quality [--cwd <dir>] [--base <ref>] [--max-complexity <n>] [--dup-window <n>] [--json]\n  tsp probe arch [--cwd <dir>] [--base <ref>] [--rules <file>] [--json]\nReports literal environment reads absent from deploy artifacts with deployed siblings, the hygiene of the\nlines a change touches (complex functions, blocks copied inside the change) for the languages that have an adapter,\nor the import edges a change added that <repo>/.tsp-arch.json refuses.\nExit 1: findings; 0: clean (no text output); 2: usage error or nothing measurable. Never writes to the scanned tree.\n"
+
+// envFlags are the environment probe's inputs after parsing.
+type envFlags struct {
+	dir    string
+	asJSON bool
+}
+
+// runProbeEnv reports environment reads the deployment artifacts never deliver.
+func runProbeEnv(args []string) int {
+	parsed, code := parseProbeEnvArgs(args)
+	if code != 0 {
+		return code
 	}
-	info, err := os.Stat(dir)
+	info, err := os.Stat(parsed.dir)
 	if err != nil {
-		return fail(err.Error())
+		fmt.Fprintln(os.Stderr, "probe:", err)
+		return 2
 	}
 	if !info.IsDir() {
-		return fail("not a directory: " + dir)
+		fmt.Fprintln(os.Stderr, "probe:", "not a directory: "+parsed.dir)
+		return 2
 	}
-	findings, err := probe.Env(dir)
+	findings, err := probe.Env(parsed.dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "probe:", err)
 		return 1
 	}
+	if code := printEnvFindings(findings, parsed.asJSON); code != 0 {
+		return code
+	}
+	if len(findings) > 0 {
+		return 1
+	}
+	return 0
+}
+
+// parseProbeEnvArgs reads the environment probe's arguments; a non-zero code is the exit to return.
+func parseProbeEnvArgs(args []string) (envFlags, int) {
+	parsed := envFlags{dir: "."}
+	haveDir := false
+	for _, arg := range args {
+		switch {
+		case arg == "--help" || arg == "-h":
+			fmt.Fprint(os.Stderr, probeHelp)
+			return envFlags{}, 0
+		case arg == "--json":
+			parsed.asJSON = true
+		case strings.HasPrefix(arg, "-"):
+			fmt.Fprintln(os.Stderr, "probe:", "unknown flag "+arg)
+			return envFlags{}, 2
+		case haveDir:
+			fmt.Fprintln(os.Stderr, "probe:", "expected at most one directory")
+			return envFlags{}, 2
+		default:
+			parsed.dir = arg
+			haveDir = true
+		}
+	}
+	return parsed, 0
+}
+
+// printEnvFindings writes the environment findings; a non-zero code means the output could not be written.
+func printEnvFindings(findings []probe.Finding, asJSON bool) int {
 	if asJSON {
 		if err := json.NewEncoder(os.Stdout).Encode(findings); err != nil {
 			fmt.Fprintln(os.Stderr, "probe:", err)
 			return exitArtifact
 		}
-	} else {
-		for _, f := range findings {
-			fmt.Printf("%s read at %s; siblings delivered by %s\n", f.Name, strings.Join(f.ReadAt, ", "), strings.Join(f.DeliveredBy, ", "))
-		}
+		return 0
 	}
-	if len(findings) > 0 {
-		return 1
+	for _, f := range findings {
+		fmt.Printf("%s read at %s; siblings delivered by %s\n", f.Name, strings.Join(f.ReadAt, ", "), strings.Join(f.DeliveredBy, ", "))
 	}
 	return 0
 }
@@ -1007,6 +1061,7 @@ func runCheck(args []string) int {
 	path := fs.String("path", "", "plan file relative to the repository root")
 	suite := fs.String("suite", "", "command that runs the changed tests when there is no plan (default: their Go packages, pytest on changed .py tests, or node --test on them)")
 	waive := fs.String("no-test-needed", "", "record in "+check.WaiverName+" that the current change needs no new test, with this reason; editing the code again voids it")
+	base := fs.String("base", "", "check the commit range <base>...HEAD instead of the working tree: what CI does, where the tree holds HEAD and nothing looks changed; the plan document is not consulted for a range")
 	// One path per occurrence, never a comma-split list: a changed file may itself carry a comma in
 	// its name, and folding it into a joined value would name paths that do not exist — the check
 	// would then answer "nothing to check" while the change really owes a test.
@@ -1051,7 +1106,7 @@ func runCheck(args []string) int {
 		fmt.Fprintf(os.Stderr, "check: --cwd %s is not a directory: name an existing directory inside the repository\n", *cwd)
 		return 2
 	}
-	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named})
+	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named, Base: strings.TrimSpace(*base)})
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
 }

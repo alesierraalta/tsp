@@ -124,6 +124,68 @@ skipped; real `.env` files are never opened. This is a literal-text heuristic, n
 Exit codes: **1** findings, **0** clean (no text output; JSON prints `[]`), **2** usage
 errors (stderr only).
 
+### Code hygiene inside the change
+
+`tsp probe quality [--cwd <dir>] [--base <ref>]` asks the same kind of question about the change
+itself: it scores every Go function the change touches with the E63 rule, and reports blocks copied
+inside the change. `--base` compares that ref with the working tree, so the probe runs before you
+commit.
+
+```
+$ tsp probe quality --base main
+cmd/tsp/main.go:263 complexity — runProbe scores 27 over the bar of 15: split it or name why it stays
+internal/quality/score.go:111 duplication — this 6-line block also appears at internal/quality/score.go:78: keep one of them
+```
+
+Two rules keep the report short enough to act on. Only lines the change touches are measured, so a
+five-year-old file you edited once does not return its whole history. And the probe names what it
+cannot measure instead of reporting clean: `*_test.go` files are not measured (the bar governs
+shipped code), and a change that touches only a language with no adapter exits **2** with the reason:
+
+```
+$ tsp probe quality
+probe quality: quality probe unusable: the change touched no language this probe measures (no adapter for python (1 file(s)))
+```
+
+Exit codes: **1** findings, **0** clean, **2** nothing measurable or usage error. JSON is available
+with `--json`. Dead code is listed under `not_checked`: counting references over a whole program is
+not implemented here, and a wrong "dead" claim would cost more than a missing one.
+
+### Architecture the change must not bend
+
+`tsp probe arch [--cwd <dir>] [--base <ref>] [--rules <file>]` reads its rules from JSON, by default
+`.tsp-arch.json` at the repository root, and reports the import edges a change *added* that the
+declaration refuses:
+
+```json
+{
+  "layers": [
+    {"name": "analyzers", "paths": ["internal/quality/"], "imports": ["example.com/m/internal/quality"]},
+    {"name": "bench", "paths": ["internal/bench/"], "imports": ["example.com/m/internal/bench"]}
+  ],
+  "forbid": [
+    {"from": "analyzers", "to": "bench", "why": "a probe answers about one change; the experiment harness must not be how a review is judged"}
+  ]
+}
+```
+
+A layer matches by repository path (who the importer is) or by import prefix (what is imported), so the
+rule reads the same whether a file moved or a package was renamed. The `why` is carried into the
+finding, because a rule nobody remembers the reason for gets deleted the first time it is inconvenient.
+
+```
+$ tsp probe arch --base main
+internal/mutate/mutate.go:26 forbidden-edge analyzers must not import bench (example.com/m/internal/bench): a probe answers about one change; the experiment harness must not be how a review is judged
+```
+
+Only edges whose import line is inside the change are blamed: an edge that was already there is
+pre-existing debt, and failing every pull request for it is how a gate gets turned off. A declaration
+that names a layer nobody declared is refused (a typo must not silently disable a rule), and cycles are
+named under `not_checked`: the Go toolchain already refuses an import cycle, so a cycle a build accepts
+cannot exist, and reporting one would be an opinion. Exit codes are the probe's usual **1** findings,
+**0** clean, **2** nothing measurable — a repository without a declaration exits 2, because "no rule
+was enforced" is not "the architecture is clean". JavaScript and TypeScript imports are not parsed yet.
+
 ## How it works
 
 Four pictures of the same system: the pieces, the decision the gate takes at every Stop, the testing
@@ -282,8 +344,10 @@ install them first, for example `sudo apt-get install -y curl git ca-certificate
 or `sudo apk add curl git` (Alpine).
 
 `tsp setup` installs the skills into the agent hosts it finds (Claude Code at `~/.claude`, Codex at
-`~/.codex`, Gemini CLI at `~/.gemini`, OpenCode at `~/.config/opencode`), so install your agent
-first. With none of them present setup exits 1 and says so; the binary stays installed, and
+`~/.codex`, Gemini CLI at `~/.gemini`, Anti-Gravity at `~/.gemini/antigravity`, OpenCode at
+`~/.config/opencode`), so install your agent first. A `~/.gemini` that holds only Anti-Gravity's
+tree is agy, not the Gemini CLI, and setup does not install a second copy for a host that is not
+there. With none of them present setup exits 1 and says so; the binary stays installed, and
 running `tsp setup` again after installing the agent finishes the job. Pi is never discovered: Pi
 users also run `tsp sync --hosts pi` to install the Pi extension.
 
@@ -293,6 +357,7 @@ flowchart LR
     scan -- "~/.claude" --> claude["Claude Code<br/>skills + Stop hook"]
     scan -- "~/.codex" --> codex["Codex<br/>skills"]
     scan -- "~/.gemini" --> gemini["Gemini CLI<br/>skills"]
+    scan -- "~/.gemini/antigravity" --> agy["Anti-Gravity<br/>skills"]
     scan -- "~/.config/opencode" --> oc["OpenCode<br/>skills"]
     scan -- none --> stop["exit 1<br/>nothing installed: no host found"]
     pisync["tsp sync --hosts pi"] --> pi["Pi<br/>/tsp extension, never discovered"]
@@ -372,7 +437,7 @@ unbound session gets. The gate always exits 0: it grades the turn and never brea
 `sync` installs the embedded skills into every host it finds: `~/.claude/skills`,
 `~/.config/opencode/skills`, `~/.gemini/skills`, and `~/.codex/skills`. Discovery never offers Pi —
 the Pi extension is the explicit `--hosts pi` opt-in described below. The Stop hook is wired only
-where its transport is known—Claude Code's `~/.claude/settings.json`; OpenCode, Gemini, and Codex
+where its transport is known—Claude Code's `~/.claude/settings.json`; OpenCode, Gemini, Anti-Gravity, and Codex
 receive skills but their transports are documented rather than wired. Claude's sync merges into
 `~/.claude/settings.json`: every existing hook and setting is preserved, the gate is added once,
 and running it again changes nothing. A file modified after tsp installed it is not replaced
@@ -480,9 +545,14 @@ Additional commands:
 | Command | What it does |
 |---|---|
 | `tsp check` | Says what the repository still owes from git, tests, and an optional plan. |
+| `tsp check --base <ref>` | The same question for the commit range `<ref>...HEAD`, which is the candidate CI has: the tests are run against `<ref>`'s code, so a test that only passes because the change is next to it pins nothing. |
 | `tsp redcheck` | Runs added or changed tests against HEAD's code to identify defect witnesses. |
+| `tsp mutate [--base <ref>] [--fail-on-survivors <n>]` | Mutates the production source the change touched and reports the mutants no test kills; the engine (gremlins) stays external, the scope, budget and gate stay here. Exit 0 no survivor at the threshold, 1 survivors, 2 nothing measured. |
+| `tsp scan [--base <ref>] [--sarif <report>] [--level <l>]` | Brings a scanner's real findings into the change: runs gitleaks when installed, or reads any SARIF report, keeps only the files the change touched, and gates at `--level` (default `warning`). Exit 0 nothing at that level, 1 findings, 2 nothing scanned. |
 | `tsp findings record\|check\|verdict` | Records defect witnesses, checks their state at the next review, or records a verdict. |
 | `tsp probe env [dir] [--json]` | Reports undelivered environment settings (read-only). |
+| `tsp probe quality [--cwd <dir>] [--base <ref>]` | Reports complexity and copied blocks inside the lines a change touches, and names the languages it cannot measure. Exit 0 clean, 1 findings, 2 nothing measurable. |
+| `tsp probe arch [--cwd <dir>] [--base <ref>] [--rules <file>]` | Reports the import edges a change added that `.tsp-arch.json` refuses. Exit 0 clean, 1 findings, 2 nothing measurable. |
 | `tsp plan upgrade [--run <slug>] [--path <path>]` | Upgrades a plan to the current contract. |
 | `tsp bench adjudicate` | Records or shows decisions for finding rows; undecided rows stay pending. |
 
@@ -508,6 +578,109 @@ reminder, not an approval gate.
 Telemetry: every decision appends one JSON line to `~/.claude/telemetry/testing-gate.jsonl`
 (override with `TESTING_GATE_LOG`), so the invocation rate is measurable over time. Its `repo`, `session`
 and `plan` fields are pseudonyms, not names.
+
+### Verifying a change blindly
+
+The writer is the worst judge of its own tests: a session that wrote a test believes it. `tsp verify`
+freezes the candidate in a throwaway read-only worktree and asks a **second** session what the first
+one's tests actually prove, with no path to the writer's conversation. The second session gets five
+documents — the diff, the plan, the `check` output, the `redcheck` output, and the task — and answers
+with a verdict document only.
+
+```
+tsp verify --session-cmd "claude -p 'read the package and write verdict.json'" --task "what I was asked to do"
+```
+
+| Verdict | Meaning | Exit |
+|---|---|---|
+| `pinned` | the tests fail on the code the change started from and name the defect | 0 |
+| `unpinned` | the tests pass on that code, so they pin nothing | 1 |
+| `insufficient` | the change cannot be judged from what was handed over | 1 |
+
+An unusable answer is never published: a malformed `verdict.json`, an unknown verdict word, a finding
+without a file, a positive line, a claim and evidence, or `unpinned` with no findings at all all exit 2
+— *a rejection without evidence is an opinion*. The published artifact is `.tsp-verify.json` beside
+the package, which names the base commit and records `blind: true`.
+
+**The RDD flow uses the same artifact.** If your harness already freezes the candidate and admits a
+verdict (gentle-ai's receipt-driven review does), there is no reason to run a second model:
+
+```
+tsp verify --publish <package dir> --base <commit the verdict is about>
+```
+
+TSP reads the host's `verdict.json` with exactly the rules it applies to a session it ran itself, and
+publishes the same `.tsp-verify.json`. One judgement, one artifact, two ways to obtain it; neither flow
+needs the other installed.
+
+### What the tests do not kill
+
+`tsp verify` says whether the tests pin *the* defect. `tsp mutate` says where the change is unpinned
+at all: it mutates the production source the change touched and reports every mutant the tests fail
+to kill. The engine is external and per stack — [gremlins](https://github.com/go-gremlins/gremlins)
+for Go today — and the harness owns the four things a project should not have to relearn: the scope is
+the changed packages, the budget refuses a change too wide to pay for *before* the expensive run, the
+result is normalized to `file:line`, and the gate is the survivor count rather than the engine's own
+efficacy percentage.
+
+```
+tsp mutate --base origin/main            # the commit range CI has
+tsp mutate                                # the working tree
+```
+
+| Exit | Meaning |
+|---|---|
+| 0 | no mutant survived at the threshold (`--fail-on-survivors`, default 0) |
+| 1 | at least one mutant survived: a test does not pin what the change does |
+| 2 | nothing was measured — no engine for this stack, or a change above `--max-mutants` |
+
+Exit 2 is the point. A mutation run that measured nothing and a mutation run that found nothing look
+identical from the outside, and only one of them says the tests are worth something; the tool never
+reports the second when it means the first. `--fail-on-survivors -1` publishes the survivors and gates
+nothing, which is how a repository learns its current number without turning the tool off.
+
+`go install github.com/go-gremlins/gremlins/cmd/gremlins@latest` puts the Go engine on `PATH`.
+JavaScript (`stryker`) and Python (`mutmut`) have no adapter yet: the run exits 2 and says so instead
+of passing a stack it cannot measure.
+
+### Real findings from real scanners
+
+A security review done by the same model that wrote the code is an opinion with a deadline. `tsp scan`
+brings a scanner's findings into the change, with the scope and the gate kept here:
+
+```
+tsp scan                        # gitleaks, when installed, over the changed files
+tsp scan --sarif report.sarif   # a report another tool already wrote
+```
+
+Structured results arrive as SARIF — the format semgrep, gitleaks, trivy and CodeQL all emit — so a
+scanner needs no adapter to be useful. Only findings on files the change touched survive: a report is
+about a repository, the answer is about a change.
+
+| Exit | Meaning |
+|---|---|
+| 0 | nothing at the gated level (`--level`, default `warning`) |
+| 1 | a finding reaches that level |
+| 2 | nothing was scanned: no engine installed, an unreadable report, or an unknown `--level` |
+
+The default gate is `warning`, not `error`, because the scanners disagree about severity: gitleaks
+reports a leaked credential with no level at all, and SARIF's own default for a missing level is
+warning. Gating at `error` would let a real secret through; gating at `warning` blocks it and still
+leaves `note`-level advice readable.
+
+### Running the gate in CI
+
+`tsp check --base origin/main` asks the same question in CI that the Stop gate asks at the end of a
+turn, and exits non-zero when the answer is a debt: a production source file changed in the range and
+no test came with it, or the tests that came cannot run against the code the range started from. The
+flag matters because the working tree in CI *is* `HEAD`: a check that read `git status` there would
+find nothing changed and pass every pull request. `tsp check` reads the tree by default and the range
+when you name one; the two working-tree flags, `--no-test-needed` and `--paths`, are refused alongside
+`--base`, because a waiver and a per-path answer are both about a tree. A plan file is refused there too,
+and never consulted: a plan records the session that wrote it, so an unfinished target in the
+repository's plan would otherwise block every unrelated pull request. The range's answer is whether its
+own tests pin anything. This repository runs it on its own pull requests in
+`.github/workflows/testing-gate.yml`.
 
 ## Skills
 
@@ -685,6 +858,7 @@ on top is knowing what THIS session did, which the repository cannot tell you.
 | Anything that runs a command | verified: `check`, `plan init`, `plan check`, `plan gaps` need no host at all |
 | Gemini CLI | not implemented: its `settings.json` takes command hooks under different event names, and its payload and output schemas are not verified here |
 | Pi | opt-in extension: `tsp sync --hosts pi` installs it and Pi exposes a native `/tsp` command with `/tpp` compatibility alias (`check`, `feedback --summary`, `doctor`); its dispatch and the TSP offer are tested in CI (`assets/hosts/pi/tsp.test.mjs`), and the offer was watched in a live Pi 1.3.0 session. The native Pi Stop hook is **not verified** — payload contract read from the pi-hooks package, never watched firing |
+| Anti-Gravity (`agy`) | skills only: `sync` installs into `~/.gemini/antigravity/skills`, which is where `agy` reads them; no Stop hook is wired, because `agy` reads hooks from `~/.gemini/antigravity-cli/hooks` and TSP does not write them yet |
 | Codex, OpenCode | not implemented: each has its own extension surface, and guessing a payload schema would ship a hook that silently never fires |
 
 Nothing above is a promise about a host that is not listed as verified. A hook that looks wired and
