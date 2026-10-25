@@ -267,6 +267,29 @@ func TestRangeCheckNamesTheCodeTheBaseCommitLacks(t *testing.T) {
 	})
 }
 
+// A package that does not build at base reports no outcome for any of its tests, and the packages beside it
+// keep the run looking judged. A test that cannot be built at base cannot pass there, so the answer names it.
+func TestRangeCheckNamesABuildFailureBesideAPassingPackage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real git and go runner")
+	}
+	dir := redCheckRepo(t)
+	writeFile(t, dir, "quiet_test.go", "package rc\n\nimport \"testing\"\n\nfunc TestQuiet(t *testing.T) {}\n")
+	writeFile(t, dir, "fresh/fresh.go", "package fresh\n\nfunc New() int { return 4 }\n")
+	writeFile(t, dir, "fresh/fresh_test.go", "package fresh\n\nimport \"testing\"\n\nfunc TestNew(t *testing.T) {\n\tif New() != 4 {\n\t\tt.Fatal(New())\n\t}\n}\n")
+	commitAll(t, dir, "change")
+	rep, err := RedCheckRange(dir, "", "HEAD~1", []string{"quiet_test.go", "fresh/fresh_test.go"}, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("a package that cannot build at base is a witness, not an unjudgeable suite: %v", err)
+	}
+	if want := []string{"fresh"}; !reflect.DeepEqual(rep.NewCode, want) {
+		t.Fatalf("new code = %v, want %v", rep.NewCode, want)
+	}
+	if len(rep.PinsNothing) != 0 {
+		t.Fatalf("pins nothing = %v, want none: the failure is a build problem, not a passing test", rep.PinsNothing)
+	}
+}
+
 // A test that does not build against the change's own code proves nothing about it, so the suite stays
 // unjudgeable instead of being excused.
 func TestRangeCheckKeepsATestBrokenEverywhereUnjudgeable(t *testing.T) {

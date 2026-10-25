@@ -176,6 +176,15 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 		}
 		return rep, fmt.Errorf("the changed tests could not be run test by test with %q: %s", suite, detail)
 	}
+	// One package that does not build at base hides inside an aggregate run: its tests never report, so they cannot
+	// fail, and the other packages keep the report looking judged. A test that cannot be built at base cannot pass
+	// there either, so it is a witness when the change itself compiles and passes it.
+	if agentFiles != nil && len(rep.Red) == 0 && strings.Contains(out, "[build failed]") {
+		if packages := newCodeWitness(root, suite, files, timeout, out); len(packages) > 0 {
+			rep.NewCode = packages
+			return rep, nil
+		}
+	}
 	for name, passed := range after {
 		if newParentCovers(after, before, name) {
 			continue
