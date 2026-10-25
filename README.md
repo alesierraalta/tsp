@@ -640,10 +640,11 @@ reports the second when it means the first. `--fail-on-survivors -1` publishes t
 nothing, which is how a repository learns its current number without turning the tool off.
 
 `go install github.com/go-gremlins/gremlins/cmd/gremlins@latest` puts the Go engine on `PATH`.
-JavaScript (`stryker`) still has no adapter, and a JavaScript change is refused by name rather than
-reported as "no Go source changed". Python is measured by `mutmut`: the repository declares its scope
-with `[mutmut]` / `source_paths` in `setup.cfg` (or `[tool.mutmut]` in `pyproject.toml`), and a missing
-section is an exit 2 naming the file to edit instead of a message from inside the engine
+Each stack declares its own engine once, and a missing declaration is an exit 2 naming the file to edit
+instead of a message from inside the engine. Python uses `mutmut` (`[mutmut]` / `source_paths` in
+`setup.cfg`, or `[tool.mutmut]` in `pyproject.toml`). JavaScript and TypeScript use Stryker
+(`stryker.conf.json` naming its test runner, plugins and mutate globs; a local
+`node_modules/.bin/stryker` is preferred over `npx`)
 of passing a stack it cannot measure.
 
 ### Real findings from real scanners

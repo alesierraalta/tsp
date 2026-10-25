@@ -42,7 +42,7 @@ func pythonDeps(t *testing.T, root, results string) Deps {
 					return root + "\n", nil
 				}
 			}
-			return "shop.py", nil
+			return " M shop.py", nil
 		},
 		LookPath: func(name string) (string, error) {
 			if name != "mutmut" {
