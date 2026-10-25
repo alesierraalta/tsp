@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -31,6 +32,10 @@ type Deps struct {
 	RedCheck func(root string) (Witness, error)
 	// Waive, when not empty, records that the current change needs no new test, with this reason.
 	Waive string
+	// Base names a commit-ish to check the range against instead of the working tree: in CI the
+	// candidate is `base...HEAD`, and the tree there holds HEAD, so a status reading would answer
+	// "nothing is changed" for every pull request. Empty reads the working tree as always.
+	Base string
 	// Paths, when not empty, answers for those paths alone: whether the production source this work
 	// touched still owes a test. The plan's remaining targets never reach that answer, because how much
 	// of a run's agenda is open is progress, not this change's debt. One path per element, never split
@@ -51,6 +56,8 @@ type Witness struct {
 	TestFiles   []string
 	Red         []string
 	PinsNothing []string
+	NewCode     []string
+	Base        string
 }
 
 const optOutName = ".no-testing-gate"
@@ -76,10 +83,6 @@ func Run(cwd string, d Deps) Result {
 	}
 	if d.Exists == nil {
 		d.Exists = func(root, rel string) bool { _, err := os.Lstat(filepath.Join(root, rel)); return err == nil }
-	}
-	if d.RedCheck == nil {
-		suite := d.Suite
-		d.RedCheck = func(root string) (Witness, error) { return redCheck(root, suite) }
 	}
 	rootOut, err := d.Git(cwd, "rev-parse", "--show-toplevel")
 	root := strings.TrimSpace(rootOut)
@@ -110,39 +113,63 @@ func Run(cwd string, d Deps) Result {
 	if planErr == nil {
 		warn = ignoredPlanWarning(root, planRelPath, d)
 	}
-	statusOut, err := d.Git(root, "status", "--porcelain", "-z", "-uall")
+	if d.Base != "" && (d.Waive != "" || len(d.Paths) > 0 || d.PlanPath != "") {
+		return Result{Exit: 2, Text: warn + "--base checks a commit range: --no-test-needed and --paths answer for the working tree, and a plan file records one session, so neither combines with it"}
+	}
+	statusOut, all, err := d.changedPaths(root)
 	if err != nil {
-		return Result{Text: warn + "git status failed: nothing to check"}
+		return Result{Text: warn + err.Error()}
+	}
+	scope := ""
+	if d.Base != "" {
+		scope = "base " + d.Base + ": "
 	}
 	var files []string
 	seen := map[string]bool{}
-	for _, p := range gate.ParsePorcelain(statusOut) {
+	for _, p := range all {
 		if gate.IsProductionSource(p) && !seen[p] {
 			seen[p] = true
 			files = append(files, p)
 		}
 	}
 	if len(files) == 0 {
-		return Result{Text: warn + "no production source is changed: nothing to check"}
+		return Result{Text: warn + scope + "no production source is changed: nothing to check"}
 	}
 	if d.Waive != "" && planErr == nil {
 		return Result{Exit: 2, Files: files, Text: warn + "--no-test-needed applies only without a plan: " + planRelPath + " is this change's record"}
 	}
 	if len(d.Paths) > 0 {
-		res := scopedVerdict(cwd, root, files, gate.ParsePorcelain(statusOut), deletedPaths(statusOut), d)
+		res := scopedVerdict(cwd, root, files, all, deletedPaths(statusOut), d)
 		res.Text = warn + res.Text
 		return res
 	}
 	if planErr != nil && d.Waive != "" {
 		res := recordWaiver(root, files, d)
 		res.Files = files
-		res.Text = warn + changedLine(files) + "\n" + res.Text
+		res.Text = warn + scope + changedLine(files) + "\n" + res.Text
+		return res
+	}
+	// A commit range is judged on its own tests, never on the plan document: a plan records the session
+	// that wrote it, so an unfinished target in the repository's plan would otherwise block every
+	// unrelated pull request. The witness question is the range's answer.
+	if d.Base != "" {
+		if d.RedCheck == nil {
+			suite, base, candidate := d.Suite, d.Base, all
+			d.RedCheck = func(root string) (Witness, error) { return redCheck(root, suite, base, candidate) }
+		}
+		res := witnessVerdict(root, files, d)
+		res.Files = files
+		res.Text = warn + scope + changedLine(files) + "\nthe plan document is not consulted for a commit range: it records a session, not a candidate\n" + res.Text
 		return res
 	}
 	if planErr != nil {
+		if d.RedCheck == nil {
+			suite, base, candidate := d.Suite, d.Base, all
+			d.RedCheck = func(root string) (Witness, error) { return redCheck(root, suite, base, candidate) }
+		}
 		res := witnessVerdict(root, files, d)
 		res.Files = files
-		res.Text = warn + changedLine(files) + "\n" + res.Text
+		res.Text = warn + scope + changedLine(files) + "\n" + res.Text
 		return res
 	}
 	// The verdict is scoped to the declared run when one is declared: GapsForRun counts only the
@@ -151,19 +178,47 @@ func Run(cwd string, d Deps) Result {
 	// and every row counts, the legacy whole-plan reading the manual command has always had.
 	gaps, err := plan.GapsForRun(body, declaredRun)
 	if err != nil {
-		return Result{Exit: 1, Files: files, Text: warn + changedLine(files) + "\nthe plan could not be read: " + err.Error()}
+		return Result{Exit: 1, Files: files, Text: warn + scope + changedLine(files) + "\nthe plan could not be read: " + err.Error()}
 	}
 	if !gaps.Any() && gaps.Micro != "" {
-		return Result{Files: files, Text: warn + changedLine(files) + "\n" + planRelPath + " owes nothing: it is a micro plan for one small function, which owes no layer sweep"}
+		return Result{Files: files, Text: warn + scope + changedLine(files) + "\n" + planRelPath + " owes nothing: it is a micro plan for one small function, which owes no layer sweep"}
 	}
 	if !gaps.Any() {
 		owes := planRelPath + " owes nothing"
 		if declaredRun != "" {
 			owes += " for run " + declaredRun
 		}
-		return Result{Files: files, Text: warn + changedLine(files) + "\n" + owes + ": every assigned layer was swept and every ranked target is done"}
+		return Result{Files: files, Text: warn + scope + changedLine(files) + "\n" + owes + ": every assigned layer was swept and every ranked target is done"}
 	}
-	return Result{Exit: 1, Files: files, Text: warn + changedLine(files) + "\n" + gaps.Report()}
+	return Result{Exit: 1, Files: files, Text: warn + scope + changedLine(files) + "\n" + gaps.Report()}
+}
+
+// changedPaths reads the candidate: the commit range when Base names one, the working tree otherwise.
+// It returns the porcelain reading for the callers that need deletions, and the changed names.
+func (d Deps) changedPaths(root string) (statusOut string, names []string, err error) {
+	if d.Base != "" {
+		out, diffErr := d.Git(root, "diff", "--name-only", "-z", "--no-renames", d.Base+"...HEAD")
+		if diffErr != nil {
+			return "", nil, errors.New("git diff failed for --base " + d.Base + ": nothing to check")
+		}
+		return "", splitNUL(out), nil
+	}
+	statusOut, statusErr := d.Git(root, "status", "--porcelain", "-z", "-uall")
+	if statusErr != nil {
+		return "", nil, errors.New("git status failed: nothing to check")
+	}
+	return statusOut, gate.ParsePorcelain(statusOut), nil
+}
+
+// splitNUL reads a -z listing: git separates the names with NUL bytes and never quotes them.
+func splitNUL(out string) []string {
+	var names []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" {
+			names = append(names, p)
+		}
+	}
+	return names
 }
 
 // noWitnessDebt is what a change owes when no test came with it: one sentence, because it reaches the
@@ -364,10 +419,19 @@ func witnessVerdict(root string, files []string, d Deps) Result {
 	if len(w.TestFiles) == 0 {
 		return Result{Exit: 1, Text: noWitnessDebt}
 	}
-	if len(w.Red) == 0 {
-		return Result{Exit: 1, Text: "no new test fails on HEAD's code, so none of them pins a defect: change the input or setup until a test fails for the reason the contract names, or run tsp redcheck to see each test"}
+	// The code a change starts from is named, because in a range check it is not HEAD and saying so would send
+	// the reader looking at the wrong tree.
+	where := "HEAD's code"
+	if w.Base != "" {
+		where = "the code at " + w.Base
 	}
-	return Result{Text: fmt.Sprintf("%d new test(s) fail on HEAD's code: %s", len(w.Red), strings.Join(w.Red, ", "))}
+	if len(w.NewCode) > 0 {
+		return Result{Text: fmt.Sprintf("%d name(s) this change adds and the base commit does not define, so these tests witness it by not compiling without it: %s", len(w.NewCode), strings.Join(w.NewCode, ", "))}
+	}
+	if len(w.Red) == 0 {
+		return Result{Exit: 1, Text: "no new test fails on " + where + ", so none of them pins a defect: change the input or setup until a test fails for the reason the contract names, or run tsp redcheck to see each test"}
+	}
+	return Result{Text: fmt.Sprintf("%d new test(s) fail on %s: %s", len(w.Red), where, strings.Join(w.Red, ", "))}
 }
 
 // waiver is what --no-test-needed records: a person's reason, bound to the content of the changed
@@ -420,9 +484,17 @@ func waived(root string, files []string, d Deps) (string, bool) {
 	return w.Reason, w.Fingerprint == changeFingerprint(root, files, d)
 }
 
-func redCheck(root, suite string) (Witness, error) {
-	rep, err := bench.RedCheck(root, suite, 5*time.Minute)
-	return Witness{TestFiles: rep.TestFiles, Red: rep.Red, PinsNothing: rep.PinsNothing}, err
+// redCheck judges the candidate's tests against the code the change started from: base's tree when the
+// caller named a range, HEAD's tree otherwise.
+func redCheck(root, suite, base string, candidate []string) (Witness, error) {
+	var rep bench.RedCheckReport
+	var err error
+	if base != "" {
+		rep, err = bench.RedCheckRange(root, suite, base, candidate, 5*time.Minute)
+	} else {
+		rep, err = bench.RedCheck(root, suite, 5*time.Minute)
+	}
+	return Witness{TestFiles: rep.TestFiles, Red: rep.Red, PinsNothing: rep.PinsNothing, NewCode: rep.NewCode, Base: base}, err
 }
 
 // ignoredPlanWarning names the one thing check cannot see by reading the file: a plan path git will
