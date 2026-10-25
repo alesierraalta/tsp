@@ -1,0 +1,70 @@
+name: bench
+
+# The bench spends money and needs a model, so it never runs on a pull request. It runs on a schedule,
+# reads its baseline from bench/baseline/, and refuses to report a number when no credential is set:
+# a scheduled job that silently measures nothing is worse than a job that never ran.
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      max-cost-usd:
+        description: 'Spend ceiling for this run, in USD'
+        default: '1.50'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check the model credential exists
+        id: credential
+        run: |
+          if [ -z "${{ secrets.TSP_BENCH_API_KEY }}" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no TSP_BENCH_API_KEY secret: the bench measured nothing and this job says so"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run the bench
+        if: steps.credential.outputs.present == 'true'
+        env:
+          MODEL_API_KEY: ${{ secrets.TSP_BENCH_API_KEY }}
+          BUDGET: ${{ github.event.inputs.max-cost-usd || '1.50' }}
+        run: |
+          make build
+          ./bin/tsp bench run \
+            -cases 'bench/cases/*' \
+            -runs 1 \
+            -model "${{ vars.TSP_BENCH_MODEL || 'openai-codex/gpt-6-luna' }}" \
+            -max-cost-usd "$BUDGET" \
+            -bench-dir bench-results
+      - name: Refuse a run that lost recall
+        if: steps.credential.outputs.present == 'true'
+        env:
+          FLOOR: ${{ vars.TSP_BENCH_MIN_RECALL || '0.60' }}
+        run: |
+          run=$(ls -d bench-results/results/*/ | tail -1)
+          # A baseline only means something when it measured the same corpus with the same instrument.
+          # Until bench/baseline/aggregate.json records one, the gate enforces the floor alone.
+          if [ -f bench/baseline/aggregate.json ]; then
+            ./bin/tsp bench gate --baseline bench/baseline --min-recall "$FLOOR" --max-regression 0.05 "$run"
+          else
+            echo "::notice::no recorded baseline: enforcing the recall floor $FLOOR only"
+            ./bin/tsp bench gate --min-recall "$FLOOR" "$run"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: steps.credential.outputs.present == 'true'
+        with:
+          name: bench-results
+          path: bench-results
+          retention-days: 30
