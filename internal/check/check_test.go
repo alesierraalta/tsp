@@ -566,3 +566,18 @@ func TestBaseModeRefusesAPlanFile(t *testing.T) {
 		t.Fatalf("exit = %d, want 2 naming the refusal:\n%s", res.Exit, res.Text)
 	}
 }
+
+// A change that introduces a package cannot compile its tests against the base commit. That is what the
+// change is for, so the range check names it as a witness instead of failing the pull request.
+func TestBaseModeReportsTheCodeOnlyTheChangeHas(t *testing.T) {
+	repo := &fakeRepo{
+		root:    "/r",
+		plan:    owing,
+		diffOut: "internal/quality/quality.go\x00internal/quality/quality_test.go\x00",
+		witness: Witness{TestFiles: []string{"internal/quality/quality_test.go"}, NewCode: []string{"internal/quality"}},
+	}
+	res := Run(".", Deps{Git: repo.deps().Git, RedCheck: repo.deps().RedCheck, ReadFile: repo.deps().ReadFile, Exists: repo.deps().Exists, Base: "origin/main"})
+	if res.Exit != 0 || !strings.Contains(res.Text, "the base commit does not define") || !strings.Contains(res.Text, "internal/quality") {
+		t.Fatalf("exit = %d, want 0 naming the package the change introduces:\n%s", res.Exit, res.Text)
+	}
+}

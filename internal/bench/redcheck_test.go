@@ -221,3 +221,62 @@ func TestRedCheckReadsPytestTestByTest(t *testing.T) {
 		t.Fatalf("pins nothing = %v, want %v", rep.PinsNothing, want)
 	}
 }
+
+// commitAll records the working tree as a commit, so a range check has a real base to compare against.
+func commitAll(t *testing.T, dir, message string) {
+	t.Helper()
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-qm", message}} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+}
+
+// A change that adds a package cannot compile its tests against the base commit. Saying "could not be run"
+// would fail every pull request that introduces a command or a package, so the answer names what the code
+// the change starts from lacks, and only after the change's own code compiles the same tests.
+func TestRangeCheckNamesTheCodeTheBaseCommitLacks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real git and go runner")
+	}
+	t.Run("new package", func(t *testing.T) {
+		dir := redCheckRepo(t)
+		writeFile(t, dir, "fresh/fresh.go", "package fresh\n\nfunc New() int { return 4 }\n")
+		writeFile(t, dir, "fresh/fresh_test.go", "package fresh\n\nimport \"testing\"\n\nfunc TestNew(t *testing.T) {\n\tif New() != 4 {\n\t\tt.Fatal(New())\n\t}\n}\n")
+		commitAll(t, dir, "change")
+		rep, err := RedCheckRange(dir, "", "HEAD~1", []string{"fresh/fresh_test.go"}, 2*time.Minute)
+		if err != nil {
+			t.Fatalf("a package the change introduces is a witness, not an unjudgeable suite: %v", err)
+		}
+		if want := []string{"fresh"}; !reflect.DeepEqual(rep.NewCode, want) {
+			t.Fatalf("new code = %v, want %v", rep.NewCode, want)
+		}
+	})
+	t.Run("symbol added to an existing package", func(t *testing.T) {
+		dir := redCheckRepo(t)
+		writeFile(t, dir, "order.go", "package rc\n\nfunc Order() string { return \"cab\" }\n\nfunc Len() int { return len(Order()) }\n\nfunc Seats() int { return 4 }\n")
+		writeFile(t, dir, "seats_test.go", "package rc\n\nimport \"testing\"\n\nfunc TestSeats(t *testing.T) {\n\tif Seats() != 4 {\n\t\tt.Fatal(Seats())\n\t}\n}\n")
+		commitAll(t, dir, "change")
+		rep, err := RedCheckRange(dir, "", "HEAD~1", []string{"seats_test.go"}, 2*time.Minute)
+		if err != nil {
+			t.Fatalf("a test naming a symbol base never defined is a witness, not an unjudgeable suite: %v", err)
+		}
+		if want := []string{"."}; !reflect.DeepEqual(rep.NewCode, want) {
+			t.Fatalf("new code = %v, want %v", rep.NewCode, want)
+		}
+	})
+}
+
+// A test that does not build against the change's own code proves nothing about it, so the suite stays
+// unjudgeable instead of being excused.
+func TestRangeCheckKeepsATestBrokenEverywhereUnjudgeable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real git and go runner")
+	}
+	dir := redCheckRepo(t)
+	writeFile(t, dir, "fresh/fresh_test.go", "package fresh\n\nimport \"testing\"\n\nfunc TestMissing(t *testing.T) {\n\tMissing()\n}\n")
+	commitAll(t, dir, "change")
+	if _, err := RedCheckRange(dir, "", "HEAD~1", []string{"fresh/fresh_test.go"}, 2*time.Minute); err == nil {
+		t.Fatal("a test that compiles nowhere must stay unjudgeable")
+	}
+}

@@ -56,6 +56,8 @@ type Witness struct {
 	TestFiles   []string
 	Red         []string
 	PinsNothing []string
+	NewCode     []string
+	Base        string
 }
 
 const optOutName = ".no-testing-gate"
@@ -417,10 +419,19 @@ func witnessVerdict(root string, files []string, d Deps) Result {
 	if len(w.TestFiles) == 0 {
 		return Result{Exit: 1, Text: noWitnessDebt}
 	}
-	if len(w.Red) == 0 {
-		return Result{Exit: 1, Text: "no new test fails on HEAD's code, so none of them pins a defect: change the input or setup until a test fails for the reason the contract names, or run tsp redcheck to see each test"}
+	// The code a change starts from is named, because in a range check it is not HEAD and saying so would send
+	// the reader looking at the wrong tree.
+	where := "HEAD's code"
+	if w.Base != "" {
+		where = "the code at " + w.Base
 	}
-	return Result{Text: fmt.Sprintf("%d new test(s) fail on HEAD's code: %s", len(w.Red), strings.Join(w.Red, ", "))}
+	if len(w.NewCode) > 0 {
+		return Result{Text: fmt.Sprintf("%d name(s) this change adds and the base commit does not define, so these tests witness it by not compiling without it: %s", len(w.NewCode), strings.Join(w.NewCode, ", "))}
+	}
+	if len(w.Red) == 0 {
+		return Result{Exit: 1, Text: "no new test fails on " + where + ", so none of them pins a defect: change the input or setup until a test fails for the reason the contract names, or run tsp redcheck to see each test"}
+	}
+	return Result{Text: fmt.Sprintf("%d new test(s) fail on %s: %s", len(w.Red), where, strings.Join(w.Red, ", "))}
 }
 
 // waiver is what --no-test-needed records: a person's reason, bound to the content of the changed
@@ -483,7 +494,7 @@ func redCheck(root, suite, base string, candidate []string) (Witness, error) {
 	} else {
 		rep, err = bench.RedCheck(root, suite, 5*time.Minute)
 	}
-	return Witness{TestFiles: rep.TestFiles, Red: rep.Red, PinsNothing: rep.PinsNothing}, err
+	return Witness{TestFiles: rep.TestFiles, Red: rep.Red, PinsNothing: rep.PinsNothing, NewCode: rep.NewCode, Base: base}, err
 }
 
 // ignoredPlanWarning names the one thing check cannot see by reading the file: a plan path git will
