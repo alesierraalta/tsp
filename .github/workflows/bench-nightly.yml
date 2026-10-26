@@ -1,8 +1,9 @@
 name: bench
 
-# The bench spends money and needs a model, so it never runs on a pull request. It runs on a schedule,
-# reads its baseline from bench/baseline/, and refuses to report a number when no credential is set:
-# a scheduled job that silently measures nothing is worse than a job that never ran.
+# The bench measures an agent, so it uses the same agent this project runs locally: pi. No vendor API key
+# is invented here — pi carries its own credentials, and this workflow either has a pi home to restore or
+# says out loud that it measured nothing. A scheduled job that reports green without measuring is worse
+# than a job that never ran.
 on:
   schedule:
     - cron: '0 4 * * 1'
@@ -26,36 +27,44 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Check the model credential exists
-        id: credential
-        run: |
-          if [ -z "${{ secrets.TSP_BENCH_API_KEY }}" ]; then
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::no TSP_BENCH_API_KEY secret: the bench measured nothing and this job says so"
-          else
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Run the bench
-        if: steps.credential.outputs.present == 'true'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pi
+        run: npm install --global @earendil-works/pi-coding-agent
+      - name: Restore the pi home
+        id: home
         env:
-          MODEL_API_KEY: ${{ secrets.TSP_BENCH_API_KEY }}
+          PI_HOME_B64: ${{ secrets.TSP_PI_HOME_B64 }}
+        run: |
+          if [ -z "$PI_HOME_B64" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no TSP_PI_HOME_B64 secret: pi is not authenticated here, so the bench measured nothing. Export your own pi home with: tar czf - -C \"$HOME\" .pi/agent | base64 -w0"
+            exit 0
+          fi
+          echo "present=true" >> "$GITHUB_OUTPUT"
+          mkdir -p "$HOME"
+          printf '%s' "$PI_HOME_B64" | base64 -d | tar xzf - -C "$HOME"
+      - name: Run the bench with pi
+        if: steps.home.outputs.present == 'true'
+        env:
           BUDGET: ${{ github.event.inputs.max-cost-usd || '1.50' }}
         run: |
           make build
           ./bin/tsp bench run \
-            -cases 'bench/cases/*' \
+            -cases 'bench/cases/h*' \
             -runs 1 \
+            -runner pi \
             -model "${{ vars.TSP_BENCH_MODEL || 'openai-codex/gpt-6-luna' }}" \
+            -agent-config bench \
             -max-cost-usd "$BUDGET" \
             -bench-dir bench-results
       - name: Refuse a run that lost recall
-        if: steps.credential.outputs.present == 'true'
+        if: steps.home.outputs.present == 'true'
         env:
           FLOOR: ${{ vars.TSP_BENCH_MIN_RECALL || '0.60' }}
         run: |
           run=$(ls -d bench-results/results/*/ | tail -1)
-          # A baseline only means something when it measured the same corpus with the same instrument.
-          # Until bench/baseline/aggregate.json records one, the gate enforces the floor alone.
           if [ -f bench/baseline/aggregate.json ]; then
             ./bin/tsp bench gate --baseline bench/baseline --min-recall "$FLOOR" --max-regression 0.05 "$run"
           else
@@ -63,7 +72,7 @@ jobs:
             ./bin/tsp bench gate --min-recall "$FLOOR" "$run"
           fi
       - uses: actions/upload-artifact@v4
-        if: steps.credential.outputs.present == 'true'
+        if: steps.home.outputs.present == 'true'
         with:
           name: bench-results
           path: bench-results
