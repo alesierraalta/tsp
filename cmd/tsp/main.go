@@ -54,7 +54,8 @@ commands:
             bind --unset --session <id> [--cwd <dir>] [--config-dir <dir>])
   setup    install and verify in one step: sync, run the doctor's checks, say whether the binary's
            directory is on PATH, and end on one line saying tsp is working (exit 0) or what is left
-  sync     install the embedded skills into discovered hosts and wire Claude's Stop hook
+  sync     install the embedded skills into discovered hosts and wire the gate hook of every host
+           that fires one (Claude Stop, Gemini AfterAgent, Codex Stop)
   uninstall remove the installed skills and unwire the Stop hook (--dry-run writes nothing,
            --orphans also removes recorded paths the manifest no longer ships, --force
            snapshots modified files to the central backup store, then removes them)
@@ -65,14 +66,16 @@ commands:
            --force replaces modified managed files after backing them up)
   doctor   report installed skills, the hook wiring, and optional capabilities
   bench    run the testing skill against sealed-key fixtures and score it (run | score | history |
-           compare | rescore | adjudicate)
+           compare | rescore | adjudicate | gate)
   plan     write the skeleton, check the contract, name what breadth is still owed, record a
            Findings or Evidence ledger row from flags, and admit every Evidence row
            (init | check | gaps | upgrade | add-finding | add-evidence | admit)
   check    say what this repository still owes, from git, the tests and a plan if one exists: no
            hook payload, no transcript, no host. Without a plan, changed source needs a new test that
            fails on HEAD's code (see redcheck; --suite names how to run it), a waiver
-           recorded with --no-test-needed "<reason>", or a .no-testing-gate. Exit 1 when there is something to do.
+           recorded with --no-test-needed "<reason>", or a .no-testing-gate. --base <ref> judges the
+           commit range a pull request carries instead of the working tree. Exit 1 when there is
+           something to do.
   redcheck run the tests added or changed since HEAD against HEAD's code and say which new tests
            fail there (defect witnesses) and which pass (they pin nothing). Exit 0 when at least one
            new test fails on the unmodified code, 1 when none does or none was added, 2 when nothing
@@ -88,6 +91,9 @@ commands:
            (check [--cwd <dir>] [--timeout <duration>])
            (verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear)
   probe    env [dir] [--json]: report undelivered environment settings (read-only)
+           arch [--base <ref>] [--json]: refuse an import edge this repository does not allow,
+           judged on the files the change touches
+           quality [--base <ref>] [--json]: complexity and duplication on the lines a change adds
   status   report the local installation state and optional features
   update   check the Go module proxy for a newer release and install it through go install,
            printing the exact command when go is absent
@@ -98,8 +104,9 @@ commands:
   version  print the version
 
   mutate   mutate the production source the change touched and report the mutants no test kills.
-           The engine is external (gremlins for Go); the harness owns the scope, the budget and the
-           gate. Exit 0 no survivor at the threshold, 1 survivors, 2 nothing was measured
+           The engine is external (gremlins for Go, mutmut for Python, Stryker for JavaScript);
+           the harness owns the scope, the budget and the gate. Exit 0 no survivor at the threshold,
+           1 survivors, 2 nothing was measured
            (--cwd, --base, --max-mutants, --workers, --timeout, --fail-on-survivors, --json).
 
   scan     bring a scanner's real findings into the change: runs gitleaks when it is installed, or
@@ -111,8 +118,8 @@ flags shared by gate, setup, sync, doctor, uninstall, feedback, repair:
   --config-dir <dir>   Claude config directory (default: ~/.claude)
 
 flags for sync and setup:
-  --hosts <a,b,...>    limit installation to named hosts (claude, opencode, gemini, codex);
-                       sync additionally accepts pi, the opt-in extension host (setup refuses it)
+  --hosts <a,b,...>    limit installation to named hosts (claude, opencode, gemini, antigravity,
+                       codex); sync additionally accepts pi, the opt-in extension host (setup refuses it)
   --dry-run            print the plan and write nothing (sync only)
 
 flags for setup and doctor:
@@ -144,6 +151,9 @@ bench verify-oracle --run <reading> [--runner pi|claude|codex|agy] [--model <m>]
                    [--concurrency N] [--timeout d] [--dry-run]
   Blind post-hoc contract judge; requires kept workspaces. Writes only <reading>/oracle/.
 bench rescore [--bench-dir <dir>] <results>
+bench gate [--baseline <dir>] [--min-recall <f>] [--max-regression <f>] [--max-cost-usd <f>] <results>
+           (refuses a run below a floor, above a ceiling, regressed against a baseline, or one that
+            recorded no defect at all: a run that measured nothing is not a zero score)
 bench adjudicate --run <results>/<case>/<run> [--plan <path>] --row <n> --verdict <defect|false_positive|out_of_scope>
           [--defect <id>] --by <who> --reason <why> [--replace] [--ts <RFC3339>]
 bench adjudicate --run <results>/<case>/<run> [--plan <path>] (--show | --pending)
