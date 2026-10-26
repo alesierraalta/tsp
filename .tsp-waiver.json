@@ -1,9 +1,9 @@
 {
-  "fingerprint": "sha256:5c3019545f559aa9b133b81a0453a83bdba34e8d6412ee9757001fa10afd01c8",
+  "fingerprint": "sha256:69fca04a418bd54f8617ff40d364cab458a41f9fd4e3a48d46889ede1b82a373",
   "files": [
     "cmd/tsp/main.go",
-    "internal/mutate/javascript.go"
+    "internal/buildinfo/buildinfo.go"
   ],
-  "reason": "pure refactor: runBenchGate, runJavaScript and jsTargets were split with no behaviour change, and the existing tests pin every exit code and printed string",
-  "recorded": "2026-10-25T19:58:54Z"
+  "reason": "help text and version strings only: no behaviour changed, and the help assertions in cmd/tsp pin the text",
+  "recorded": "2026-10-26T13:06:10Z"
 }
