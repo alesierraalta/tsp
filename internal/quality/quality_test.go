@@ -100,6 +100,7 @@ func sprawling(n int) int {
 	return total
 }
 `
+	body += "\nvar _ = []any{simple, sprawling}\n"
 	r := newRepo(t, map[string]string{"p/p.go": body})
 	r.base = "main"
 	// The change touches the simple function only (lines 3-5).
@@ -130,7 +131,7 @@ func sprawling(n int) int {
 // the repository is history, not a review comment.
 func TestDuplicationCountsOnlyInsideTheChange(t *testing.T) {
 	block := strings.Repeat("value := compute(input)\nstore(value)\n", 4)
-	r := newRepo(t, map[string]string{"p/new.go": "package p\n\nfunc fresh() {\n" + block + block + "}\n"})
+	r := newRepo(t, map[string]string{"p/new.go": "package p\n\nfunc fresh() {\n" + block + block + "}\n\nvar _ = fresh\n"})
 	r.status = "?? p/new.go\x00"
 	rep, err := Run(context.Background(), Options{Cwd: r.dir, MaxComplexity: 99, DupWindow: 6, Deps: r.deps()})
 	if err != nil {
@@ -141,7 +142,7 @@ func TestDuplicationCountsOnlyInsideTheChange(t *testing.T) {
 	}
 
 	// The same duplicated block in a file the change did not touch is not reported.
-	r2 := newRepo(t, map[string]string{"p/old.go": "package p\n\nfunc legacy() {\n" + block + block + "}\n"})
+	r2 := newRepo(t, map[string]string{"p/old.go": "package p\n\nfunc legacy() {\n" + block + block + "}\n\nvar _ = legacy\n"})
 	r2.status = ""
 	rep, err = Run(context.Background(), Options{Cwd: r2.dir, MaxComplexity: 99, DupWindow: 6, Deps: r2.deps()})
 	if err != nil {
