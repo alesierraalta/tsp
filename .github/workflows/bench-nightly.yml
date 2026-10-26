@@ -1,9 +1,9 @@
 name: bench
 
-# The bench measures an agent, so it uses the same agent this project runs locally: pi. No vendor API key
-# is invented here — pi carries its own credentials, and this workflow either has a pi home to restore or
-# says out loud that it measured nothing. A scheduled job that reports green without measuring is worse
-# than a job that never ran.
+# The bench measures an agent, so it uses the same agent this project runs locally: pi.
+# No vendor API key is invented here: pi carries its own credentials, and this workflow either
+# has a pi home to restore or says out loud that it measured nothing. A scheduled job that
+# reports green without measuring is worse than a job that never ran.
 on:
   schedule:
     - cron: '0 4 * * 1'
@@ -39,7 +39,9 @@ jobs:
         run: |
           if [ -z "$PI_HOME_B64" ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::no TSP_PI_HOME_B64 secret: pi is not authenticated here, so the bench measured nothing. Export your own pi home with: tar czf - -C \"$HOME\" .pi/agent | base64 -w0"
+            echo "::notice::no TSP_PI_HOME_B64 secret: pi is not authenticated here,"
+            echo "::notice::so the bench measured nothing. Export your own pi home with:"
+            echo '::notice::tar czf - -C "$HOME" .pi/agent | base64 -w0'
             exit 0
           fi
           echo "present=true" >> "$GITHUB_OUTPUT"
@@ -49,13 +51,14 @@ jobs:
         if: steps.home.outputs.present == 'true'
         env:
           BUDGET: ${{ github.event.inputs.max-cost-usd || '1.50' }}
+          MODEL: ${{ vars.TSP_BENCH_MODEL || 'openai-codex/gpt-6-luna' }}
         run: |
           make build
           ./bin/tsp bench run \
             -cases 'bench/cases/h*' \
             -runs 1 \
             -runner pi \
-            -model "${{ vars.TSP_BENCH_MODEL || 'openai-codex/gpt-6-luna' }}" \
+            -model "$MODEL" \
             -agent-config bench \
             -max-cost-usd "$BUDGET" \
             -bench-dir bench-results
@@ -64,11 +67,12 @@ jobs:
         env:
           FLOOR: ${{ vars.TSP_BENCH_MIN_RECALL || '0.60' }}
         run: |
-          run=$(ls -d bench-results/results/*/ | tail -1)
+          run=$(find bench-results/results -mindepth 1 -maxdepth 1 -type d | sort | tail -1)
           if [ -f bench/baseline/aggregate.json ]; then
-            ./bin/tsp bench gate --baseline bench/baseline --min-recall "$FLOOR" --max-regression 0.05 "$run"
+            ./bin/tsp bench gate --baseline bench/baseline \
+              --min-recall "$FLOOR" --max-regression 0.05 "$run"
           else
-            echo "::notice::no recorded baseline: enforcing the recall floor $FLOOR only"
+            echo "::notice::no recorded baseline: recall floor $FLOOR only"
             ./bin/tsp bench gate --min-recall "$FLOOR" "$run"
           fi
       - uses: actions/upload-artifact@v4
