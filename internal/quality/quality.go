@@ -91,6 +91,8 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		return report, err
 	}
 	report.Findings = append(report.Findings, dupes...)
+	report.Findings = append(report.Findings, deadCodeFindings(root, goFiles, d)...)
+	report.NotChecked = append(report.NotChecked, deadCodeNote)
 	sortFindings(report.Findings)
 	return report, nil
 }
@@ -126,7 +128,6 @@ func changedPaths(ranges map[string][]lineRange) []string {
 // newReport is the honest floor every run reports: the rules this probe does not implement.
 func newReport() Report {
 	return Report{NotChecked: []string{
-		"dead code: counting references over the whole program is not implemented here",
 		"test files: the bar governs shipped code, so *_test.go helpers are not measured",
 	}}
 }
@@ -370,18 +371,6 @@ func structural(line string) bool {
 
 // normalizeLine removes the whitespace that formatting decides, so indentation does not hide a copy.
 func normalizeLine(line string) string { return strings.Join(strings.Fields(line), " ") }
-
-// skipLine reports lines that repeat for honest reasons and would otherwise match everywhere.
-func skipLine(line string) bool {
-	switch line {
-	case "", "{", "}", "};", ")", "else {":
-		return true
-	}
-	if strings.HasPrefix(line, "//") || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "*") {
-		return true
-	}
-	return false
-}
 
 // lineRange is one run of changed lines in the new version of a file.
 type lineRange struct{ first, last int }
