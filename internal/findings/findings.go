@@ -49,6 +49,7 @@ type registry struct {
 	Review     int       `json:"review"`
 	NextID     int       `json:"next_id"`
 	Findings   []Finding `json:"findings"`
+	Loop       *Loop     `json:"loop,omitempty"`
 }
 
 func git(dir string, args ...string) (string, error) {
@@ -157,7 +158,8 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if suite != "" && !bench.SupportsPerTest(suite) {
 		return failure(unsupportedRunner)
 	}
-	rep, e := bench.RedCheck(top, suite, timeout)
+	base := roundBase(r.Loop)
+	rep, e := bench.RedCheckAt(top, suite, base, timeout)
 	if e != nil {
 		return failure(e)
 	}
@@ -168,8 +170,11 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	for _, file := range rep.Uncollected {
 		fmt.Fprintf(&diagnostics, "could not collect: %s (%s)\n", file.File, file.Reason)
 	}
-	if len(rep.Red) == 0 {
-		return diagnostics.String() + "no defect witnesses recorded\n", 1
+	// Even a round that pins nothing is booked: the loop converges on a round that attacked the current code
+	// and found nothing, so that round has to be on record.
+	end, e := snapshot(top)
+	if e != nil {
+		return failure(e)
 	}
 	commit, e := git(top, "rev-parse", "HEAD")
 	if e != nil {
@@ -184,7 +189,11 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if e != nil {
 		return failure(e)
 	}
+	if roundBase(r.Loop) != base {
+		return failure(errors.New("the TSP loop moved while this round was judged: record it again"))
+	}
 	var out, skipped strings.Builder
+	created := []string{}
 	for _, name := range rep.Red {
 		file, fingerprint, promise := locate(top, name, rep.TestFiles)
 		if ignored(top, file) {
@@ -202,18 +211,22 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 			r.Findings = append(r.Findings, Finding{ID: fmt.Sprintf("F%d", r.NextID), Test: name})
 			r.NextID++
 			index = len(r.Findings) - 1
+			created = append(created, r.Findings[index].ID)
 		}
 		f := &r.Findings[index]
 		f.File, f.Fingerprint, f.Promise, f.Suite, f.Commit, f.Time = file, fingerprint, promise, rep.Suite, commit, time.Now().UTC()
 		fmt.Fprintf(&out, "%s recorded %s %s\n", f.ID, f.File, f.Test)
 	}
-	// A run with no red witness at all returned above, before locking, exactly as before this change. Reaching
-	// here with nothing recorded means every witness it found lives where git cannot version it.
-	if out.Len() == 0 {
-		return diagnostics.String() + skipped.String() + "nothing recorded: every witness lives under a path git ignores\n", 1
-	}
+	r.Loop = advance(r.Loop, commit, end, rep.Suite, created)
 	if e = save(r, path); e != nil {
 		return failure(e)
+	}
+	if len(rep.Red) == 0 {
+		return diagnostics.String() + "no defect witnesses recorded\n", 1
+	}
+	// Reaching here with nothing recorded means every witness the run found lives where git cannot version it.
+	if out.Len() == 0 {
+		return diagnostics.String() + skipped.String() + "nothing recorded: every witness lives under a path git ignores\n", 1
 	}
 	return diagnostics.String() + skipped.String() + out.String(), 0
 }
@@ -265,12 +278,37 @@ func SetVerdict(dir, id, decision, reason string) (string, int) {
 
 // Check runs each recorded suite once and saves the computed review.
 func Check(dir string, timeout time.Duration) (string, int) {
-	r, path, top, e := load(dir)
+	j, e := reviewAll(dir, timeout, nil)
 	if e != nil {
 		return failure(e)
 	}
+	if j.summary == "" {
+		return fmt.Sprintf("no findings recorded on %s\n", j.branch), 0
+	}
+	return j.summary + "\n" + j.lines, j.code
+}
+
+// judged is one review of every recorded finding, as it was saved.
+type judged struct {
+	branch  string
+	summary string // the review line; empty when nothing is recorded
+	lines   string // one line per finding
+	code    int    // check's exit code
+}
+
+// reviewAll runs each recorded suite once and saves the computed review. amend, when given, changes the registry
+// that is saved, under the same lock and after the review is merged into it; it runs even when nothing is
+// recorded, which saves no review of its own.
+func reviewAll(dir string, timeout time.Duration, amend func(latest *registry) error) (judged, error) {
+	r, path, top, e := load(dir)
+	if e != nil {
+		return judged{}, e
+	}
 	if len(r.Findings) == 0 {
-		return fmt.Sprintf("no findings recorded on %s\n", r.Branch), 0
+		if amend != nil {
+			e = saveAmended(dir, path, amend)
+		}
+		return judged{branch: r.Branch}, e
 	}
 	original := append([]Finding(nil), r.Findings...)
 	type run struct {
@@ -374,12 +412,12 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	}
 	unlock, e := lockRegistry(path)
 	if e != nil {
-		return failure(e)
+		return judged{}, e
 	}
 	defer unlock()
 	latest, _, _, e := load(dir)
 	if e != nil {
-		return failure(e)
+		return judged{}, e
 	}
 	for i := range latest.Findings {
 		for j, computed := range r.Findings {
@@ -418,8 +456,13 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	if need > 0 {
 		report += fmt.Sprintf(", %d need review", need)
 	}
+	if amend != nil {
+		if e = amend(r); e != nil {
+			return judged{}, e
+		}
+	}
 	if e = save(r, path); e != nil {
-		return failure(e)
+		return judged{}, e
 	}
 	code := 0
 	if open+newCount+regressed+need > 0 {
@@ -428,5 +471,22 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	if cannotJudge {
 		code = 2
 	}
-	return report + "\n" + lines.String(), code
+	return judged{branch: r.Branch, summary: report, lines: lines.String(), code: code}, nil
+}
+
+// saveAmended applies amend to the registry under its lock and saves the result.
+func saveAmended(dir, path string, amend func(latest *registry) error) error {
+	unlock, e := lockRegistry(path)
+	if e != nil {
+		return e
+	}
+	defer unlock()
+	latest, _, _, e := load(dir)
+	if e != nil {
+		return e
+	}
+	if e = amend(latest); e != nil {
+		return e
+	}
+	return save(latest, path)
 }

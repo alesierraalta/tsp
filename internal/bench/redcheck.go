@@ -39,6 +39,13 @@ func RedCheck(dir, suite string, timeout time.Duration) (RedCheckReport, error) 
 	return redCheckAt(dir, suite, "HEAD", nil, timeout)
 }
 
+// RedCheckAt asks RedCheck's question of another revision: the code rev holds, and the tests the working tree
+// changed against it. rev may name a tree, because the TSP loop judges a later round against a snapshot of the
+// code its last fix left, which no commit holds.
+func RedCheckAt(dir, suite, rev string, timeout time.Duration) (RedCheckReport, error) {
+	return redCheckAt(dir, suite, rev, nil, timeout)
+}
+
 // RedCheckRange asks the same question for a commit range: the candidate is `base...HEAD`, so the code
 // the change started from is base, and the tests are the ones the range touched. Reading HEAD's tree
 // instead would compare a commit against itself and report that no test came with it.

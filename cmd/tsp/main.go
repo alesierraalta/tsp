@@ -95,6 +95,8 @@ commands:
   findings record defect witnesses after a TSP run; check their state at the next review
            (record [--cwd <dir>] [--suite <test command>] [--timeout <duration>])
            (check [--cwd <dir>] [--timeout <duration>])
+           (next [--cwd <dir>] [--timeout <duration>] [--json]: what the TSP loop owes now — fix, tsp,
+            done or stop; exit 0 done, 1 fix or tsp, 2 cannot judge, 3 stop: the user decides)
            (verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear)
   probe    env [dir] [--json]: report undelivered environment settings (read-only)
            arch [--base <ref>] [--json]: refuse an import edge this repository does not allow,
@@ -1205,8 +1207,8 @@ func firstLine(text string) string {
 
 // runRedcheck tells a testing agent which of its new tests pin nothing: they pass on the code HEAD holds.
 func runFindings(args []string) int {
-	const help = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\nSupported suites: go test, pytest, node --test, jest, vitest run (also npx), cargo test.\nCargo witnesses must be in recognized test files (e.g. tests/), not inline unit tests.\n"
-	if len(args) == 0 || (args[0] != "record" && args[0] != "check" && args[0] != "verdict") {
+	const help = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings next [--cwd <dir>] [--timeout <duration>] [--json]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\nSupported suites: go test, pytest, node --test, jest, vitest run (also npx), cargo test.\nCargo witnesses must be in recognized test files (e.g. tests/), not inline unit tests.\nnext answers what the TSP loop owes now: fix, tsp, done or stop (exit 1, 1, 0, 3; 2 cannot judge).\n"
+	if len(args) == 0 || (args[0] != "record" && args[0] != "check" && args[0] != "next" && args[0] != "verdict") {
 		fmt.Fprint(os.Stderr, help)
 		if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 			return 0
@@ -1223,6 +1225,10 @@ func runFindings(args []string) int {
 		if len(args) >= 3 {
 			id, decision, flags = args[1], args[2], args[3:]
 		}
+	}
+	asJSON := false
+	if args[0] == "next" {
+		fs.BoolVar(&asJSON, "json", false, "print the answer as one JSON object")
 	}
 	if args[0] == "record" {
 		fs.StringVar(&suite, "suite", "", "test command: go test, pytest, node --test, jest, vitest run (also npx), cargo test (tests/ witnesses, not inline unit tests); default: inferred")
@@ -1249,9 +1255,21 @@ func runFindings(args []string) int {
 	}
 	var out string
 	var code int
-	if args[0] == "record" {
+	switch args[0] {
+	case "record":
 		out, code = findings.Record(*cwd, suite, *timeout)
-	} else {
+	case "next":
+		answer, next := findings.Next(*cwd, *timeout)
+		if !asJSON {
+			fmt.Print(answer.Text())
+			return next
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(answer); err != nil {
+			fmt.Fprintln(os.Stderr, "tsp findings:", err)
+			return 2
+		}
+		return next
+	default:
 		out, code = findings.Check(*cwd, *timeout)
 	}
 	fmt.Print(out)

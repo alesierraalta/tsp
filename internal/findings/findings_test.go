@@ -415,7 +415,7 @@ func TestD10ADeletedTrackedWitnessStaysMissing(t *testing.T) {
 }
 
 // A run that finds no red witness keeps the contract it had before this change: the same line, the same exit
-// and no registry write. Only a witness git cannot version produces the new message.
+// and no finding written. Only a witness git cannot version produces the new message.
 func TestD12AZeroWitnessRunKeepsTheBaselineExit(t *testing.T) {
 	d := repo(t)
 	put(t, d, "value_test.go", "package sample\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if Value() != 0 { t.Fatal(\"changed\") } }\n")
