@@ -347,3 +347,42 @@ func TestDeclaredSandboxImageStillRefusesAnUnknownKey(t *testing.T) {
 		t.Fatalf("error = %v, want the fail-closed unknown-field refusal", err)
 	}
 }
+
+// The gate level is the repository's own decision about whether a change's testing debt blocks it:
+// ask is the zone where a human is consulted once, always and never are the two settled answers.
+func TestDeclaredGateReadsEachOfTheThreeStates(t *testing.T) {
+	for _, want := range []string{GateAsk, GateAlways, GateNever} {
+		t.Run(want, func(t *testing.T) {
+			got, err := DeclaredGate(t.TempDir(), declares(`{"gate":"`+want+`"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Fatalf("gate = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestDeclaredGateIsAbsentWhenTheKeyIsAbsent(t *testing.T) {
+	got, err := DeclaredGate(t.TempDir(), declares(`{"planPath":"docs/testing/custom-plan.md"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("gate = %q, want empty", got)
+	}
+}
+
+// A gate nobody can honour must never read as "nothing declared": a typo that fell back to the
+// default would silently change whether this repository's changes are gated.
+func TestDeclaredGateRefusesAValueOutsideTheThreeStates(t *testing.T) {
+	for _, body := range []string{`{"gate":"sometimes"}`, `{"gate":""}`, `{"gate":"ALWAYS"}`, `{"gate":true}`, `{"gate":1}`} {
+		t.Run(body, func(t *testing.T) {
+			_, err := DeclaredGate(t.TempDir(), declares(body))
+			if err == nil || !strings.Contains(err.Error(), ConfigName) {
+				t.Fatalf("error = %v, want a declaration error naming %s", err, ConfigName)
+			}
+		})
+	}
+}

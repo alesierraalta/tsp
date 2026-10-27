@@ -17,6 +17,14 @@ const ConfigName = ".tsp.json"
 // LegacyConfigName is an older declaration name that remains readable for compatibility.
 const LegacyConfigName = ".rdd-plus.json"
 
+// The testing gate levels a repository can declare. Ask is the zone where a human is consulted once
+// before TSP runs; always and never are the two settled answers the repository owns.
+const (
+	GateAsk    = "ask"
+	GateAlways = "always"
+	GateNever  = "never"
+)
+
 // Reader reads a file's text; nil means os.ReadFile.
 type Reader func(path string) (string, error)
 
@@ -24,6 +32,7 @@ type declaration struct {
 	planPath     string
 	run          string
 	sandboxImage string
+	gate         string
 }
 
 var runSlugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,63}$`)
@@ -54,7 +63,7 @@ func readDeclaration(root string, read Reader) (declaration, error) {
 	// so {"planpath": ...} would decode into the field and DisallowUnknownFields would not refuse it.
 	// Checking the exact key is what makes a typo fail closed.
 	for key := range fields {
-		if key != "planPath" && key != "run" && key != "sandboxImage" {
+		if key != "planPath" && key != "run" && key != "sandboxImage" && key != "gate" {
 			return declaration{}, fmt.Errorf("%s: unknown field %q", name, key)
 		}
 	}
@@ -90,6 +99,16 @@ func readDeclaration(root string, read Reader) (declaration, error) {
 		// and a value with a space in it would be read as something the repository never meant.
 		if strings.TrimSpace(d.sandboxImage) != d.sandboxImage || strings.ContainsAny(d.sandboxImage, " \t") {
 			return declaration{}, fmt.Errorf("%s: sandboxImage %q is not a single image reference", name, d.sandboxImage)
+		}
+	}
+	if declared, present := fields["gate"]; present {
+		if err := json.Unmarshal(declared, &d.gate); err != nil {
+			return declaration{}, fmt.Errorf("%s: gate must be one of %q, %q or %q: %w", name, GateAsk, GateAlways, GateNever, err)
+		}
+		switch d.gate {
+		case GateAsk, GateAlways, GateNever:
+		default:
+			return declaration{}, fmt.Errorf("%s: gate %q is not one of %q, %q or %q", name, d.gate, GateAsk, GateAlways, GateNever)
 		}
 	}
 	return d, nil
@@ -144,6 +163,14 @@ func DeclaredSandboxImage(root string, read Reader) (string, error) {
 func DeclaredRun(root string, read Reader) (string, error) {
 	d, err := readDeclaration(root, read)
 	return d.run, err
+}
+
+// DeclaredGate returns the testing gate level the root declares, or "" when the root declares none.
+// An empty answer is not "never": it means the caller falls back to the runtime signal, so a session
+// running the Gentle harness gates and a standalone session asks.
+func DeclaredGate(root string, read Reader) (string, error) {
+	d, err := readDeclaration(root, read)
+	return d.gate, err
 }
 
 // Resolve returns the effective plan path and declared run for a worktree in one declaration read.

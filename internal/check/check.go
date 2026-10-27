@@ -19,6 +19,7 @@ import (
 
 	"github.com/alesierraalta/tsp/internal/bench"
 	"github.com/alesierraalta/tsp/internal/gate"
+	"github.com/alesierraalta/tsp/internal/mode"
 	"github.com/alesierraalta/tsp/internal/plan"
 )
 
@@ -46,6 +47,15 @@ type Deps struct {
 	// repository root. Injected so the scoped guard is testable without a filesystem; Run defaults it
 	// to an os.Lstat under the root, so a tracked symlink counts as present whatever it points at.
 	Exists func(root, rel string) bool
+	// Since names the commit the work unit started from. The paths that commit range changed count as
+	// changed even when the working tree is clean, because a turn that commits before it ends leaves no
+	// trace in git status: reading the tree alone answered "nothing is changed" for the very source the
+	// commit changed, and a host that asks whether TSP is owed heard "nothing" after every commit.
+	Since string
+	// Gentle reports whether a verified Gentle session is running this check. Injected so the decision
+	// is testable without a host; Run defaults it to mode.VerifiedGentleSignal, which is the only
+	// signal it accepts.
+	Gentle func() bool
 }
 
 // WaiverName is the file a no-test-needed waiver is recorded in, at the repository root.
@@ -68,6 +78,69 @@ type Result struct {
 	Exit  int
 	Text  string
 	Files []string
+	// Gate is the effective gate level this verdict carries: none, ask or required. It stays empty
+	// when the check never reached a verdict, so a caller can tell "this change owes nothing" from
+	// "the check could not answer".
+	Gate string
+	// Reason says where that level came from, for a host that reports it instead of parsing the text.
+	Reason string
+}
+
+// The gate levels a verdict can carry. None means this repository does not gate this change, ask
+// means a human is consulted once before TSP runs, and required means TSP runs without asking.
+const (
+	DecisionNone     = "none"
+	DecisionAsk      = "ask"
+	DecisionRequired = "required"
+)
+
+// Decision is the gate level a change is held to, and why.
+type Decision struct {
+	Level  string
+	Reason string
+}
+
+// decideGate answers whether this change's debt gates the run. A declared level is the repository's
+// own answer and wins over the runtime; with none declared the verified Gentle signal decides, so a
+// Gentle session runs the harness without asking and a standalone repository keeps asking. That is
+// the whole two-flow rule: a repository used without Gentle keeps the behavior it already had.
+func decideGate(declared string, gentle bool) Decision {
+	switch declared {
+	case plan.GateNever:
+		return Decision{Level: DecisionNone, Reason: "gate never is declared in " + plan.ConfigName}
+	case plan.GateAlways:
+		return Decision{Level: DecisionRequired, Reason: "gate always is declared in " + plan.ConfigName}
+	case plan.GateAsk:
+		return Decision{Level: DecisionAsk, Reason: "gate ask is declared in " + plan.ConfigName}
+	}
+	if gentle {
+		return Decision{Level: DecisionRequired, Reason: "the verified Gentle signal is active (" + mode.GentleObservationEnv + "): this session runs the harness"}
+	}
+	return Decision{Level: DecisionAsk, Reason: "no gate is declared in " + plan.ConfigName + " and no verified Gentle signal is active"}
+}
+
+// applyGate holds a verdict to the effective level. Only a debt (exit 1) is gated: a check that
+// answered nothing, or that could not answer, keeps its exit and gains no level. A repository that
+// declares never still sees the debt named; it simply does not gate on it. A debt the check reports
+// before any level is resolved keeps its exit and its reason, so a caller's own mistake never reads
+// as a policy decision.
+func applyGate(res Result, dec Decision) Result {
+	switch res.Exit {
+	case 0:
+		res.Gate = DecisionNone
+		return res
+	case 1:
+		if dec.Level == "" {
+			return res
+		}
+		res.Gate, res.Reason = dec.Level, dec.Reason
+		if dec.Level == DecisionNone {
+			res.Exit = 0
+			res.Text += "\ngate: " + DecisionNone + " (" + dec.Reason + ")"
+		}
+		return res
+	}
+	return res
 }
 
 // MaxNamed is how many changed files the text names before counting the rest.
@@ -75,7 +148,7 @@ const MaxNamed = 6
 
 // Run reports what the repository at cwd still owes. Exit 1 means there is something to do;
 // exit 0 means there is not, and the text says which of the two it is either way.
-func Run(cwd string, d Deps) Result {
+func Run(cwd string, d Deps) (res Result) {
 	if d.Git == nil {
 		d.Git = gitAt
 	}
@@ -85,6 +158,14 @@ func Run(cwd string, d Deps) Result {
 	if d.Exists == nil {
 		d.Exists = func(root, rel string) bool { _, err := os.Lstat(filepath.Join(root, rel)); return err == nil }
 	}
+	if d.Gentle == nil {
+		d.Gentle = mode.VerifiedGentleSignal
+	}
+	// decision is resolved once the root is known, and the deferred reading is what holds every debt
+	// this function reports to the level the repository and the runtime agree on. A declaration that
+	// cannot be read fails closed with an error of its own, before any debt is computed.
+	decision := Decision{}
+	defer func() { res = applyGate(res, decision) }()
 	rootOut, err := d.Git(cwd, "rev-parse", "--show-toplevel")
 	root := strings.TrimSpace(rootOut)
 	if err != nil || root == "" {
@@ -103,10 +184,17 @@ func Run(cwd string, d Deps) Result {
 		var cfgErr error
 		planRelPath, declaredRun, cfgErr = plan.Resolve(root, d.ReadFile)
 		if cfgErr != nil {
-			return Result{Exit: 1, Text: "the plan declaration could not be read: " + cfgErr.Error()}
+			// A declaration that cannot be read is not a debt: it is the check unable to say what this
+			// repository requires, so it fails closed and never invites a run it cannot justify.
+			return Result{Exit: 2, Text: "the plan declaration could not be read: " + cfgErr.Error()}
 		}
 	}
 	planFilePath := filepath.Join(root, planRelPath)
+	declared, gateErr := plan.DeclaredGate(root, d.ReadFile)
+	if gateErr != nil {
+		return Result{Exit: 2, Text: "the plan declaration could not be read: " + gateErr.Error()}
+	}
+	decision = decideGate(declared, d.Gentle())
 	// The plan is read before the diff so the versioning caveat rides with every verdict, including
 	// the quiet ones: a plan git will never version is a half persistence whatever the tree shows.
 	body, planErr := d.ReadFile(planFilePath)
@@ -124,6 +212,27 @@ func Run(cwd string, d Deps) Result {
 	scope := ""
 	if d.Base != "" {
 		scope = "base " + d.Base + ": "
+	}
+	// A work unit that committed before the turn ended is gone from the tree, so the range the caller
+	// names is read as part of the change: those paths are what this unit changed, whether or not they
+	// still sit uncommitted. A ref that does not resolve, or a range git cannot read, is refused rather
+	// than answered from the tree alone, because that answer reads as "owes nothing" for a change the
+	// check never saw.
+	if d.Since != "" {
+		sha, err := d.Git(root, "rev-parse", "--verify", "--quiet", d.Since+"^{commit}")
+		sha = strings.TrimSpace(sha)
+		if err != nil || sha == "" {
+			return Result{Exit: 2, Text: warn + "--since " + d.Since + " is not a commit in this repository: name a ref that resolves"}
+		}
+		out, err := d.Git(root, "diff", "--name-only", "-z", sha, "--")
+		if err != nil {
+			return Result{Exit: 2, Text: warn + "--since " + d.Since + " could not be read: " + err.Error()}
+		}
+		for _, p := range strings.Split(out, "\x00") {
+			if p != "" {
+				all = append(all, p)
+			}
+		}
 	}
 	var files []string
 	seen := map[string]bool{}

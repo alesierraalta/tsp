@@ -28,6 +28,14 @@ type fakeRepo struct {
 	witness  Witness
 	judgeErr error
 	judged   int
+	// diff is what `git diff --name-only -z <since> --` answers: NUL-separated paths, like git prints.
+	diff string
+	// diffErr, when set, is the failure of that range read.
+	diffErr error
+	// sinceErr, when set, is a --since that does not resolve to a commit.
+	sinceErr error
+	// gentle reports whether a verified Gentle session runs the check.
+	gentle bool
 }
 
 func (f *fakeRepo) deps() Deps {
@@ -38,8 +46,21 @@ func (f *fakeRepo) deps() Deps {
 			}
 			switch args[0] {
 			case "rev-parse":
+				if len(args) > 1 && args[1] == "--verify" {
+					if f.sinceErr != nil {
+						return "", f.sinceErr
+					}
+					return "deadbeef", nil
+				}
 				return f.root + "\n", nil
 			case "diff":
+				if f.diffErr != nil {
+					return "", f.diffErr
+				}
+				// diffOut is a --base range read; diff is the --since range. One fixture answers both.
+				if f.diff != "" || f.diffOut == "" {
+					return f.diff, nil
+				}
 				return f.diffOut, nil
 			case "check-ignore":
 				// `git check-ignore -q` exits 0 (no error) only when the path is ignored.
@@ -50,6 +71,7 @@ func (f *fakeRepo) deps() Deps {
 			}
 			return f.status, nil
 		},
+		Gentle: func() bool { return f.gentle },
 		RedCheck: func(root string) (Witness, error) {
 			f.judged++
 			return f.witness, f.judgeErr
@@ -303,11 +325,13 @@ func TestCheckResolvesARelativePathAgainstTheRoot(t *testing.T) {
 	}
 }
 
+// A declaration that cannot be read is the check unable to say what the repository requires, so it fails
+// closed: reporting it as a debt would invite a run the check cannot justify.
 func TestCheckNamesABrokenDeclaration(t *testing.T) {
 	repo := &fakeRepo{root: "/r", status: porcelain(" M src/app.js"), config: `{`}
 	res := Run(".", repo.deps())
-	if res.Exit != 1 {
-		t.Fatalf("exit = %d, want 1", res.Exit)
+	if res.Exit != 2 {
+		t.Fatalf("exit = %d, want 2", res.Exit)
 	}
 	for _, want := range []string{"the plan declaration could not be read", plan.ConfigName} {
 		if !strings.Contains(res.Text, want) {

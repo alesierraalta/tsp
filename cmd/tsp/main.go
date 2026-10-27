@@ -9,6 +9,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"regexp"
+
 	"github.com/alesierraalta/tsp/internal/admit"
 	"github.com/alesierraalta/tsp/internal/base"
 	"github.com/alesierraalta/tsp/internal/bench"
@@ -74,7 +76,11 @@ commands:
            hook payload, no transcript, no host. Without a plan, changed source needs a new test that
            fails on HEAD's code (see redcheck; --suite names how to run it), a waiver
            recorded with --no-test-needed "<reason>", or a .no-testing-gate. --base <ref> judges the
-           commit range a pull request carries instead of the working tree. Exit 1 when there is
+           commit range a pull request carries instead of the working tree. --since <commit> also
+           counts what that range changed, so a work unit already committed is still read. The
+           verdict carries a gate level: a .tsp.json "gate" of never, ask or always wins, and with
+           none declared a verified Gentle session (TSP_GENTLE_OBSERVATION) requires the run while
+           every other caller asks. --json prints that level for a host. Exit 1 when there is
            something to do.
   redcheck run the tests added or changed since HEAD against HEAD's code and say which new tests
            fail there (defect witnesses) and which pass (they pin nothing). Exit 0 when at least one
@@ -187,7 +193,7 @@ plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--
             --record writes the freshly observed digest back into the named rows and requires
             --execute, because a dry run makes no observation to pin; exit 1 when any row is
             refused or a digest cannot be written)
-check [--cwd .] [--path <path>]
+check [--cwd .] [--path <path>] [--since <commit>] [--json]
 status [--json]
 update [--check]  --check only checks and refreshes the cache; it never installs
 restore [--id <backup-id>] [--dry-run]   (default: the latest backup)
@@ -1072,6 +1078,8 @@ func runCheck(args []string) int {
 	suite := fs.String("suite", "", "command that runs the changed tests when there is no plan (default: their Go packages, pytest on changed .py tests, or node --test on them)")
 	waive := fs.String("no-test-needed", "", "record in "+check.WaiverName+" that the change needs no new test, with this reason; with --base it covers the range's files, otherwise the tree; editing the code again voids it")
 	base := fs.String("base", "", "check the commit range <base>...HEAD instead of the working tree: what CI does, where the tree holds HEAD and nothing looks changed; the plan document is not consulted for a range")
+	since := fs.String("since", "", "count the paths this commit range changed as part of this change, so a work unit already committed still owes what it owes; the ref must resolve to a commit")
+	asJSON := fs.Bool("json", false, "print the verdict as one JSON object {decision, reason, exit} instead of text: the decision is none, ask or required, and error when the check could not answer")
 	// One path per occurrence, never a comma-split list: a changed file may itself carry a comma in
 	// its name, and folding it into a joined value would name paths that do not exist — the check
 	// would then answer "nothing to check" while the change really owes a test.
@@ -1097,6 +1105,18 @@ func runCheck(args []string) int {
 		fmt.Fprintln(os.Stderr, "check: --paths answers for one change; --suite runs the changed tests for the whole change")
 		return 2
 	}
+	if flagSet(fs, "since") && flagSet(fs, "no-test-needed") {
+		fmt.Fprintln(os.Stderr, "check: --since reads a commit range; --no-test-needed records a waiver for the change in the tree")
+		return 2
+	}
+	if flagSet(fs, "json") && flagSet(fs, "no-test-needed") {
+		fmt.Fprintln(os.Stderr, "check: --json reports a verdict; --no-test-needed records a waiver and reports none")
+		return 2
+	}
+	if flagSet(fs, "since") && strings.TrimSpace(*since) == "" {
+		fmt.Fprintln(os.Stderr, "check: --since names no ref: pass the commit this work unit started from")
+		return 2
+	}
 	if flagSet(fs, "paths") && len(named) == 0 {
 		fmt.Fprintln(os.Stderr, "check: --paths names no path: pass one --paths per path")
 		return 2
@@ -1116,9 +1136,69 @@ func runCheck(args []string) int {
 		fmt.Fprintf(os.Stderr, "check: --cwd %s is not a directory: name an existing directory inside the repository\n", *cwd)
 		return 2
 	}
-	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named, Base: strings.TrimSpace(*base)})
+	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named, Base: strings.TrimSpace(*base), Since: strings.TrimSpace(*since)})
+	if *asJSON {
+		return printCheckVerdict(res)
+	}
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
+}
+
+// printCheckVerdict answers a host that reads the decision instead of the prose: one object and the
+// exit the decision implies, so the caller never parses a sentence to learn whether to ask, run or
+// stay silent. A check that reached no verdict reports "error", which is outside the three levels a
+// repository can declare.
+func printCheckVerdict(res check.Result) int {
+	verdict := struct {
+		Decision string `json:"decision"`
+		Debt     string `json:"debt"`
+		Reason   string `json:"reason"`
+		Exit     int    `json:"exit"`
+	}{Decision: res.Gate, Reason: res.Reason, Exit: res.Exit}
+	if verdict.Decision == "" {
+		verdict.Decision = "error"
+	}
+	// Nothing owed means nothing to show a human: the quiet sentence the check prints when it found no
+	// production source to answer for is its own words, not a debt.
+	if line := debtLine(res.Text); !strings.Contains(line, "nothing to check") {
+		verdict.Debt = line
+	}
+	if verdict.Reason == "" {
+		verdict.Reason = firstLine(res.Text)
+	}
+	body, err := json.Marshal(verdict)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "check: the verdict could not be encoded: "+err.Error())
+		return 2
+	}
+	fmt.Println(string(body))
+	return res.Exit
+}
+
+// checkMetaLine matches the check's own bookkeeping: a warning about its evidence, the count of files that
+// moved, and the aside that labels plan data. They say why the check speaks, never what is owed, so a host
+// that asks a human shows the debt and not these.
+var checkMetaLine = regexp.MustCompile(`^(?:warning: |\d+ production source file\(s\) changed: |\(the names below are read from the plan file\b)`)
+
+// debtLine is the first line of the check's answer that names what this change owes.
+func debtLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !checkMetaLine.MatchString(line) {
+			return line
+		}
+	}
+	return ""
+}
+
+// firstLine is the first line that carries something, which is the verdict's own wording.
+func firstLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // runRedcheck tells a testing agent which of its new tests pin nothing: they pass on the code HEAD holds.
