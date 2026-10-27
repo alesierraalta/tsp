@@ -445,6 +445,7 @@ test("a TSP run ends by recording its witnesses, then shows the review of every 
     await h.run("haz el TSP", [["edit", "b_test.go"]]);
     assert.deepEqual(h.calls, [
       { argv: ["findings", "record", "--cwd", "/repo"], cwd: "/repo" },
+      { argv: ["findings", "next", "--cwd", "/repo", "--json"], cwd: "/repo" },
       { argv: ["findings", "check", "--cwd", "/repo"], cwd: "/repo" },
       { argv: ["feedback", "--template"], cwd: "/repo" },
     ]);
@@ -456,7 +457,7 @@ test("a TSP run ends by recording its witnesses, then shows the review of every 
 test("a TSP run that pinned nothing still shows the review; a record that cannot run stops before check", async () => {
   const none = offerHarness({ findings: { record: { stdout: "no new witness\n", stderr: "", code: 1 }, check: { stdout: "no finding recorded on feat/x\n", stderr: "", code: 0 } } });
   await none.run("haz el TSP", []);
-  assert.deepEqual(none.calls.map((c) => c.argv[1]), ["record", "check", "--template"]);
+  assert.deepEqual(none.calls.map((c) => c.argv[1]), ["record", "next", "check", "--template"]);
   assert.deepEqual(none.notes, [{ message: "no finding recorded on feat/x", type: "info" }]);
   const detached = offerHarness({ findings: { record: { stdout: "", stderr: "tsp findings: detached HEAD\n", code: 2 } } });
   await detached.run("haz el TSP", []);
@@ -481,6 +482,62 @@ test("the findings review runs only after a TSP run the user asked for, with UI,
     assert.equal(h.asked.length, offered ? 1 : 0, `${why}: the offer decides before any review`);
     assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings"), [], why);
     assert.deepEqual(h.notes, [], why);
+  }
+});
+
+test("a TSP loop fix waits for feedback before sending the fix", async () => {
+  const next = { stdout: JSON.stringify({ next: "fix", review: "review line", reason: "one open", message: "settle F1" }), stderr: "", code: 1 };
+  const h = offerHarness({ findings: { next, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+  await h.run("haz el TSP", [["edit", "a.go"]]);
+  assert.deepEqual(h.calls.map(c => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["feedback", "--template"]]);
+  assert.deepEqual(h.notes, [{ message: "review line\none open", type: "info" }]);
+  assert.equal(h.sent.length, 1);
+  const feedback = h.sent[0];
+  assert.ok(feedback.startsWith(FEEDBACK_LEAD));
+  await h.run(feedback, []);
+  assert.deepEqual(h.sent, [feedback, "The TSP loop found defects to settle.\n\nsettle F1"]);
+  assert.deepEqual(h.asked, []);
+});
+
+test("with feedback off the loop message follows the TSP run at once, and a stop sends nothing after the feedback", async () => {
+  const fix = { stdout: JSON.stringify({ next: "fix", review: "review 1", reason: "round 1 of 5 left 1 item unsettled", message: "F1 open a_test.go TestA" }), stderr: "", code: 1 };
+  const off = offerHarness({ findings: { next: fix } });
+  await off.run("haz el TSP", []);
+  assert.deepEqual(off.calls.map((c) => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["feedback", "--template"]]);
+  assert.deepEqual(off.notes, [{ message: "review 1\nround 1 of 5 left 1 item unsettled", type: "info" }]);
+  assert.deepEqual(off.sent, ["The TSP loop found defects to settle.\n\nF1 open a_test.go TestA"]);
+  const stop = { stdout: JSON.stringify({ next: "stop", review: "review 9", reason: "no progress", message: "no progress — the loop needs the user's decision" }), stderr: "", code: 3 };
+  const h = offerHarness({ findings: { next: stop, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+  await h.run("haz el TSP — round 5 of 5", []);
+  assert.deepEqual(h.notes, [{ message: "review 9\nno progress", type: "warning" }]);
+  assert.equal(h.sent.length, 1);
+  assert.ok(h.sent[0].startsWith(FEEDBACK_LEAD));
+  await h.run(h.sent[0], []);
+  assert.equal(h.sent.length, 1, "a stopped loop sends nothing once the feedback run ends");
+  assert.deepEqual(h.asked, []);
+});
+
+test("loop verdicts drive the next turn without an offer", async () => {
+  for (const [next, type, sent] of [["fix", "info", "The TSP loop found defects to settle.\n\nwork"], ["tsp", "info", "haz el TSP — work"], ["done", "info", ""], ["stop", "warning", ""], ["error", "warning", ""]]) {
+    const h = offerHarness({ findings: { next: { stdout: JSON.stringify({ next, review: "review", reason: "reason", message: "work" }), stderr: "", code: 1 } } });
+    await h.run("The TSP loop found defects to settle.\n\nfix", [["edit", "a.go"]]);
+    assert.deepEqual(h.calls.map(c => c.argv), [["findings", "next", "--cwd", "/repo", "--json"]]);
+    assert.deepEqual(h.notes, [{ message: "review\nreason", type }]);
+    assert.deepEqual(h.sent, sent ? [sent] : []);
+    assert.deepEqual(h.asked, []);
+  }
+});
+
+test("a round prompt records a new round and a user interruption or abort cancels waiting work", async () => {
+  for (const interruption of ["user", "abort"]) {
+    const h = offerHarness({ findings: { next: { stdout: JSON.stringify({ next: "fix", review: "review", reason: "reason", message: "fix" }), stderr: "", code: 1 }, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+    await h.run("haz el TSP — attack", []);
+    const feedback = h.sent[0];
+    await h.run(interruption === "user" ? "stop" : feedback, [], { aborted: interruption === "abort" });
+    assert.deepEqual(h.calls.map(c => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["feedback", "--template"]]);
+    assert.deepEqual(h.notes, [{ message: "review\nreason", type: "info" }]);
+    assert.deepEqual(h.sent, [feedback]);
+    assert.deepEqual(h.asked, []);
   }
 });
 
@@ -554,7 +611,7 @@ test("a TSP run started by any of the skill's trigger phrases is asked for its f
     const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
     await h.run(prompt, [SKILL_READ]);
     assert.equal(h.sent.length, 1, `${prompt}: a TSP run the user asked for must be asked for its feedback`);
-    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings").map((c) => c.argv[1]), ["record", "check"], `${prompt}: and its findings are reviewed`);
+    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings").map((c) => c.argv[1]), ["record", "next", "check"], `${prompt}: and its findings are reviewed`);
   }
 });
 

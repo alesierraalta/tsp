@@ -167,16 +167,20 @@ export async function runTppCommand(rawArgs: string, deps: TppDeps): Promise<voi
 // because a turn that commits its work unit leaves a clean tree the check alone would read as nothing changed.
 // Its verdict names the decision — required means the repository declared the run, ask means it left that to the
 // human, none or an error means the offer stays silent and Pi never asks a question whose answer is already known.
-// When a TSP run ends, the tests it left failing on HEAD's code are recorded as findings and the review of every
-// finding is shown to the user; the agent is never told about it. Then the agent is asked to record its feedback on
-// that run on the template `tsp feedback --template` prints, so each run leaves a report later runs can be tuned on.
-// That request is a run of its own: it reviews no findings, asks no TSP question and requests no more feedback.
+// When a TSP run ends, the tests it left failing are recorded as findings and `tsp findings next` decides the loop:
+// fix sends the agent what to settle, tsp sends the next round, done and stop end it; the user sees the review and
+// the answer every time. After a fix run only `next` is asked. The agent is also asked to record its feedback on the
+// template `tsp feedback --template` prints, so each run leaves a report later runs can be tuned on; the loop's
+// message waits until that feedback run ends, and an aborted turn or the user's own message drops it. The feedback
+// request is a run of its own: it reviews no findings, asks no TSP question and requests no more feedback.
 // A delegated child session (GENTLE_PI_AGENTS_CHILD=1) has nobody to answer, so it gets none of them.
 export const OFFER_QUESTION = "¿Quieres hacer TSP?";
 export const OFFER_YES = "Sí";
 export const OFFER_NO = "No";
 export const TSP_PROMPT = "haz el TSP";
 export const FEEDBACK_LEAD = "The TSP run has ended. Record honest feedback on it.";
+export const FIX_LEAD = "The TSP loop found defects to settle.";
+export const ROUND_LEAD = `${TSP_PROMPT} — `;
 
 const SOURCE_EXT = /\.(go|ts|tsx|js|jsx|mjs|cjs|py|rs|java|kt|rb|php|cs|c|cc|cpp|h|hpp|swift|scala|sh)$/;
 const TEST_PATH = /(^|\/)(tests?|__tests__|testdata|e2e|spec)\/|_test\.(go|py)$|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$/;
@@ -202,7 +206,7 @@ const SKILL_FILE = /(^|[\/\\])test-strategy[\/\\]SKILL\.md$/;
 const SKILL_BLOCK = /^<skill name="test-strategy" /;
 const FILE_READER = /^\s*(cat|head|tail|less|more|bat|sed)\s/;
 const isTspRequest = (prompt: string | undefined): boolean =>
-  SKILL_BLOCK.test(prompt ?? "") || (prompt ?? "").trim().toLowerCase() === TSP_PROMPT.toLowerCase();
+  SKILL_BLOCK.test(prompt ?? "") || (prompt ?? "").startsWith(ROUND_LEAD) || (prompt ?? "").trim().toLowerCase() === TSP_PROMPT.toLowerCase();
 function isLoadedSkill(path: string, cwd: string): boolean {
   if (!SKILL_FILE.test(path)) return false;
   const p = path.replace(/\\/g, "/");
@@ -323,17 +327,29 @@ export function headAt(cwd: string): string {
 type Notify = (message: string, type?: "info" | "warning" | "error") => void;
 const REVIEW_TYPE = { 0: "info", 1: "warning" } as const;
 
-/** Records the TSP run's witnesses, then shows the review; a record that cannot run stops before check. */
-export async function reviewFindings(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, notify: Notify): Promise<void> {
-  const run = (sub: string) => exec(["findings", sub, "--cwd", cwd], { cwd, env: { ...env } });
+export async function reviewFindings(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, notify: Notify, record = true): Promise<string> {
+  const run = (sub: string, args: string[] = []) => exec(["findings", sub, "--cwd", cwd, ...args], { cwd, env: { ...env } });
   const shown = (r: ExecResult) => notice(r.stdout.trim() || r.stderr.trim() || `tsp findings: exited ${r.code}`);
   try {
-    const recorded = await run("record");
-    if (recorded.code !== 0 && recorded.code !== 1) return notify(shown(recorded), "error");
-    const review = await run("check");
-    notify(shown(review), REVIEW_TYPE[review.code as 0 | 1] ?? "error");
+    if (record) {
+      const recorded = await run("record");
+      if (recorded.code !== 0 && recorded.code !== 1) { notify(shown(recorded), "error"); return ""; }
+    }
+    const result = await run("next", ["--json"]);
+    let parsed: unknown;
+    try { parsed = JSON.parse(result.stdout.trim()); } catch { parsed = null; }
+    const reply = parsed && !Array.isArray(parsed) && typeof parsed === "object" ? parsed as { next?: unknown; review?: unknown; reason?: unknown; message?: unknown } : null;
+    if (!reply || typeof reply.next !== "string" || !["fix", "tsp", "done", "stop", "error"].includes(reply.next)) {
+      const review = await run("check");
+      notify(shown(review), REVIEW_TYPE[review.code as 0 | 1] ?? "error");
+      return "";
+    }
+    notify(notice([reply.review, reply.reason].filter((s): s is string => typeof s === "string" && s !== "").join("\n")), reply.next === "stop" || reply.next === "error" ? "warning" : "info");
+    const message = typeof reply.message === "string" ? reply.message : "";
+    return reply.next === "fix" ? `${FIX_LEAD}\n\n${message}` : reply.next === "tsp" ? `${ROUND_LEAD}${message}` : "";
   } catch (error) {
     notify(notice(`tsp: ${error instanceof Error ? error.message : String(error)}`), "error");
+    return "";
   }
 }
 
@@ -376,14 +392,18 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   let errorNotified = false; // a policy that could not be read is reported once, without becoming debt
   let tspRun = false;
   let feedbackRun = false;
+  let fixRun = false;
+  let pending = "";
   pi.on("before_agent_start", (event, ctx) => {
     edited.clear();
     turnHead = head(ctx.cwd);
     feedbackRun = event.messageType === "user" && (event.prompt ?? "").startsWith(FEEDBACK_LEAD);
-    tspRun = !feedbackRun && event.messageType === "user" && isTspRequest(event.prompt);
+    if (event.messageType === "user" && !feedbackRun) pending = "";
+    fixRun = event.messageType === "user" && (event.prompt ?? "").startsWith(FIX_LEAD);
+    tspRun = !feedbackRun && !fixRun && event.messageType === "user" && isTspRequest(event.prompt);
   });
   pi.on("tool_result", (event, ctx) => {
-    if (!feedbackRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) tspRun = true;
+    if (!feedbackRun && !fixRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) tspRun = true;
     const path = (event.input as { path?: unknown }).path;
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string" && isSourcePath(path)) edited.add(path);
   });
@@ -392,12 +412,18 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     // decline is applied, because a decline answers one question and cannot silence a later policy.
     const fresh = [...edited];
     edited.clear();
-    if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd) || feedbackRun) return;
-    if (tspRun) {
+    if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd)) { pending = ""; return; }
+    if (feedbackRun) {
+      if (pending !== "") pi.sendUserMessage(pending);
+      pending = "";
+      return;
+    }
+    if (tspRun || fixRun) {
       const notify: Notify = (message, type) => ctx.ui.notify(message, type);
-      await reviewFindings(ctx.cwd, env, exec, notify);
-      const request = await feedbackRequest(ctx.cwd, env, exec, notify);
-      if (request !== "") pi.sendUserMessage(request);
+      const message = await reviewFindings(ctx.cwd, env, exec, notify, tspRun);
+      const request = tspRun ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
+      if (request !== "") { pending = message; pi.sendUserMessage(request); }
+      else if (message !== "") pi.sendUserMessage(message);
       return;
     }
     if (fresh.length === 0) return;
