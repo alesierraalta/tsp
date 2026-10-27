@@ -1,9 +1,9 @@
 name: bench
 
-# The bench measures an agent, so it uses the same agent this project runs locally: pi.
-# No vendor API key is invented here: pi carries its own credentials, and this workflow either
-# has a pi home to restore or says out loud that it measured nothing. A scheduled job that
-# reports green without measuring is worse than a job that never ran.
+# The bench measures an agent, and the agent is pi — installed from npm, never replaced by a bespoke
+# client. A hosted runner still needs credentials; pi reads the provider keys it already understands
+# (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENCODE_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, …), so this
+# workflow forwards whichever of them the repository has and refuses to report a run it could not make.
 on:
   schedule:
     - cron: '0 4 * * 1'
@@ -32,26 +32,45 @@ jobs:
           node-version: '22'
       - name: Install pi
         run: npm install --global @earendil-works/pi-coding-agent
-      - name: Restore the pi home
-        id: home
+      - name: Resolve the model and check for credentials
+        id: instrument
         env:
-          PI_HOME_B64: ${{ secrets.TSP_PI_HOME_B64 }}
+          MODEL_OVERRIDE: ${{ vars.TSP_BENCH_MODEL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          if [ -z "$PI_HOME_B64" ]; then
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::no TSP_PI_HOME_B64 secret: pi is not authenticated here,"
-            echo "::notice::so the bench measured nothing. Export your own pi home with:"
-            echo '::notice::tar czf - -C "$HOME" .pi/agent | base64 -w0'
+          baseline=bench/baseline/aggregate.json
+          baseline_model=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["model"])' "$baseline")
+          model="${MODEL_OVERRIDE:-$baseline_model}"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+          if [ "$model" = "$baseline_model" ]; then
+            echo "baseline=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "baseline=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$model is not what $baseline measured: floor only"
+          fi
+          keys="$ANTHROPIC_API_KEY$OPENAI_API_KEY$OPENCODE_API_KEY$OPENROUTER_API_KEY$GEMINI_API_KEY"
+          if [ -z "$keys" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no provider key here, so pi cannot authenticate and the bench measured"
+            echo "::notice::nothing. Add ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENCODE_API_KEY,"
+            echo "::notice::OPENROUTER_API_KEY or GEMINI_API_KEY as a repository secret."
             exit 0
           fi
-          echo "present=true" >> "$GITHUB_OUTPUT"
-          mkdir -p "$HOME"
-          printf '%s' "$PI_HOME_B64" | base64 -d | tar xzf - -C "$HOME"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
       - name: Run the bench with pi
-        if: steps.home.outputs.present == 'true'
+        if: steps.instrument.outputs.ready == 'true'
         env:
           BUDGET: ${{ github.event.inputs.max-cost-usd || '1.50' }}
-          MODEL: ${{ vars.TSP_BENCH_MODEL || 'openai-codex/gpt-6-luna' }}
+          MODEL: ${{ steps.instrument.outputs.model }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           make build
           ./bin/tsp bench run \
@@ -63,20 +82,20 @@ jobs:
             -max-cost-usd "$BUDGET" \
             -bench-dir bench-results
       - name: Refuse a run that lost recall
-        if: steps.home.outputs.present == 'true'
+        if: steps.instrument.outputs.ready == 'true'
         env:
           FLOOR: ${{ vars.TSP_BENCH_MIN_RECALL || '0.60' }}
+          HAS_BASELINE: ${{ steps.instrument.outputs.baseline }}
         run: |
           run=$(find bench-results/results -mindepth 1 -maxdepth 1 -type d | sort | tail -1)
-          if [ -f bench/baseline/aggregate.json ]; then
+          if [ "$HAS_BASELINE" = "true" ]; then
             ./bin/tsp bench gate --baseline bench/baseline \
               --min-recall "$FLOOR" --max-regression 0.05 "$run"
           else
-            echo "::notice::no recorded baseline: recall floor $FLOOR only"
             ./bin/tsp bench gate --min-recall "$FLOOR" "$run"
           fi
       - uses: actions/upload-artifact@v4
-        if: steps.home.outputs.present == 'true'
+        if: steps.instrument.outputs.ready == 'true'
         with:
           name: bench-results
           path: bench-results

@@ -18,9 +18,12 @@ compared. This one does, and the instrument is written down:
 | cost | $0.094 |
 | invalid | 1 case: `h04-testify-notcontains-noncontainer-message` (its own suite is red in this environment, so it is excluded from recall rather than counted as a miss) |
 
-The workflow restores a pi home from the `TSP_PI_HOME_B64` secret — your own pi credentials, not a
-vendor API key — or uses a self-hosted runner that is already logged in, and prints a notice instead of
-a green run when neither exists.
+The workflow installs pi and forwards the provider keys pi already understands
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`) from
+repository secrets, so nothing bespoke is invented for CI. Two honest limits: with no key it prints a
+notice instead of a green run, and this baseline's model is subscription-backed, so a hosted run has to
+set `TSP_BENCH_MODEL` to a key-backed model — and then it is read against the recall floor only, because
+numbers from a different instrument are not comparable.
 
 Re-record this baseline when the corpus changes or the instrument changes; a comparison across different
 instruments is noise wearing a number.
