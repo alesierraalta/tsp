@@ -224,13 +224,17 @@ func Run(cwd string, d Deps) (res Result) {
 		if err != nil || sha == "" {
 			return Result{Exit: 2, Text: warn + "--since " + d.Since + " is not a commit in this repository: name a ref that resolves"}
 		}
-		out, err := d.Git(root, "diff", "--name-only", "-z", sha, "--")
+		// The range is read with its statuses: a work unit that deletes a test did not bring one, and
+		// counting the path alone would answer "a test was added or changed" for the opposite change.
+		out, err := d.Git(root, "diff", "--name-status", "-z", sha, "--")
 		if err != nil {
 			return Result{Exit: 2, Text: warn + "--since " + d.Since + " could not be read: " + err.Error()}
 		}
-		for _, p := range strings.Split(out, "\x00") {
-			if p != "" {
-				all = append(all, p)
+		fields := strings.Split(out, "\x00")
+		for i := 0; i+1 < len(fields); i += 2 {
+			status, path := fields[i], fields[i+1]
+			if path != "" && !strings.HasPrefix(status, "D") {
+				all = append(all, path)
 			}
 		}
 	}
@@ -275,6 +279,11 @@ func Run(cwd string, d Deps) (res Result) {
 		}
 		if d.RedCheck == nil {
 			suite, base, candidate := d.Suite, d.Base, all
+			if base == "" {
+				// A work unit's own start commit is the tree its test must fail against: judging the test
+				// against HEAD would read the code and the test it already contains as never apart.
+				base = d.Since
+			}
 			d.RedCheck = func(root string) (Witness, error) { return redCheck(root, suite, base, candidate) }
 		}
 		res := witnessVerdict(root, files, d)
@@ -285,6 +294,9 @@ func Run(cwd string, d Deps) (res Result) {
 	if planErr != nil {
 		if d.RedCheck == nil {
 			suite, base, candidate := d.Suite, d.Base, all
+			if base == "" {
+				base = d.Since
+			}
 			d.RedCheck = func(root string) (Witness, error) { return redCheck(root, suite, base, candidate) }
 		}
 		res := witnessVerdict(root, files, d)

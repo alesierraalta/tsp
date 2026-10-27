@@ -10,6 +10,7 @@
 
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
@@ -243,7 +244,7 @@ async function checkVerdict(cwd: string, env: Readonly<Record<string, string | u
     return STALE_CHECK.test(`${result.stdout}\n${result.stderr}`) ? "stale" : undefined;
   }
   const { decision, debt, reason } = (reply ?? {}) as { decision?: unknown; debt?: unknown; reason?: unknown };
-  if (decision !== DECISION_NONE && decision !== DECISION_ASK && decision !== DECISION_REQUIRED) return undefined;
+  if (decision !== DECISION_NONE && decision !== DECISION_ASK && decision !== DECISION_REQUIRED && decision !== DECISION_ERROR) return undefined;
   // A debt that was named but does not survive reading is not the same as one never named: the first asks
   // nothing, because the check did find something a human cannot read; the second falls back to the level's reason.
   const named = typeof debt === "string" && debt.trim() !== "";
@@ -259,7 +260,7 @@ async function checkVerdict(cwd: string, env: Readonly<Record<string, string | u
 const STALE_CHECK = /flag provided but not defined|unknown flag|invalid option/i;
 
 export interface Verdict {
-  decision: typeof DECISION_NONE | typeof DECISION_ASK | typeof DECISION_REQUIRED;
+  decision: typeof DECISION_NONE | typeof DECISION_ASK | typeof DECISION_REQUIRED | typeof DECISION_ERROR;
   named: boolean; // the verdict named a debt at all
   debt: string; // what this change owes, ready to show
   reason: string; // what decided the level
@@ -267,6 +268,7 @@ export interface Verdict {
 const DECISION_NONE = "none";
 const DECISION_ASK = "ask";
 const DECISION_REQUIRED = "required";
+const DECISION_ERROR = "error";
 
 /**
  * The reason the question shows, or an empty string when it would show nothing. The line can quote plan-file text
@@ -306,7 +308,13 @@ export interface OfferOptions {
 /** The commit this turn starts from, or "" when it cannot be read: a repository with no commit yet owes nothing. */
 export function headAt(cwd: string): string {
   try {
-    return execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    // Run outside the checkout and name the repository with -C: a child process is located through its
+    // own working directory on Windows, so resolving git from inside a checkout would let the checkout
+    // decide which git answers merely because a turn started in it.
+    const out = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], {
+      cwd: tmpdir(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
+    }).trim();
+    return /^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(out) ? out : "";
   } catch {
     return "";
   }
@@ -365,6 +373,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   const declined = new Set<string>(); // paths the user already said No to
   let turnHead = ""; // the commit this turn started from: what --since reads the work unit against
   let staleNotified = false; // a tsp too old to answer is reported once, not once per turn
+  let errorNotified = false; // a policy that could not be read is reported once, without becoming debt
   let tspRun = false;
   let feedbackRun = false;
   pi.on("before_agent_start", (event, ctx) => {
@@ -379,7 +388,9 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string" && isSourcePath(path)) edited.add(path);
   });
   pi.on("agent_settled", async (event, ctx) => {
-    const fresh = [...edited].filter((p) => !declined.has(p));
+    // The paths this turn edited, unfiltered: what the repository requires is read before a remembered
+    // decline is applied, because a decline answers one question and cannot silence a later policy.
+    const fresh = [...edited];
     edited.clear();
     if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd) || feedbackRun) return;
     if (tspRun) {
@@ -399,7 +410,17 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
       }
       return;
     }
-    if (verdict === undefined || verdict.decision === DECISION_NONE) return;
+    if (verdict === undefined) return;
+    if (verdict.decision === DECISION_ERROR) {
+      // A policy that cannot be read may mean a required run was skipped: silence would hide exactly that.
+      if (!errorNotified) {
+        errorNotified = true;
+        const why = verdict.reason === "" ? "the repository could not say whether TSP is required" : verdict.reason;
+        ctx.ui.notify(notice(`tsp check: ${why}`), "warning");
+      }
+      return;
+    }
+    if (verdict.decision === DECISION_NONE) return;
     if (verdict.decision === DECISION_REQUIRED) {
       // The repository decided this run happens; asking would be a question whose answer is already known.
       declined.clear();
@@ -408,6 +429,8 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
       pi.sendUserMessage(TSP_PROMPT);
       return;
     }
+    const undecided = fresh.filter((p) => !declined.has(p));
+    if (undecided.length === 0) return;
     const owed = verdict.named ? verdict.debt : verdict.reason;
     if (owed === "") return;
     const answer = await ctx.ui.select(`${OFFER_QUESTION}\n${owed}`, [OFFER_YES, OFFER_NO]);

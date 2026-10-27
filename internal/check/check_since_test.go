@@ -23,7 +23,7 @@ func TestSinceSeesTheCommittedWorkUnit(t *testing.T) {
 	f := &fakeRepo{
 		root:     "/repo",
 		status:   "",
-		diff:     "internal/x.go\x00internal/x_test.go\x00",
+		diff:     "M\x00internal/x.go\x00M\x00internal/x_test.go\x00",
 		existing: []string{"internal/x.go"},
 	}
 	res := scopedRun(f, "BASE", "internal/x.go")
@@ -40,12 +40,30 @@ func TestSinceStillOwesWhenTheCommitBroughtNoTest(t *testing.T) {
 	f := &fakeRepo{
 		root:     "/repo",
 		status:   "",
-		diff:     "internal/x.go\x00",
+		diff:     "M\x00internal/x.go\x00",
 		existing: []string{"internal/x.go"},
 	}
 	res := scopedRun(f, "BASE", "internal/x.go")
 	if res.Exit != 1 {
 		t.Fatalf("a committed work unit with no test owes one: exit %d, %q", res.Exit, res.Text)
+	}
+	if !strings.Contains(res.Text, noWitnessDebt) {
+		t.Fatalf("the debt must be named: %q", res.Text)
+	}
+}
+
+// A work unit that deleted a test did not bring one: the range carries statuses, and counting the
+// path alone would report the opposite change as the evidence the verdict is looking for.
+func TestSinceDoesNotCountADeletedTestAsTheTestItBrought(t *testing.T) {
+	f := &fakeRepo{
+		root:     "/repo",
+		status:   "",
+		diff:     "M\x00internal/x.go\x00D\x00internal/x_test.go\x00",
+		existing: []string{"internal/x.go", "internal/x_test.go"},
+	}
+	res := scopedRun(f, "BASE", "internal/x.go")
+	if res.Exit != 1 {
+		t.Fatalf("a unit that removed its test owes one: exit %d, %q", res.Exit, res.Text)
 	}
 	if !strings.Contains(res.Text, noWitnessDebt) {
 		t.Fatalf("the debt must be named: %q", res.Text)

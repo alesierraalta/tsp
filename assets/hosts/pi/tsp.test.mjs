@@ -202,7 +202,9 @@ function offerHarness(opts = {}) {
     calls.push({ argv: [...argv], cwd: o.cwd });
     // A feedback template nobody configured answers as tsp does with feedback switched off: no request, no notice.
     const fallback = argv[0] === "feedback" ? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
-    const outcome = argv[0] === "check" && argv[1] === "--cwd" ? check : findings[argv[1]] ?? fallback;
+    const outcome = argv[0] === "check" && argv[1] === "--cwd"
+      ? (typeof check === "function" ? check(calls.length) : check)
+      : findings[argv[1]] ?? fallback;
     if (outcome instanceof Error) throw outcome;
     return outcome;
   };
@@ -330,6 +332,26 @@ test("a cut never splits a character: the reason reaching the UI stays well-form
   const reason = (h.asked[0]?.title ?? "").slice("¿Quieres hacer TSP?\n".length);
   assert.ok(reason.endsWith("…"), "the long reason was cut");
   assert.ok(reason.isWellFormed(), "no half of a character reaches the UI question");
+});
+
+test("a decline answers one question: a repository that then requires the run still gets it", async () => {
+  // The first turn asks and the human says no; the second turn edits the same file, and the repository
+  // has since declared that the run always happens. A remembered decline cannot outrank a new policy.
+  const h = offerHarness({ answer: "No", check: (n) => (n <= 1 ? askVerdict("run m1: layers swept: 1 of 3") : requiredVerdict("run m1")) });
+  await h.run("fix it", [["edit", "a.go"]]);
+  assert.equal(h.sent.length, 0, "the decline sent nothing");
+  await h.run("fix it again", [["edit", "a.go"]]);
+  assert.deepEqual(h.sent, ["haz el TSP"], "the repository requires the run the decline had silenced");
+  assert.equal(h.asked.length, 1, "the required run is no question");
+});
+
+test("a policy that cannot be read is reported once, never as testing debt", async () => {
+  const h = offerHarness({ check: errorVerdict("the plan declaration could not be read: permission denied") });
+  await h.run("fix it", [["edit", "a.go"]]);
+  await h.run("fix it again", [["edit", "a.go"]]);
+  assert.equal(h.asked.length, 0, "an unreadable policy is not a debt to answer");
+  assert.equal(h.sent.length, 0, "nothing is claimed to be required when the level is unknown");
+  assert.deepEqual(h.notes, [{ message: "tsp check: the plan declaration could not be read: permission denied", type: "warning" }]);
 });
 
 test("a debt made only of zero-width characters asks nothing, and the level's reason is no substitute", async () => {
