@@ -465,7 +465,7 @@ duplicates nothing of Gentle's: ODD, Engram memory, and the review lifecycle rem
 | `tsp repair` | Claude-only: re-syncs the managed skills and re-wires Claude's Stop hook; the Pi extension is untouched. |
 
 Load the extension (`pi --extension <path>/tsp.ts`, or let Pi load it from
-`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks "¿Quieres hacer TSP?" in the chat, and only when the scoped check (`tsp check --paths`, one flag per path) says the source that run touched still owes a test — a plan target open from earlier work, or a run that only wrote a report, asks nothing; "Sí" sends "haz el TSP", which invokes `test-strategy`, and "No" is remembered for those files (details in `assets/hosts/README.md`). Dependency trees (`node_modules/`, `vendor/`, `.venv/`, `venv/`, `site-packages/`, `dist-packages/`, and `__pypackages__/`) are excluded from production source and tests. Test files never trigger it (`*.test.*`, `*.spec.*`, `x_test.go`, `test_x.py`, `x_test.py`, and anything under `tests/`, `__tests__/`, `testdata/`, `e2e/` or `spec/`), nor does a TSP run, an aborted run, a session without UI, a delegated subagent session (`GENTLE_PI_AGENTS_CHILD=1`), or a repository with `.no-testing-gate`. A TSP run is one whose agent loads the installed test-strategy skill, or whose prompt is exactly "haz el TSP"; a message that only mentions tsp, or reading the repository's own copy of the skill, is not one. When a TSP run ends, the extension runs `tsp findings record` and then `tsp findings check`, and shows the review in the chat; the agent is not told about it. It then sends the agent the template `tsp feedback --template` prints and asks it to record its feedback on that run with `tsp feedback --file`, so each TSP run in Pi is asked for a report `tsp feedback --summary` and `--pending` read back; whether the agent submits it is not checked. Nothing is sent while feedback is disabled; a `tsp` that cannot print the template is shown as a warning instead, and the feedback run triggers no review, no TSP question and no further request. Edits made through a shell command are not seen. This was watched in a live Pi 1.3.0 session. `/tsp check` keeps a quoted argument whole, so `/tsp check --suite "npm test"` reaches the CLI as one value. The Pi Stop hook is a separate,
+`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks the scoped check (`tsp check --json --paths`, one flag per path, `--since` the commit the turn started from, so a work unit committed before the turn ended is still answered for) what that source owes and who decides: `none` ends the turn in silence, `required` sends "haz el TSP" on its own, and only `ask` shows the question "¿Quieres hacer TSP?" in the chat — a plan target open from earlier work, or a run that only wrote a report, asks nothing; "Sí" sends "haz el TSP", which invokes `test-strategy`, and "No" is remembered for those files (details in `assets/hosts/README.md`, policy in [Who decides when TSP runs](#who-decides-when-tsp-runs)). Dependency trees (`node_modules/`, `vendor/`, `.venv/`, `venv/`, `site-packages/`, `dist-packages/`, and `__pypackages__/`) are excluded from production source and tests. Test files never trigger it (`*.test.*`, `*.spec.*`, `x_test.go`, `test_x.py`, `x_test.py`, and anything under `tests/`, `__tests__/`, `testdata/`, `e2e/` or `spec/`), nor does a TSP run, an aborted run, a session without UI, a delegated subagent session (`GENTLE_PI_AGENTS_CHILD=1`), or a repository with `.no-testing-gate`. A TSP run is one whose agent loads the installed test-strategy skill, or whose prompt is exactly "haz el TSP"; a message that only mentions tsp, or reading the repository's own copy of the skill, is not one. When a TSP run ends, the extension runs `tsp findings record` and then `tsp findings check`, and shows the review in the chat; the agent is not told about it. It then sends the agent the template `tsp feedback --template` prints and asks it to record its feedback on that run with `tsp feedback --file`, so each TSP run in Pi is asked for a report `tsp feedback --summary` and `--pending` read back; whether the agent submits it is not checked. Nothing is sent while feedback is disabled; a `tsp` that cannot print the template is shown as a warning instead, and the feedback run triggers no review, no TSP question and no further request. Edits made through a shell command are not seen. This was watched in a live Pi 1.3.0 session. `/tsp check` keeps a quoted argument whole, so `/tsp check --suite "npm test"` reaches the CLI as one value. The Pi Stop hook is a separate,
 **not verified** surface: its payload contract was read from the pi-hooks package and nobody has
 watched it fire here, so merging `assets/hosts/pi/settings.stop-hook.json` into Pi's settings is
 ready to test, not working.
@@ -486,7 +486,9 @@ ones win when both are present:
   (state, backups, update cache) to `~/.config/tsp`, retaining both old paths as symlink aliases.
   An existing TSP root wins; divergent legacy roots are not merged, and a failed move leaves the old root in use.
 - `.tsp.json` is the canonical repository declaration; `.tpp.json` and `.rdd-plus.json` remain
-  read-only legacy names. If any two or three are present, tsp refuses them even when contents match.
+  read-only legacy names. Its optional `gate` key — `ask`, `always` or `never` — decides whether a
+  finished change runs TSP on its own, asks, or stays quiet (see
+  [Who decides when TSP runs](#who-decides-when-tsp-runs)). If any two or three are present, tsp refuses them even when contents match.
   No declaration file is automatically renamed, deleted, merged or rewritten.
 - `TSP_UPDATE_BASE_URL` is canonical for the update check; `TPP_UPDATE_BASE_URL` and then
   `RDD_PLUS_UPDATE_BASE_URL` are legacy fallbacks while the newer name is unset. `RDD_PLUS_HOME` is read when
@@ -544,7 +546,7 @@ Additional commands:
 
 | Command | What it does |
 |---|---|
-| `tsp check` | Says what the repository still owes from git, tests, and an optional plan. |
+| `tsp check [--cwd <dir>] [--path <plan>] [--since <commit>] [--json]` | Says what the repository still owes from git, tests, and an optional plan. `--since` also counts the paths a commit range changed, so a work unit that was committed before the check runs is still answered for. `--json` prints one verdict object — `decision`, `debt`, `reason`, `exit` — where `decision` is `none`, `ask` or `required`: the policy the repository declares in `.tsp.json` (see [Who decides when TSP runs](#who-decides-when-tsp-runs)). |
 | `tsp check --base <ref>` | The same question for the commit range `<ref>...HEAD`, which is the candidate CI has: the tests are run against `<ref>`'s code, so a test that only passes because the change is next to it pins nothing. |
 | `tsp redcheck` | Runs added or changed tests against HEAD's code to identify defect witnesses. |
 | `tsp mutate [--base <ref>] [--fail-on-survivors <n>]` | Mutates the production source the change touched and reports the mutants no test kills; the engine (gremlins) stays external, the scope, budget and gate stay here. Exit 0 no survivor at the threshold, 1 survivors, 2 nothing measured. |
@@ -555,6 +557,29 @@ Additional commands:
 | `tsp probe arch [--cwd <dir>] [--base <ref>] [--rules <file>]` | Reports the import edges a change added that `.tsp-arch.json` refuses. Exit 0 clean, 1 findings, 2 nothing measurable. |
 | `tsp plan upgrade [--run <slug>] [--path <path>]` | Upgrades a plan to the current contract. |
 | `tsp bench adjudicate` | Records or shows decisions for finding rows; undecided rows stay pending. |
+
+## Who decides when TSP runs
+
+A change that owes a test is not automatically a run. The repository decides, and the check reports
+that decision:
+
+| `.tsp.json` `gate` | Decision | What a host does |
+|---|---|---|
+| `never` | `none` | Nothing. The debt is still named in the check's text and in `--json`'s `debt`, so a report can show it. |
+| `always` | `required` | Runs TSP without asking. |
+| `ask` | `ask` | Asks the human, once, naming the debt. |
+
+Without a declaration the runtime decides: a verified Gentle session (`TSP_GENTLE_OBSERVATION`, set by
+the Pi extension and only under a live Gentle session) is `required`, because that harness exists to run
+the discipline; anywhere else the decision is `ask`, because nothing there can authorize a run on the
+human's behalf. The exit follows the decision — `required` and `ask` both exit 1, `none` exits 0 — so a
+Stop hook, a CI step and an interactive host all read the same verdict. A request the check cannot
+answer (a `--since` that does not resolve, a declaration it cannot read) exits 2 and is never reported
+as a debt.
+
+`never` is the repository saying the discipline does not apply here; `.no-testing-gate` says the same
+for the older Stop gate and the offer. `always` is the repository saying it does, which is what a
+harness already spends its turns on.
 
 ## How the gate decides
 
