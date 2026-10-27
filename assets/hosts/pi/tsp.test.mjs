@@ -621,3 +621,23 @@ test("a run that only wrote a report never runs the check: no production source,
   assert.deepEqual(h.asked, []);
   assert.deepEqual(h.sent, []);
 });
+
+test("a tsp too old to answer is reported once, never mistaken for a repository that owes nothing", async () => {
+  // What a tsp that predates `check --json` prints instead of a verdict: Go's own flag parser.
+  const stale = { stdout: "", stderr: "flag provided but not defined: -json\nUsage of check:\n", code: 0 };
+  const h = offerHarness({ check: stale });
+  await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+  await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+  const warnings = h.notes.filter((n) => n.type === "warning");
+  assert.equal(warnings.length, 1, "an install that cannot answer is one sentence per session, not one per turn");
+  assert.match(warnings[0].message, /tsp update/);
+  assert.deepEqual(h.asked, [], "a stale check is not a question");
+  assert.deepEqual(h.sent, [], "and not an authorization to run");
+});
+
+test("a reply that is not a verdict, without the flag parser's words, stays silent", async () => {
+  const h = offerHarness({ check: { stdout: "not json at all\n", stderr: "", code: 0 } });
+  await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+  assert.deepEqual(h.notes, [], "an unreadable reply is no criterion, so it says nothing");
+  assert.deepEqual(h.asked, []);
+});

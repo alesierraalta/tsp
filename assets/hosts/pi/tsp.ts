@@ -223,8 +223,10 @@ function loadsTspSkill(toolName: string, input: unknown, cwd: string): boolean {
  * reads the commit this turn started from as well, so a turn that committed its work unit is still answered for.
  * `decision` is required, ask or none; anything else — an error verdict, a reply that is not one object, a child that
  * cannot run — yields no criterion and the offer stays silent.
+ * A tsp older than this extension refuses the flag itself; that is not a verdict and not silence either, so it is
+ * reported as `stale` and the caller says so once instead of going quiet about an install that cannot answer.
  */
-async function checkVerdict(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, paths: readonly string[], since: string): Promise<Verdict | undefined> {
+async function checkVerdict(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, paths: readonly string[], since: string): Promise<Verdict | "stale" | undefined> {
   let result: ExecResult;
   try {
     // One --paths per path: a file name may itself carry a comma, and the check takes the flag whole
@@ -238,7 +240,7 @@ async function checkVerdict(cwd: string, env: Readonly<Record<string, string | u
   try {
     reply = JSON.parse(result.stdout.trim());
   } catch {
-    return undefined;
+    return STALE_CHECK.test(`${result.stdout}\n${result.stderr}`) ? "stale" : undefined;
   }
   const { decision, debt, reason } = (reply ?? {}) as { decision?: unknown; debt?: unknown; reason?: unknown };
   if (decision !== DECISION_NONE && decision !== DECISION_ASK && decision !== DECISION_REQUIRED) return undefined;
@@ -252,6 +254,9 @@ async function checkVerdict(cwd: string, env: Readonly<Record<string, string | u
     reason: typeof reason === "string" ? reasonOf(reason) : "",
   };
 }
+
+// What a tsp that predates `check --json` prints instead of a verdict: the flag parser's own words, never a check's.
+const STALE_CHECK = /flag provided but not defined|unknown flag|invalid option/i;
 
 export interface Verdict {
   decision: typeof DECISION_NONE | typeof DECISION_ASK | typeof DECISION_REQUIRED;
@@ -359,6 +364,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   const edited = new Set<string>(); // source paths changed in the current run
   const declined = new Set<string>(); // paths the user already said No to
   let turnHead = ""; // the commit this turn started from: what --since reads the work unit against
+  let staleNotified = false; // a tsp too old to answer is reported once, not once per turn
   let tspRun = false;
   let feedbackRun = false;
   pi.on("before_agent_start", (event, ctx) => {
@@ -385,6 +391,14 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     }
     if (fresh.length === 0) return;
     const verdict = await checkVerdict(ctx.cwd, env, exec, fresh, turnHead);
+    if (verdict === "stale") {
+      // Once per session: an install that cannot answer is worth one sentence, not one per turn.
+      if (!staleNotified) {
+        staleNotified = true;
+        ctx.ui.notify(notice("tsp is older than this extension and cannot report a testing verdict: run `tsp update`"), "warning");
+      }
+      return;
+    }
     if (verdict === undefined || verdict.decision === DECISION_NONE) return;
     if (verdict.decision === DECISION_REQUIRED) {
       // The repository decided this run happens; asking would be a question whose answer is already known.
