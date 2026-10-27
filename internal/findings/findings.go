@@ -32,7 +32,9 @@ type Finding struct {
 	Status      string    `json:"status,omitempty"`
 	Reviewed    bool      `json:"reviewed"`
 	WasFixed    bool      `json:"was_fixed"`
-	Verdict     *Verdict  `json:"verdict,omitempty"`
+	// Regressions counts the times the finding went from fixed back to failing.
+	Regressions int      `json:"regressions,omitempty"`
+	Verdict     *Verdict `json:"verdict,omitempty"`
 }
 
 type Verdict struct {
@@ -278,7 +280,7 @@ func SetVerdict(dir, id, decision, reason string) (string, int) {
 
 // Check runs each recorded suite once and saves the computed review.
 func Check(dir string, timeout time.Duration) (string, int) {
-	j, e := reviewAll(dir, timeout, nil)
+	j, e := reviewAll(dir, timeout, nil, nil)
 	if e != nil {
 		return failure(e)
 	}
@@ -296,27 +298,48 @@ type judged struct {
 	code    int    // check's exit code
 }
 
-// reviewAll runs each recorded suite once and saves the computed review. amend, when given, changes the registry
-// that is saved, under the same lock and after the review is merged into it; it runs even when nothing is
-// recorded, which saves no review of its own.
-func reviewAll(dir string, timeout time.Duration, amend func(latest *registry) error) (judged, error) {
+// suiteRun is one run of a suite: each test's outcome, and whether the run could be judged at all.
+type suiteRun struct {
+	tests  map[string]bool
+	failed bool
+	code   int
+}
+
+// runSuite runs one suite test by test.
+func runSuite(top, suite string, timeout time.Duration) suiteRun {
+	tests, code, _, err := bench.PerTest(top, suite, timeout)
+	_, whole := tests["suite"]
+	// Cargo uses 101 for test failures as well as build errors; only a
+	// parsed per-test report makes that exit code judgeable.
+	argv, _ := hookcmd.ShellWords(suite)
+	cargoFailure := code == 101 && len(argv) > 1 && argv[0] == "cargo" && argv[1] == "test"
+	return suiteRun{tests: tests, failed: err != nil || whole || len(tests) == 0 || code < 0 || (code > 1 && !cargoFailure), code: code}
+}
+
+// reviewAll runs each recorded suite once, and every extra suite, and saves the computed review. amend, when
+// given, changes the registry that is saved, under the same lock and after the review is merged into it, with
+// every suite's run in hand; it runs even when nothing is recorded, which saves no review of its own.
+func reviewAll(dir string, timeout time.Duration, extra []string, amend func(latest *registry, runs map[string]suiteRun) error) (judged, error) {
 	r, path, top, e := load(dir)
 	if e != nil {
 		return judged{}, e
 	}
+	runs := map[string]suiteRun{}
+	runExtra := func() {
+		for _, suite := range extra {
+			if _, done := runs[suite]; !done && suite != "" {
+				runs[suite] = runSuite(top, suite, timeout)
+			}
+		}
+	}
 	if len(r.Findings) == 0 {
 		if amend != nil {
-			e = saveAmended(dir, path, amend)
+			runExtra()
+			e = saveAmended(dir, path, func(latest *registry) error { return amend(latest, runs) })
 		}
 		return judged{branch: r.Branch}, e
 	}
 	original := append([]Finding(nil), r.Findings...)
-	type run struct {
-		tests  map[string]bool
-		failed bool
-		code   int
-	}
-	runs := map[string]run{}
 	fixed, open, newCount, regressed, need := 0, 0, 0, 0, 0
 	cannotJudge := false
 	var dropped []Finding // witnesses whose path git ignores: pruned from the registry, never reported as debt
@@ -341,7 +364,9 @@ func reviewAll(dir string, timeout time.Duration, amend func(latest *registry) e
 		file, fingerprint, _ := locate(top, f.Test, []string{f.File})
 		suffix := ""
 		if f.Verdict != nil {
-			if fingerprint == f.Verdict.Fingerprint {
+			// A verdict holds while its test is unchanged, and once the test is gone: removing an invented test is
+			// how a rejection ends, whichever of the two came first.
+			if fingerprint == f.Verdict.Fingerprint || file == "" {
 				f.Status, f.Reviewed = f.Verdict.Decision, true
 				writeLine(*f, f.Verdict.Reason, "")
 				continue
@@ -351,13 +376,7 @@ func reviewAll(dir string, timeout time.Duration, amend func(latest *registry) e
 		}
 		result, ok := runs[f.Suite]
 		if !ok {
-			tests, code, _, err := bench.PerTest(top, f.Suite, timeout)
-			_, whole := tests["suite"]
-			// Cargo uses 101 for test failures as well as build errors; only a
-			// parsed per-test report makes that exit code judgeable.
-			argv, _ := hookcmd.ShellWords(f.Suite)
-			cargoFailure := code == 101 && len(argv) > 1 && argv[0] == "cargo" && argv[1] == "test"
-			result = run{tests: tests, failed: err != nil || whole || len(tests) == 0 || code < 0 || (code > 1 && !cargoFailure), code: code}
+			result = runSuite(top, f.Suite, timeout)
 			runs[f.Suite] = result
 		}
 		previous := f.Status
@@ -386,6 +405,9 @@ func reviewAll(dir string, timeout time.Duration, amend func(latest *registry) e
 			need++
 		case !passed:
 			if f.WasFixed {
+				if previous != "regressed" {
+					f.Regressions++
+				}
 				f.Status = "regressed"
 				regressed++
 			} else {
@@ -410,6 +432,7 @@ func reviewAll(dir string, timeout time.Duration, amend func(latest *registry) e
 		f.Reviewed = true
 		writeLine(*f, f.Promise, suffix)
 	}
+	runExtra()
 	unlock, e := lockRegistry(path)
 	if e != nil {
 		return judged{}, e
@@ -457,7 +480,7 @@ func reviewAll(dir string, timeout time.Duration, amend func(latest *registry) e
 		report += fmt.Sprintf(", %d need review", need)
 	}
 	if amend != nil {
-		if e = amend(r); e != nil {
+		if e = amend(r, runs); e != nil {
 			return judged{}, e
 		}
 	}

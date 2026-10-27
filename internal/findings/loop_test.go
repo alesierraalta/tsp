@@ -14,7 +14,7 @@ import (
 
 const fixedValue = "package sample\nfunc Value() int { return 1 }\n"
 const passingTest = "package sample\nimport \"testing\"\nfunc TestStillOne(t *testing.T) { if Value() != 1 { t.Fatal(\"no\") } }\n"
-const fixInstruction = "settle each item: when the contract promises what its test asserts, fix the source; when it does not, record `tsp findings verdict F<n> rejected --reason \"<why>\"` and remove that test. Never edit a witness test to make it pass and never record wontfix: that decision is the user's. Then run `tsp findings next`."
+const fixInstruction = "settle each item: when the contract promises what its test asserts, fix the source; when it does not, record `tsp findings verdict F<n> rejected --reason \"<why>\"` and remove that test. Never edit a witness test to make it pass, and never record wontfix, a check waiver or .no-testing-gate: those decisions are the user's. Then run `tsp findings next`."
 const promiseLine = "F1 open value_test.go example.invalid/sample.TestPromise — Keeps the promise."
 
 // next answers what the TSP loop owes now and fails the test on any other exit code.
@@ -25,6 +25,23 @@ func next(t *testing.T, d string, code int) findings.Answer {
 		t.Fatalf("next exit=%d want %d: %+v\n%s", got, code, a, a.Text())
 	}
 	return a
+}
+
+// withNotes is a message followed by the answer's notes, as next writes it.
+func withNotes(s string, a findings.Answer) string {
+	for _, n := range a.Notes {
+		s += "\n" + n
+	}
+	return s
+}
+
+// notesText is the answer's notes as the text output ends with them.
+func notesText(a findings.Answer) string {
+	s := ""
+	for _, n := range a.Notes {
+		s += n + "\n"
+	}
+	return s
 }
 
 func registryFile(t *testing.T) string {
@@ -117,6 +134,9 @@ func TestNextAsksForAFixWhileAWitnessIsOpen(t *testing.T) {
 	}
 	if !reflect.DeepEqual(a.Rounds, []findings.RoundCount{{N: 1, New: []string{"F1"}}}) {
 		t.Fatalf("rounds: %+v", a.Rounds)
+	}
+	if loop := storedLoop(t); a.Tree == "" || a.Tree != loop.FixTree || command(t, d, "git", "cat-file", "-t", a.Tree) != "tree" {
+		t.Fatalf("the answer names the tree it judged: %q, loop %+v", a.Tree, loop)
 	}
 }
 
@@ -211,11 +231,11 @@ func TestADryRoundOverTheFixedCodeConverges(t *testing.T) {
 	}
 	a := next(t, d, 0)
 	reason := "converged after 2 rounds: 1 fixed, 0 rejected, 0 wontfix"
-	if a.Next != "done" || a.Round != 2 || a.Reason != reason || a.Message != reason || len(a.Items) != 0 || a.Scope != nil ||
+	if a.Next != "done" || a.Round != 2 || a.Reason != reason || a.Message != withNotes(reason, a) || len(a.Items) != 0 || a.Scope != nil ||
 		!reflect.DeepEqual(a.Rounds, []findings.RoundCount{{N: 1, New: []string{"F1"}}, {N: 2, New: []string{}}}) {
 		t.Fatalf("answer: %+v", a)
 	}
-	if want := "done: " + reason + "\n" + a.Review + "\n"; a.Text() != want {
+	if want := "done: " + reason + "\n" + a.Review + "\n" + notesText(a); a.Text() != want {
 		t.Fatalf("text %q want %q", a.Text(), want)
 	}
 	if !storedLoop(t).Closed {
@@ -234,21 +254,29 @@ func TestARoundThatFindsNothingConvergesAtOnce(t *testing.T) {
 	}
 	a := next(t, d, 0)
 	reason := "converged after 1 round: 0 fixed, 0 rejected, 0 wontfix"
-	if a.Next != "done" || a.Round != 1 || a.Reason != reason || a.Review != "" || a.Text() != "done: "+reason+"\n" {
+	if a.Next != "done" || a.Round != 1 || a.Reason != reason || a.Review != "" || a.Text() != "done: "+reason+"\n"+notesText(a) {
 		t.Fatalf("answer: %+v\n%q", a, a.Text())
 	}
 }
 
-// Rejecting an invented witness changes no source, so the round that found it already attacked this code.
+// Rejecting an invented witness changes no source, so the round that found it already attacked this code. Its test
+// still has to leave the suite, or the loop would converge with a red test in it.
 func TestARejectedFindingSettlesWithoutAnotherRound(t *testing.T) {
 	d := openRoundOne(t)
 	if out, code := findings.SetVerdict(d, "F1", "rejected", "the contract promises 0"); code != 0 {
 		t.Fatalf("verdict: %d %q", code, out)
 	}
+	still := findings.Item{ID: "F1", Status: "rejected", File: "value_test.go", Test: "example.invalid/sample.TestPromise", Detail: "rejected, but its test is still in the suite: remove it"}
+	if a := next(t, d, 1); a.Next != "fix" || !reflect.DeepEqual(a.Items, []findings.Item{still}) {
+		t.Fatalf("a rejected test left in the suite: %+v", a)
+	}
+	if err := os.Remove(filepath.Join(d, "value_test.go")); err != nil {
+		t.Fatal(err)
+	}
 	a := next(t, d, 0)
 	reason := "converged after 1 round: 0 fixed, 1 rejected, 0 wontfix"
 	message := reason + "\nF1 rejected value_test.go example.invalid/sample.TestPromise — the contract promises 0"
-	if a.Next != "done" || a.Reason != reason || a.Message != message || a.Text() != "done: "+reason+"\n"+a.Review+"\n"+message[len(reason)+1:]+"\n" {
+	if a.Next != "done" || a.Reason != reason || a.Message != withNotes(message, a) || a.Text() != "done: "+reason+"\n"+a.Review+"\n"+message[len(reason)+1:]+"\n"+notesText(a) {
 		t.Fatalf("answer: %+v\n%q", a, a.Text())
 	}
 }
@@ -256,7 +284,7 @@ func TestARejectedFindingSettlesWithoutAnotherRound(t *testing.T) {
 // Five rounds is the cap: a fix after the fifth round has no round left to attack it, so the user decides.
 func TestTheFifthRoundIsTheLast(t *testing.T) {
 	d := repo(t)
-	put(t, d, "value_test.go", "package sample\nimport \"testing\"\nfunc TestZero(t *testing.T) { if Value() != 0 { t.Fatal(\"no\") } }\n")
+	put(t, d, "value_test.go", "package sample\nimport \"testing\"\nfunc TestAlways(t *testing.T) {}\n")
 	if out, code := findings.Record(d, "", wait); code != 1 {
 		t.Fatalf("record exit=%d: %q", code, out)
 	}
