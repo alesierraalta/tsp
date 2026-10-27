@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alesierraalta/tsp/internal/check"
 )
 
 func gitIn(t *testing.T, dir string, args ...string) {
@@ -151,8 +153,8 @@ func TestDebtLineNamesTheDebtAndNotTheBookkeeping(t *testing.T) {
 		{"bookkeeping alone names nothing", "warning: git ignores plan/tpp.md\n1 production source file(s) changed: a.go\n", ""},
 		{"an empty answer names nothing", "", ""},
 	} {
-		if got := debtLine(tc.text); got != tc.want {
-			t.Errorf("%s: debtLine = %q, want %q", tc.name, got, tc.want)
+		if got := check.DebtLine(tc.text); got != tc.want {
+			t.Errorf("%s: DebtLine = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

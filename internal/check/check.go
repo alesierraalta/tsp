@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -117,6 +118,22 @@ func decideGate(declared string, gentle bool) Decision {
 		return Decision{Level: DecisionRequired, Reason: "the verified Gentle signal is active (" + mode.GentleObservationEnv + "): this session runs the harness"}
 	}
 	return Decision{Level: DecisionAsk, Reason: "no gate is declared in " + plan.ConfigName + " and no verified Gentle signal is active"}
+}
+
+// metaLine matches the check's own bookkeeping: a warning about its evidence, the count of files that moved, and
+// the aside that labels plan data. They say why the check speaks, never what is owed.
+var metaLine = regexp.MustCompile(`^(?:warning: |\d+ production source file\(s\) changed: |\(the names below are read from the plan file\b)`)
+
+// DebtLine is the first line of the check's answer that names what this change owes: what a host shows a human,
+// and what the TSP loop names as the check's debt.
+func DebtLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !metaLine.MatchString(line) {
+			return line
+		}
+	}
+	return ""
 }
 
 // applyGate holds a verdict to the effective level. Only a debt (exit 1) is gated: a check that

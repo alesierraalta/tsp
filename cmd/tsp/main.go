@@ -9,7 +9,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"regexp"
 
 	"github.com/alesierraalta/tsp/internal/admit"
 	"github.com/alesierraalta/tsp/internal/base"
@@ -1164,7 +1163,7 @@ func printCheckVerdict(res check.Result) int {
 	}
 	// Nothing owed means nothing to show a human: the quiet sentence the check prints when it found no
 	// production source to answer for is its own words, not a debt.
-	if line := debtLine(res.Text); !strings.Contains(line, "nothing to check") {
+	if line := check.DebtLine(res.Text); !strings.Contains(line, "nothing to check") {
 		verdict.Debt = line
 	}
 	if verdict.Reason == "" {
@@ -1177,22 +1176,6 @@ func printCheckVerdict(res check.Result) int {
 	}
 	fmt.Println(string(body))
 	return res.Exit
-}
-
-// checkMetaLine matches the check's own bookkeeping: a warning about its evidence, the count of files that
-// moved, and the aside that labels plan data. They say why the check speaks, never what is owed, so a host
-// that asks a human shows the debt and not these.
-var checkMetaLine = regexp.MustCompile(`^(?:warning: |\d+ production source file\(s\) changed: |\(the names below are read from the plan file\b)`)
-
-// debtLine is the first line of the check's answer that names what this change owes.
-func debtLine(text string) string {
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !checkMetaLine.MatchString(line) {
-			return line
-		}
-	}
-	return ""
 }
 
 // firstLine is the first line that carries something, which is the verdict's own wording.
