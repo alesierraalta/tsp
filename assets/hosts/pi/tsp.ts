@@ -327,29 +327,43 @@ export function headAt(cwd: string): string {
 type Notify = (message: string, type?: "info" | "warning" | "error") => void;
 const REVIEW_TYPE = { 0: "info", 1: "warning" } as const;
 
-export async function reviewFindings(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, notify: Notify, record = true): Promise<string> {
+/** What the loop sends the agent next ("" for nothing) and, for a fix answer, the tree and message that identify it. */
+export interface LoopStep { message: string; fix: string }
+const NO_STEP: LoopStep = { message: "", fix: "" };
+
+/**
+ * Records the TSP run's witnesses (a record that cannot run stops there), asks `tsp findings next` what the loop owes,
+ * shows the user the review, the answer and its notes, and returns the step the agent is sent next. A tsp without
+ * `findings next` gets today's review instead and the loop stays manual.
+ */
+export async function reviewFindings(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, notify: Notify, record = true): Promise<LoopStep> {
   const run = (sub: string, args: string[] = []) => exec(["findings", sub, "--cwd", cwd, ...args], { cwd, env: { ...env } });
   const shown = (r: ExecResult) => notice(r.stdout.trim() || r.stderr.trim() || `tsp findings: exited ${r.code}`);
   try {
     if (record) {
       const recorded = await run("record");
-      if (recorded.code !== 0 && recorded.code !== 1) { notify(shown(recorded), "error"); return ""; }
+      if (recorded.code !== 0 && recorded.code !== 1) { notify(shown(recorded), "error"); return NO_STEP; }
     }
     const result = await run("next", ["--json"]);
     let parsed: unknown;
     try { parsed = JSON.parse(result.stdout.trim()); } catch { parsed = null; }
-    const reply = parsed && !Array.isArray(parsed) && typeof parsed === "object" ? parsed as { next?: unknown; review?: unknown; reason?: unknown; message?: unknown } : null;
+    const reply = parsed && !Array.isArray(parsed) && typeof parsed === "object" ? parsed as { next?: unknown; review?: unknown; reason?: unknown; message?: unknown; notes?: unknown; tree?: unknown } : null;
     if (!reply || typeof reply.next !== "string" || !["fix", "tsp", "done", "stop", "error"].includes(reply.next)) {
       const review = await run("check");
       notify(shown(review), REVIEW_TYPE[review.code as 0 | 1] ?? "error");
-      return "";
+      return NO_STEP;
     }
-    notify(notice([reply.review, reply.reason].filter((s): s is string => typeof s === "string" && s !== "").join("\n")), reply.next === "stop" || reply.next === "error" ? "warning" : "info");
+    const notes = Array.isArray(reply.notes) ? reply.notes : [];
+    notify(notice([reply.review, reply.reason, ...notes].filter((s): s is string => typeof s === "string" && s !== "").join("\n")), reply.next === "stop" || reply.next === "error" ? "warning" : "info");
     const message = typeof reply.message === "string" ? reply.message : "";
-    return reply.next === "fix" ? `${FIX_LEAD}\n\n${message}` : reply.next === "tsp" ? `${ROUND_LEAD}${message}` : "";
+    if (reply.next === "fix") {
+      const tree = typeof reply.tree === "string" ? reply.tree : "";
+      return { message: `${FIX_LEAD}\n\n${message}`, fix: tree === "" ? "" : `${tree}\n${message}` };
+    }
+    return { message: reply.next === "tsp" ? `${ROUND_LEAD}${message}` : "", fix: "" };
   } catch (error) {
     notify(notice(`tsp: ${error instanceof Error ? error.message : String(error)}`), "error");
-    return "";
+    return NO_STEP;
   }
 }
 
@@ -394,6 +408,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   let feedbackRun = false;
   let fixRun = false;
   let pending = "";
+  let lastFix = ""; // the fix answer the agent was last sent: the same one again after its fix run means it changed nothing
   pi.on("before_agent_start", (event, ctx) => {
     edited.clear();
     turnHead = head(ctx.cwd);
@@ -420,10 +435,17 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     }
     if (tspRun || fixRun) {
       const notify: Notify = (message, type) => ctx.ui.notify(message, type);
-      const message = await reviewFindings(ctx.cwd, env, exec, notify, tspRun);
+      const step = await reviewFindings(ctx.cwd, env, exec, notify, tspRun);
+      if (fixRun && step.fix !== "" && step.fix === lastFix) {
+        // The fix run left the tree and the items as they were: sending the same fix again would never end.
+        lastFix = "";
+        notify(notice("the fix run changed nothing tsp findings next can see: the TSP loop stops here and needs your decision"), "warning");
+        return;
+      }
+      lastFix = step.fix;
       const request = tspRun ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
-      if (request !== "") { pending = message; pi.sendUserMessage(request); }
-      else if (message !== "") pi.sendUserMessage(message);
+      if (request !== "") { pending = step.message; pi.sendUserMessage(request); }
+      else if (step.message !== "") pi.sendUserMessage(step.message);
       return;
     }
     if (fresh.length === 0) return;

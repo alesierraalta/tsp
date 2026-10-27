@@ -517,6 +517,28 @@ test("with feedback off the loop message follows the TSP run at once, and a stop
   assert.deepEqual(h.asked, []);
 });
 
+test("the loop's notes reach the user with the answer, so a gate that could not measure never reads as clean", async () => {
+  const done = { stdout: JSON.stringify({ next: "done", review: "review 4", reason: "converged after 2 rounds: 1 fixed, 0 rejected, 0 wontfix", message: "converged", notes: ["not measured: probe arch: no rules", "failing before the loop, not the loop's: TestOld"] }), stderr: "", code: 0 };
+  const h = offerHarness({ findings: { next: done } });
+  await h.run("haz el TSP", []);
+  assert.deepEqual(h.notes, [{ message: "review 4\nconverged after 2 rounds: 1 fixed, 0 rejected, 0 wontfix\nnot measured: probe arch: no rules\nfailing before the loop, not the loop's: TestOld", type: "info" }]);
+  assert.deepEqual(h.sent, []);
+});
+
+test("a fix run that changes nothing ends the loop instead of sending the same fix again", async () => {
+  const fix = (tree) => ({ stdout: JSON.stringify({ next: "fix", tree, review: "review 2", reason: "round 1 of 5 left 1 item unsettled", message: "F1 open a_test.go TestA" }), stderr: "", code: 1 });
+  const replies = [fix("t1"), fix("t2"), fix("t2")];
+  const h = offerHarness({ findings: { get next() { return replies.shift(); } } });
+  const sent = "The TSP loop found defects to settle.\n\nF1 open a_test.go TestA";
+  await h.run("haz el TSP", []);
+  await h.run(sent, [["edit", "a.go"]]);
+  await h.run(sent, []);
+  assert.deepEqual(h.calls.map((c) => c.argv[1]), ["record", "next", "--template", "next", "next"]);
+  assert.deepEqual(h.sent, [sent, sent], "the same fix over the same tree is never sent again");
+  assert.deepEqual(h.notes.at(-1), { message: "the fix run changed nothing tsp findings next can see: the TSP loop stops here and needs your decision", type: "warning" });
+  assert.deepEqual(h.asked, []);
+});
+
 test("loop verdicts drive the next turn without an offer", async () => {
   for (const [next, type, sent] of [["fix", "info", "The TSP loop found defects to settle.\n\nwork"], ["tsp", "info", "haz el TSP — work"], ["done", "info", ""], ["stop", "warning", ""], ["error", "warning", ""]]) {
     const h = offerHarness({ findings: { next: { stdout: JSON.stringify({ next, review: "review", reason: "reason", message: "work" }), stderr: "", code: 1 } } });
