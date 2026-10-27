@@ -195,6 +195,14 @@ func Run(cwd string, d Deps) (res Result) {
 		return Result{Exit: 2, Text: "the plan declaration could not be read: " + gateErr.Error()}
 	}
 	decision = decideGate(declared, d.Gentle())
+	// A declared gate always and an opt-out answer the same question differently. Settling that by
+	// silence would let a repository that asked to be held stop being held, which is the failure this
+	// check exists to prevent; two answers have no answer, so it fails closed before any verdict.
+	if decision.Level == DecisionRequired {
+		if _, err := d.ReadFile(filepath.Join(root, optOutName)); err == nil {
+			return Result{Exit: 2, Text: "the repository declares gate " + plan.GateAlways + " in " + plan.ConfigName + " and carries " + optOutName + ": the two answers contradict, so the check cannot say whether to gate. Remove " + optOutName + " or declare gate " + plan.GateAsk + " or " + plan.GateNever}
+		}
+	}
 	// The plan is read before the diff so the versioning caveat rides with every verdict, including
 	// the quiet ones: a plan git will never version is a half persistence whatever the tree shows.
 	body, planErr := d.ReadFile(planFilePath)

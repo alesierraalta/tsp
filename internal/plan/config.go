@@ -53,6 +53,9 @@ func readDeclaration(root string, read Reader) (declaration, error) {
 	}
 
 	var fields map[string]json.RawMessage
+	if key, twice := duplicateKey(body); twice {
+		return declaration{}, fmt.Errorf("%s: %s is declared twice: one key, one value", name, key)
+	}
 	if err := json.Unmarshal([]byte(body), &fields); err != nil {
 		return declaration{}, fmt.Errorf("%s: %w", name, err)
 	}
@@ -171,6 +174,37 @@ func DeclaredRun(root string, read Reader) (string, error) {
 func DeclaredGate(root string, read Reader) (string, error) {
 	d, err := readDeclaration(root, read)
 	return d.gate, err
+}
+
+// duplicateKey names the first key the declaration states twice. encoding/json settles a repeated
+// key by keeping the last one, which turns a merge that joined both sides of a gate into a live
+// policy change: {"gate":"always","gate":"never"} would read as never and silence the gate without
+// a word. Two answers to one question have no answer, so the declaration is refused instead.
+func duplicateKey(body string) (string, bool) {
+	dec := json.NewDecoder(strings.NewReader(body))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return "", false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", false
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return "", false
+		}
+		if seen[key] {
+			return key, true
+		}
+		seen[key] = true
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return "", false
+		}
+	}
+	return "", false
 }
 
 // Resolve returns the effective plan path and declared run for a worktree in one declaration read.

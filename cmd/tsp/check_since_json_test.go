@@ -112,7 +112,7 @@ func TestCheckSinceIsSatisfiedByTheTestTheUnitBrought(t *testing.T) {
 func TestCheckGateNeverDoesNotGate(t *testing.T) {
 	t.Setenv("TSP_GENTLE_OBSERVATION", "pi-session-gentle-active")
 	dir := committedUnit(t, map[string]string{
-		"a.go":     "package sample\n\nfunc F() int { return 1 }\n",
+		"a.go":      "package sample\n\nfunc F() int { return 1 }\n",
 		".tsp.json": `{"gate":"never"}`,
 	})
 

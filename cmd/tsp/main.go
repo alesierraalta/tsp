@@ -1094,37 +1094,29 @@ func runCheck(args []string) int {
 		return code
 	}
 	if flagSet(fs, "no-test-needed") && strings.TrimSpace(*waive) == "" {
-		fmt.Fprintln(os.Stderr, "check: --no-test-needed needs a reason")
-		return 2
+		return refuseCheck(*asJSON, "check: --no-test-needed needs a reason")
 	}
 	if flagSet(fs, "paths") && flagSet(fs, "no-test-needed") {
-		fmt.Fprintln(os.Stderr, "check: --paths answers for one change; --no-test-needed records a waiver for the whole change")
-		return 2
+		return refuseCheck(*asJSON, "check: --paths answers for one change; --no-test-needed records a waiver for the whole change")
 	}
 	if flagSet(fs, "paths") && flagSet(fs, "suite") {
-		fmt.Fprintln(os.Stderr, "check: --paths answers for one change; --suite runs the changed tests for the whole change")
-		return 2
+		return refuseCheck(*asJSON, "check: --paths answers for one change; --suite runs the changed tests for the whole change")
 	}
 	if flagSet(fs, "since") && flagSet(fs, "no-test-needed") {
-		fmt.Fprintln(os.Stderr, "check: --since reads a commit range; --no-test-needed records a waiver for the change in the tree")
-		return 2
+		return refuseCheck(*asJSON, "check: --since reads a commit range; --no-test-needed records a waiver for the change in the tree")
 	}
 	if flagSet(fs, "json") && flagSet(fs, "no-test-needed") {
-		fmt.Fprintln(os.Stderr, "check: --json reports a verdict; --no-test-needed records a waiver and reports none")
-		return 2
+		return refuseCheck(*asJSON, "check: --json reports a verdict; --no-test-needed records a waiver and reports none")
 	}
 	if flagSet(fs, "since") && strings.TrimSpace(*since) == "" {
-		fmt.Fprintln(os.Stderr, "check: --since names no ref: pass the commit this work unit started from")
-		return 2
+		return refuseCheck(*asJSON, "check: --since names no ref: pass the commit this work unit started from")
 	}
 	if flagSet(fs, "paths") && len(named) == 0 {
-		fmt.Fprintln(os.Stderr, "check: --paths names no path: pass one --paths per path")
-		return 2
+		return refuseCheck(*asJSON, "check: --paths names no path: pass one --paths per path")
 	}
 	if flagSet(fs, "path") {
 		if err := plan.ValidatePlanPath("--path", *path); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 2
+			return refuseCheck(*asJSON, err.Error())
 		}
 	}
 	// A --cwd that cannot be read hands git a directory it cannot stand in, and git's failure is
@@ -1133,8 +1125,7 @@ func runCheck(args []string) int {
 	// the directory is validated here, before git is asked about a tree it never stood in. A directory
 	// that exists but is not a repository keeps its answer: there, git was read and found nothing.
 	if info, err := os.Stat(*cwd); err != nil || !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "check: --cwd %s is not a directory: name an existing directory inside the repository\n", *cwd)
-		return 2
+		return refuseCheck(*asJSON, fmt.Sprintf("check: --cwd %s is not a directory: name an existing directory inside the repository", *cwd))
 	}
 	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named, Base: strings.TrimSpace(*base), Since: strings.TrimSpace(*since)})
 	if *asJSON {
@@ -1142,6 +1133,17 @@ func runCheck(args []string) int {
 	}
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
+}
+
+// refuseCheck answers a run the flags made impossible. --json promised one object, so a caller that
+// reads the check programmatically gets the refusal in that shape instead of prose it cannot parse:
+// a rejected flag that reads as "no verdict" is exactly how a typo becomes silence.
+func refuseCheck(asJSON bool, msg string) int {
+	if asJSON {
+		return printCheckVerdict(check.Result{Exit: 2, Reason: msg})
+	}
+	fmt.Fprintln(os.Stderr, msg)
+	return 2
 }
 
 // printCheckVerdict answers a host that reads the decision instead of the prose: one object and the
