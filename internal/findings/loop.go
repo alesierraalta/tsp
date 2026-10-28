@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/alesierraalta/tsp/internal/arch"
+	"github.com/alesierraalta/tsp/internal/bench"
 	"github.com/alesierraalta/tsp/internal/check"
 	"github.com/alesierraalta/tsp/internal/gate"
 	"github.com/alesierraalta/tsp/internal/quality"
@@ -63,10 +64,11 @@ type Round struct {
 	Base string `json:"base"`
 	// End is the working tree when the round was first recorded. A later record never moves it, because the code
 	// the round attacked is what next compares the current source with.
-	End   string    `json:"end"`
-	New   []string  `json:"new"`
-	Suite string    `json:"suite,omitempty"`
-	At    time.Time `json:"recorded_at"`
+	End string   `json:"end"`
+	New []string `json:"new"`
+	// Suites are every suite a record of this round ran: next reruns all of them.
+	Suites []string  `json:"suites,omitempty"`
+	At     time.Time `json:"recorded_at"`
 }
 
 // Answer is what the loop owes now, as next prints it.
@@ -112,13 +114,47 @@ type RoundCount struct {
 
 func open(l *Loop) bool { return l != nil && !l.Closed && len(l.Rounds) > 0 }
 
-// roundBase is the code a record judges its tests against: the pending tree once next has answered tsp, HEAD
-// otherwise, so round 1 reads exactly as a record outside any loop always has.
+// roundBase is the code a record judges its tests against: the pending tree once next has answered tsp, and the
+// open round's own base for every later record of a round after the first. Round 1 is judged against HEAD on every
+// record, exactly as a record outside any loop always was.
 func roundBase(l *Loop) string {
-	if open(l) && l.Pending != "" {
+	switch {
+	case !open(l):
+		return "HEAD"
+	case l.Pending != "":
 		return l.Pending
+	case len(l.Rounds) > 1:
+		return l.Rounds[len(l.Rounds)-1].Base
 	}
 	return "HEAD"
+}
+
+// alive is the loop a record or a next can still follow. git gc may remove the trees an open loop holds outside any
+// ref; such a loop reads as closed (false), so next says so and the next record starts a new loop.
+func alive(top string, l *Loop) (*Loop, bool) {
+	if !open(l) {
+		return l, true
+	}
+	last := l.Rounds[len(l.Rounds)-1]
+	for _, object := range []string{l.Pending, last.End, last.Base} {
+		if object == "" {
+			continue
+		}
+		if _, e := gitIn(top, nil, "cat-file", "-e", object); e != nil {
+			gone := *l
+			gone.Closed = true
+			return &gone, false
+		}
+	}
+	return l, true
+}
+
+// withSuite adds the suite a record ran to the ones its round already holds.
+func withSuite(suites []string, suite string) []string {
+	if suite == "" || slices.Contains(suites, suite) {
+		return suites
+	}
+	return append(suites, suite)
 }
 
 // advance books the round a record belongs to: a new loop when none is open, the round a tsp answer opened, or
@@ -126,18 +162,16 @@ func roundBase(l *Loop) string {
 func advance(l *Loop, commit, end, suite string, created []string) *Loop {
 	now := time.Now().UTC()
 	if !open(l) {
-		return &Loop{Rounds: []Round{{N: 1, Base: commit, End: end, New: created, Suite: suite, At: now}}}
+		return &Loop{Rounds: []Round{{N: 1, Base: commit, End: end, New: created, Suites: withSuite(nil, suite), At: now}}}
 	}
 	if l.Pending != "" {
-		l.Rounds = append(l.Rounds, Round{N: len(l.Rounds) + 1, Base: l.Pending, End: end, New: created, Suite: suite, At: now})
+		l.Rounds = append(l.Rounds, Round{N: len(l.Rounds) + 1, Base: l.Pending, End: end, New: created, Suites: withSuite(nil, suite), At: now})
 		l.Pending = ""
 		return l
 	}
 	last := &l.Rounds[len(l.Rounds)-1]
 	last.New = append(last.New, created...)
-	if last.Suite == "" {
-		last.Suite = suite
-	}
+	last.Suites = withSuite(last.Suites, suite)
 	return l
 }
 
@@ -154,9 +188,10 @@ func gitIn(dir string, env []string, args ...string) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-// snapshot writes the working tree as a git tree object, untracked files included and ignored ones left out. It
-// goes through a copy of the index, so it moves no ref, makes no commit and leaves the real index as it was; the
-// objects it writes are unreferenced, and git's own garbage collection removes them.
+// snapshot writes the working tree as a git tree object: tracked files as they are now, and an untracked file only
+// when the loop reads it (source, a test or test data), so a credentials file or a log nobody can read never reaches
+// the object store. It goes through a copy of the index, so it moves no ref, makes no commit and leaves the real
+// index as it was; the objects it writes are unreferenced, and git's own garbage collection removes them.
 func snapshot(top string) (string, error) {
 	index, e := gitIn(top, nil, "rev-parse", "--path-format=absolute", "--git-path", "index")
 	if e != nil {
@@ -169,10 +204,17 @@ func snapshot(top string) (string, error) {
 	name := tmp.Name()
 	tmp.Close()
 	defer os.Remove(name)
-	data, e := os.ReadFile(index)
+	info, e := os.Stat(index)
 	switch {
 	case e == nil:
-		e = os.WriteFile(name, data, 0600)
+		// The copy keeps the index's own mtime: git trusts a file's stat only when the file is older than its
+		// index, so a copy stamped now would read an edit made in the second the index was written as no change.
+		var data []byte
+		if data, e = os.ReadFile(index); e == nil {
+			if e = os.WriteFile(name, data, 0600); e == nil {
+				e = os.Chtimes(name, info.ModTime(), info.ModTime())
+			}
+		}
 	case errors.Is(e, os.ErrNotExist):
 		// No index yet: git starts one of its own, but not from an empty file.
 		e = os.Remove(name)
@@ -181,8 +223,25 @@ func snapshot(top string) (string, error) {
 		return "", e
 	}
 	env := []string{"GIT_INDEX_FILE=" + name}
-	if _, e = gitIn(top, env, "add", "-A"); e != nil {
+	if _, e = gitIn(top, env, "add", "-u"); e != nil {
 		return "", e
+	}
+	out, e := gitIn(top, env, "ls-files", "-z", "--others", "--exclude-standard")
+	if e != nil {
+		return "", e
+	}
+	var read []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" && (gate.IsProductionSource(p) || bench.IsTestFile(p) || strings.Contains("/"+p, "/testdata/")) {
+			read = append(read, p)
+		}
+	}
+	for len(read) > 0 {
+		n := min(len(read), 500)
+		if _, e = gitIn(top, env, append([]string{"add", "--"}, read[:n]...)...); e != nil {
+			return "", e
+		}
+		read = read[n:]
 	}
 	return gitIn(top, env, "write-tree")
 }
@@ -220,6 +279,9 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 	if e != nil {
 		return failed(e)
 	}
+	if _, ok := alive(top, r.Loop); !ok {
+		return failed(errors.New("the TSP loop's snapshots are gone (git gc removed them): run the TSP flow, then `tsp findings record` to start a new loop"))
+	}
 	if !open(r.Loop) {
 		return failed(fmt.Errorf("no TSP round is open on %s: run the TSP flow, then `tsp findings record`", r.Branch))
 	}
@@ -245,7 +307,7 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 	var settled []byte
 	suites := make([]string, 0, len(r.Loop.Rounds))
 	for _, round := range r.Loop.Rounds {
-		suites = append(suites, round.Suite)
+		suites = append(suites, round.Suites...)
 	}
 	j, e := reviewAll(dir, timeout, suites, func(latest *registry, runs map[string]suiteRun) error {
 		if !sameLoop(latest.Loop, r.Loop) {

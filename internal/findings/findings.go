@@ -160,6 +160,8 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if suite != "" && !bench.SupportsPerTest(suite) {
 		return failure(unsupportedRunner)
 	}
+	var fresh bool
+	r.Loop, fresh = alive(top, r.Loop)
 	base := roundBase(r.Loop)
 	rep, e := bench.RedCheckAt(top, suite, base, timeout)
 	if e != nil {
@@ -169,6 +171,9 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 		return failure(unsupportedRunner)
 	}
 	var diagnostics strings.Builder
+	if !fresh {
+		diagnostics.WriteString("a new TSP loop starts: git gc removed the snapshots of the one that was open\n")
+	}
 	for _, file := range rep.Uncollected {
 		fmt.Fprintf(&diagnostics, "could not collect: %s (%s)\n", file.File, file.Reason)
 	}
@@ -191,6 +196,7 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if e != nil {
 		return failure(e)
 	}
+	r.Loop, _ = alive(top, r.Loop)
 	if roundBase(r.Loop) != base {
 		return failure(errors.New("the TSP loop moved while this round was judged: record it again"))
 	}
