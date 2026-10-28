@@ -724,8 +724,10 @@ own tests pin anything. This repository runs it on its own pull requests in
 
 The embedded skills live under `assets/skills/`. `test-strategy` is the entry point ("haz test
 strategy"; aliases: "haz test strategy" and "haz el testing"): it finds the defects the existing green
-suite misses and leaves one test per defect in the repository's own suite, red on today's code and
-green once the defect is fixed. It works promise by promise, harvested from four sources: the
+suite misses and leaves one test per defect that is red on today's code and green once the defect
+is fixed; what it leaves behind is the suite it committed, so it names any witness kept local (an
+untracked file, a `testLocales/` directory, a probe that only ran as a command) rather than implying
+a regression net the repository does not have. It works promise by promise, harvested from four sources: the
 contract, every name and comment that asserts a behaviour (a name that lies is a defect), the
 implicit promises of the failure classes, and the evidence the session already has (the diff, the bug
 report, the log line). Each promise is attacked across its input classes, with two classes a green

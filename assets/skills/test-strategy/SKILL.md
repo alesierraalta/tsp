@@ -4,7 +4,7 @@ description: "Trigger: haz el TSP, haz TSP, TSP, haz test stragety, haz test str
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.7.7"
+  version: "0.7.8"
   requires_tsp: "0.7.1"
   requires_tpp: "0.5.1"
   scope: [common]
@@ -12,8 +12,11 @@ metadata:
 ---
 
 Goal: find the defects the existing green suite misses, and leave one test per defect in the
-suite that is RED on today's code and would be GREEN once the defect is fixed. Do not change
-source code. Spend turns on probes and tests, not on documents.
+suite that is RED on today's code and would be GREEN once the defect is fixed. What a run leaves
+behind is the suite it committed, not a regression net: a witness that stays local (a `testLocales/` directory, an
+untracked file, a probe that only exists as a command someone ran) is not in the repository's suite,
+so the run names the ones that stayed local instead of implying a wider net than it cast. Do not
+change source code. Spend turns on probes and tests, not on documents.
 
 Work promise by promise. A pass over the code is not the unit of work: coverage of
 promise × class is, and step 6 says when it is complete.
@@ -118,5 +121,6 @@ promise × class is, and step 6 says when it is complete.
    input, the operation has no state). A green suite is not evidence of coverage: it only says the
    tests you wrote pass. When a class is left unprobed, say so instead of calling the work done.
 
-7. **Finish** with a short list: each defect as `path:line` plus the test that pins it, and the
-   cells that stayed unprobed with their reason.
+7. **Finish** with a short list: each defect as `path:line` plus the test that pins it, the cells
+   that stayed unprobed with their reason, and which witnesses stayed local instead of landing in
+   the suite.
