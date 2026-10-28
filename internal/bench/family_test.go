@@ -14,7 +14,7 @@ func TestPerFamilyCaughtSplitsValidRuns(t *testing.T) {
 		{Case: "a", Family: "time", Total: 4, Caught: 3},
 		{Case: "b", Family: "time", Total: 2, Caught: 2},
 		{Case: "c", Family: "contract", Total: 3, Caught: 1},
-		{Case: "d", Total: 2, Caught: 2},                          // predates families: unclassified
+		{Case: "d", Total: 2, Caught: 2}, // predates families: unclassified
 		{Case: "e", Family: "boundary", Total: 5, Caught: 5, Invalid: true},
 		{Case: "f", Family: "boundary", Total: 5, Caught: 1, Failed: true},
 		{Case: "g", Family: "security", Control: true},

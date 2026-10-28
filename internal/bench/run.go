@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -101,6 +102,10 @@ type Options struct {
 	// EscalateModel, when set, reruns a case with this model in a fresh workspace whenever the first run left
 	// no new test failing on the unmodified code (RedCheck found no witness). Empty never escalates.
 	EscalateModel string
+	// Families selects the cases whose key declares one of these failure kinds, so a reading can be aimed at the
+	// families earlier readings missed instead of spending its budget on the whole corpus. Empty selects every
+	// case; a name outside Families, or a selection no case declares, is refused rather than run over nothing.
+	Families []string
 	// Rounds, above 1, runs the agent again in the same workspace until it has run this many times. Every later
 	// round is told the tests earlier rounds left failing on the unmodified code, so it looks for other defects.
 	// Below 2 is one pass.
@@ -156,6 +161,7 @@ type Aggregate struct {
 	Out            string   `json:"out"`
 	Model          string   `json:"model"`
 	DryRun         bool     `json:"dry_run"`
+	Families       []string `json:"families,omitempty"` // the families a reading was aimed at; empty means every case
 	Cases          []Result `json:"cases"`
 	Defects        int      `json:"defects"`
 	Found          int      `json:"found"`
@@ -293,6 +299,12 @@ func Run(opts Options) (Aggregate, int) {
 	if !found {
 		return agg, 1
 	}
+	var err error
+	if caseDirs, err = selectCases(caseDirs, opts.Families); err != nil {
+		fmt.Fprintln(opts.Log, "families:", err)
+		return agg, 1
+	}
+	agg.Families = opts.Families
 	warnProvisionalScorer(opts)
 	if !prepareOutput(opts) {
 		return agg, 1
@@ -328,6 +340,8 @@ func normalizeOptions(opts Options) Options {
 
 // resolveCaseDirs turns the case globs into directories. A pattern list that matches nothing is not an empty run:
 // it is said out loud, and the run stops before it writes anything.
+// resolveCaseDirs expands the glob and refuses a run that matches no case. The selection below only narrows what
+// this found, so a reading always reports which cases it actually ran.
 func resolveCaseDirs(opts Options) ([]string, bool) {
 	var patterns []string
 	for _, g := range strings.Split(opts.CasesGlob, ",") {
@@ -370,6 +384,45 @@ func prepareOutput(opts Options) bool {
 		return false
 	}
 	return true
+}
+
+// selectCases keeps the cases whose key declares one of the families a reading is aimed at, so a run spends its
+// budget on the defect kinds earlier readings missed. It refuses a name outside Families and a selection no case
+// declares: a misspelling would otherwise publish a green run that measured nothing. A case whose key will not load
+// is kept, so the run still reports it as invalid instead of hiding a broken case.
+func selectCases(caseDirs []string, families []string) ([]string, error) {
+	if len(families) == 0 {
+		return caseDirs, nil
+	}
+	want := make(map[string]bool, len(families))
+	for _, name := range families {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if !slices.Contains(Families, name) {
+			return nil, fmt.Errorf("family %q is not one of %s", name, strings.Join(Families, ", "))
+		}
+		want[name] = true
+	}
+	if len(want) == 0 {
+		return nil, fmt.Errorf("no family named; each case declares one of %s", strings.Join(Families, ", "))
+	}
+	kept := make([]string, 0, len(caseDirs))
+	for _, dir := range caseDirs {
+		key, err := LoadKey(dir)
+		if err != nil {
+			kept = append(kept, dir)
+			continue
+		}
+		if want[key.Family] {
+			kept = append(kept, dir)
+		}
+	}
+	if len(kept) == 0 {
+		return nil, fmt.Errorf("no case declares family %s", strings.Join(families, ", "))
+	}
+	return kept, nil
 }
 
 // buildUnits expands the cases into one unit per case and run. A case whose key will not load is one invalid unit
@@ -960,7 +1013,7 @@ func Summary(agg Aggregate) string {
 		return withFixLoop(planlessSummary(agg), agg)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s%s", agg.TS, agg.Model, len(agg.Cases), aggregateTotals(agg), roundsTotals(agg)+sessionsTotals(agg), fixLoopTotals(agg))
+	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s%s%s", agg.TS, agg.Model, len(agg.Cases), aggregateTotals(agg), roundsTotals(agg)+sessionsTotals(agg), familiesTotals(agg), fixLoopTotals(agg))
 	if agg.Corpus != "" {
 		fmt.Fprintf(&b, " · corpus: %s", agg.Corpus)
 	}

@@ -191,6 +191,11 @@ strong one. Cases written before the field carry no family and are published tog
 supports. A key that names a family outside `Families` is refused when it is loaded, and a control,
 invalid or failed case-run stays out of the split because it is already out of recall's denominator.
 
+`tsp bench run --families time,security` runs only the cases declaring one of those kinds, so a
+reading is aimed at the families the previous one missed; the header then carries `· families: …` and
+the corpus hash covers just the cases that ran. A name outside `Families`, or a selection no case
+declares, is refused rather than reported as a green run over nothing.
+
 ## Cost and wall clock
 
 The cost of a run is the number of agent turns; concurrency does not change it. The wall clock is

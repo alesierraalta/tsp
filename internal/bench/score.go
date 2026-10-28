@@ -33,11 +33,11 @@ type DefectResult struct {
 
 // Result is the score of one workspace against its key.
 type Result struct {
-	Case           string         `json:"case"`
-	Run            int            `json:"run"`
+	Case string `json:"case"`
+	Run  int    `json:"run"`
 	// Family is the key's declared failure kind, copied here so a reading can group caught over
 	// defects per family without reopening every KEY.json. Empty on a case that predates families.
-	Family string `json:"family,omitempty"`
+	Family         string         `json:"family,omitempty"`
 	Control        bool           `json:"control"`
 	Defects        []DefectResult `json:"defects"`
 	Total          int            `json:"total"`

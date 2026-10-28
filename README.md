@@ -1089,6 +1089,13 @@ belong to (`time`, `concurrency`, `contract`, `security`, …), and the line spl
 per family so a run says which kinds it missed. Cases written before the field are counted as
 `unclassified` instead of disappearing from the split.
 
+`--families time,concurrency` narrows a reading to the cases that declare those kinds, so the budget
+is spent where the last reading was weak instead of on the whole corpus; the summary header then
+names the selection (`· families: time, concurrency`) and the corpus hash covers only the cases that
+ran, so such a reading is never mistaken for a full one. A family outside the list is refused, and so
+is a selection no case declares, because a misspelling would otherwise publish a green run that
+measured nothing.
+
 `bench run` scaffolds `<out>/<case>/<run>/ws` (default `bench/results/<timestamp>/`), commits the
 fixture, checks its suite is green (otherwise the case is invalid and skipped), spawns
 `claude -p "haz el testing"` in it, then scores `docs/testing/test-plan.md`:

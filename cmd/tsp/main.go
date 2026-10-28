@@ -921,6 +921,18 @@ func parseHostSelection(raw string, explicit bool, extraKnown []string) (map[str
 	return selected, nil
 }
 
+// commaList splits a comma-separated flag value, so an empty flag selects nothing (and a misspelled name is
+// refused by the reader that knows the accepted values, not here).
+func commaList(raw string) []string {
+	var out []string
+	for _, value := range strings.Split(raw, ",") {
+		if name := strings.TrimSpace(value); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 func filterSyncHosts(hosts []sync.Host, selected map[string]bool) []sync.Host {
 	filtered := make([]sync.Host, 0, len(hosts))
 	for _, host := range hosts {
@@ -1896,6 +1908,7 @@ func runBenchRun(args []string) int {
 		bench.DefaultModel(bench.RunnerPi)+" for pi, "+bench.DefaultModel(bench.RunnerAgy)+" for agy, "+bench.DefaultModel(bench.RunnerClaude)+" for claude)")
 	escalateModel := fs.String("escalate-model", "", "rerun a case with this model, from a fresh workspace, when the first run left no new test failing on the unmodified code (tsp redcheck found no witness); cost and turns count both attempts; recorded in the provenance")
 	runs := fs.Int("runs", 1, "runs per case")
+	families := fs.String("families", "", "comma-separated failure families to run, aiming the budget at the kinds earlier readings missed (boundary, concurrency, contract, input-domain, numeric, performance, resilience-io, security, state-logic, time); empty runs every case")
 	rounds := fs.Int("rounds", 1, "rounds per run: the agent runs again in the same workspace up to N times, every later round told the tests earlier rounds left failing on the unmodified code and asked for defects they do not cover; each round is recorded, and the provenance records the rounds")
 	sessions := fs.Int("sessions", 1, "independent review sessions per run; apply reference fixes for caught defects between sessions, retaining tests")
 	fixLoop := fs.Bool("fix-loop", false, "measure the loop a user runs: round 1, then the agent fixes what round 1's tests pinned (test files it touches restored, source committed), then round 2 runs twice from the same fixed workspace, once plain and once told what `tsp findings check` reports")
@@ -2055,6 +2068,7 @@ func runBenchRun(args []string) int {
 	}
 	_, code := bench.Run(bench.Options{
 		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, FixLoop: *fixLoop, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
+		Families: commaList(*families),
 		Timeout:      *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,

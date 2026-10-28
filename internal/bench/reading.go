@@ -158,9 +158,18 @@ func familySection(a Aggregate) string {
 	return "\ncaught by family: " + strings.Join(parts, " · ") + "\n"
 }
 
+// familiesTotals names the failure kinds a reading was aimed at, so a summary of a family-scoped run is never
+// mistaken for a reading over the whole corpus. Empty when the run selected every case.
+func familiesTotals(a Aggregate) string {
+	if len(a.Families) == 0 {
+		return ""
+	}
+	return " · families: " + strings.Join(a.Families, ", ")
+}
+
 func planlessSummary(a Aggregate) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s", a.TS, a.Model, len(a.Cases), planlessTotals(a), roundsTotals(a)+sessionsTotals(a))
+	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s%s", a.TS, a.Model, len(a.Cases), planlessTotals(a), roundsTotals(a)+sessionsTotals(a), familiesTotals(a))
 	if a.Corpus != "" {
 		fmt.Fprintf(&b, " · corpus: %s", a.Corpus)
 	}
