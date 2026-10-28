@@ -441,7 +441,7 @@ test("a delegated child session never asks the TSP question nor touches the find
 test("a TSP run ends by recording its witnesses, then shows the review of every finding", async () => {
   const review = "review 2 on feat/x: 1 fixed, 0 open, 1 new, 0 regressed\nF1 fixed a_test.go TestA\nF2 open b_test.go TestB\n";
   for (const [code, type] of [[0, "info"], [1, "warning"], [2, "error"]]) {
-    const h = offerHarness({ findings: { record: { stdout: "F2 recorded b_test.go TestB\n", stderr: "", code: 0 }, check: { stdout: review, stderr: "", code } } });
+    const h = offerHarness({ findings: { record: { stdout: "F2 recorded b_test.go TestB\n", stderr: "", code: 0 }, next: LEGACY_NEXT, check: { stdout: review, stderr: "", code } } });
     await h.run("haz el TSP", [["edit", "b_test.go"]]);
     assert.deepEqual(h.calls, [
       { argv: ["findings", "record", "--cwd", "/repo"], cwd: "/repo" },
@@ -455,7 +455,7 @@ test("a TSP run ends by recording its witnesses, then shows the review of every 
 });
 
 test("a TSP run that pinned nothing still shows the review; a record that cannot run stops before check", async () => {
-  const none = offerHarness({ findings: { record: { stdout: "no new witness\n", stderr: "", code: 1 }, check: { stdout: "no finding recorded on feat/x\n", stderr: "", code: 0 } } });
+  const none = offerHarness({ findings: { record: { stdout: "no new witness\n", stderr: "", code: 1 }, next: LEGACY_NEXT, check: { stdout: "no finding recorded on feat/x\n", stderr: "", code: 0 } } });
   await none.run("haz el TSP", []);
   assert.deepEqual(none.calls.map((c) => c.argv[1]), ["record", "next", "check", "--template"]);
   assert.deepEqual(none.notes, [{ message: "no finding recorded on feat/x", type: "info" }]);
@@ -469,8 +469,33 @@ test("a TSP run that pinned nothing still shows the review; a record that cannot
   assert.equal(missing.notes[0].message, "tsp: spawn tsp ENOENT");
 });
 
-test("the findings review runs only after a TSP run the user asked for, with UI, not aborted, not opted out", async () => {
-  for (const [h, prompt, aborted, offered] of [
+// `next` documents exit 2 as "cannot judge": when it cannot answer, the loop stops and the user is told why.
+// Reading that as an old binary shows a clean review and ends the loop in silence, which reads like a loop that
+// converged because it had nothing left to judge.
+test("a next that cannot judge is surfaced instead of read as an old binary", async () => {
+  const review = { stdout: "review 3\nF1 open a_test.go TestA\n", stderr: "", code: 0 };
+  const failed = offerHarness({ findings: { record: { stdout: "F1 recorded a_test.go TestA\n", stderr: "", code: 0 }, next: { stdout: "", stderr: "tsp findings: the base commit is gone\n", code: 2 }, check: review } });
+  await failed.run("haz el TSP", []);
+  assert.deepEqual(failed.notes, [{ message: "tsp findings next: tsp findings: the base commit is gone\nreview 3\nF1 open a_test.go TestA", type: "error" }], "the judgment that failed is named, and the review still shows");
+  assert.deepEqual(failed.sent, [], "a loop that cannot judge asks the agent for nothing");
+
+  const truncated = offerHarness({ findings: { record: { stdout: "F1 recorded a_test.go TestA\n", stderr: "", code: 0 }, next: { stdout: "{\"next\": \"fi", stderr: "", code: 0 }, check: review } });
+  await truncated.run("haz el TSP", []);
+  assert.equal(truncated.notes.length, 1, "one notice, not a silent fallback plus a review");
+  assert.equal(truncated.notes[0].type, "error");
+  assert.match(truncated.notes[0].message, /next: \{"next": "fi/, "truncated output is shown, not swallowed");
+  assert.deepEqual(truncated.sent, []);
+});
+
+test("an old binary's usage answer still shows the plain review", async () => {
+  const h = offerHarness({ findings: { record: { stdout: "F1 recorded a_test.go TestA\n", stderr: "", code: 0 }, next: LEGACY_NEXT, check: { stdout: "review 4\n", stderr: "", code: 1 } } });
+  await h.run("haz el TSP", []);
+  assert.deepEqual(h.calls.map((c) => c.argv[1]), ["record", "next", "check", "--template"]);
+  assert.deepEqual(h.notes, [{ message: "review 4", type: "warning" }], "compatibility is not a failure: check's exit still sets the type");
+  assert.deepEqual(h.sent, []);
+});
+
+test("the findings review runs only after a TSP run the user asked for, with UI, not aborted, not opted out", async () => {  for (const [h, prompt, aborted, offered] of [
     [offerHarness({ answer: "No" }), "change a", false, true],
     [offerHarness(), "haz el TSP", true, false],
     [offerHarness({ hasUI: false }), "haz el TSP", false, false],
@@ -640,9 +665,12 @@ test("only a TSP run asks for feedback: an ordinary, aborted, headless, opted-ou
 // for, and each such run is asked for its feedback, not only the phrases that spell "tsp". In Pi such a run is the one
 // whose agent loads the skill, so the run below loads it the way Pi's agent does: reading its SKILL.md.
 const SKILL_READ = ["read", "/home/u/.pi/agent/skills/test-strategy/SKILL.md"];
+// An older binary has never heard of `findings next` and answers with its usage text; exit 2 means "cannot judge"
+// for that answer and for a real failure alike, so the answer is what tells compatibility from a broken judgment.
+const LEGACY_NEXT = { stdout: "", stderr: "Usage of findings:\n  tsp findings record [--cwd <dir>]\n", code: 2 };
 test("a TSP run started by any of the skill's trigger phrases is asked for its feedback", async () => {
   for (const prompt of ["haz el testing", "testea esto", "prueba esto", "test this", "test my change"]) {
-    const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+    const h = offerHarness({ findings: { next: LEGACY_NEXT, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
     await h.run(prompt, [SKILL_READ]);
     assert.equal(h.sent.length, 1, `${prompt}: a TSP run the user asked for must be asked for its feedback`);
     assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings").map((c) => c.argv[1]), ["record", "next", "check"], `${prompt}: and its findings are reviewed`);

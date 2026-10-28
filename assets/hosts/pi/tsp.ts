@@ -349,8 +349,19 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
     try { parsed = JSON.parse(result.stdout.trim()); } catch { parsed = null; }
     const reply = parsed && !Array.isArray(parsed) && typeof parsed === "object" ? parsed as { next?: unknown; review?: unknown; reason?: unknown; message?: unknown; notes?: unknown; tree?: unknown; lines?: unknown } : null;
     if (!reply || typeof reply.next !== "string" || !["fix", "tsp", "done", "stop", "error"].includes(reply.next)) {
+      // `next` documents exit 2 as "cannot judge", and a binary that predates the subcommand answers with its
+      // usage text instead. Both exit 2, so the answer decides: a usage reply is compatibility and keeps the
+      // plain review, while anything else is a judgment that failed, and a failed judgment must never read as
+      // "the loop found nothing to do" and end the loop without a word.
       const review = await run("check");
-      notify(shown(review), REVIEW_TYPE[review.code as 0 | 1] ?? "error");
+      const shownReview = shown(review);
+      if (/^usage (of findings|: tsp)/i.test(result.stderr.trim())) {
+        notify(shownReview, REVIEW_TYPE[review.code as 0 | 1] ?? "error");
+        return NO_STEP;
+      }
+      const diagnostic = [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n");
+      const why = diagnostic === "" ? `tsp findings next: exited ${result.code} with no answer` : `tsp findings next: ${diagnostic}`;
+      notify(notice(`${why}\n${shownReview}`), "error");
       return NO_STEP;
     }
     const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
