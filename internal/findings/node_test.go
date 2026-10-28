@@ -18,7 +18,7 @@ func TestD3NodeOwnBodyFingerprint(t *testing.T) {
 	command(t, d, "git", "commit", "-qm", "node base")
 	source := "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\n// Keeps delimiters safe.\ntest('promise', () => { /* ) */ assert.equal(')', '('); });\n"
 	put(t, d, "promise.test.mjs", source)
-	out, c := findings.Record(d, "node --test promise.test.mjs", wait)
+	out, c := recordSuite(t, d, "node --test promise.test.mjs")
 	if c != 0 {
 		t.Fatalf("record: %d %s", c, out)
 	}

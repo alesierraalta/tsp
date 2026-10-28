@@ -20,7 +20,7 @@ func TestPytestCollectionDiagnosticsAreReported(t *testing.T) {
 	d := repo(t)
 	put(t, d, "test_good.py", "def test_red():\n    assert False\n")
 	put(t, d, "test_bad.py", "import tsp_missing_dependency_123456\n")
-	out, code := findings.Record(d, "", wait)
+	out, code := recordSuite(t, d, "")
 	if code != 0 || !strings.Contains(out, "recorded test_good.py test_good.py::test_red") || !strings.Contains(out, "could not collect: test_bad.py (ModuleNotFoundError: No module named 'tsp_missing_dependency_123456')\n") || strings.Contains(out, "recorded test_bad.py") {
 		t.Fatalf("record: %d %s", code, out)
 	}
@@ -47,7 +47,7 @@ func TestCargoInlineWitnessIsReported(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "promise: inline Rust unit tests are not supported; move the test to tests/") || len(rep.Red) != 0 {
 		t.Fatalf("redcheck: %+v %v", rep, err)
 	}
-	out, code := findings.Record(d, "cargo test", wait)
+	out, code := recordSuite(t, d, "cargo test")
 	if code != 2 || !strings.Contains(out, "inline Rust unit tests are not supported") {
 		t.Fatalf("record: %d %s", code, out)
 	}
@@ -121,7 +121,8 @@ func TestNewRunnerFindingsLifecycle(t *testing.T) {
 			if err != nil || code == 0 || len(outcomes) != 2 || outcomes[failing] || !outcomes[passing] {
 				t.Fatalf("outcomes: %v %d %v %s", outcomes, code, err, out)
 			}
-			out, code = findings.Record(d, suite, wait)
+			commitPending(t, d)
+			out, code = findings.Record(d, suite, "", wait)
 			if code != 0 || !strings.Contains(out, "F1 recorded "+testFile+" "+failing) {
 				t.Fatalf("record: %d %s", code, out)
 			}

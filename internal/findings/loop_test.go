@@ -3,16 +3,12 @@ package findings_test
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
-	"github.com/alesierraalta/tsp/internal/bench"
 	"github.com/alesierraalta/tsp/internal/findings"
-	"os/exec"
-	"strings"
 )
 
 const fixedValue = "package sample\nfunc Value() int { return 1 }\n"
@@ -23,6 +19,7 @@ const promiseLine = "F1 open value_test.go example.invalid/sample.TestPromise �
 // next answers what the TSP loop owes now and fails the test on any other exit code.
 func next(t *testing.T, d string, code int) findings.Answer {
 	t.Helper()
+	commitPending(t, d)
 	a, got := findings.Next(d, wait)
 	if got != code {
 		t.Fatalf("next exit=%d want %d: %+v\n%s", got, code, a, a.Text())
@@ -138,77 +135,35 @@ func TestNextAsksForAFixWhileAWitnessIsOpen(t *testing.T) {
 	if !reflect.DeepEqual(a.Rounds, []findings.RoundCount{{N: 1, New: []string{"F1"}}}) {
 		t.Fatalf("rounds: %+v", a.Rounds)
 	}
-	if loop := storedLoop(t); a.Tree == "" || a.Tree != loop.FixTree || snapshotCommand(t, d, "cat-file", "-t", a.Tree) != "tree" {
-		t.Fatalf("the answer names the tree it judged: %q, loop %+v", a.Tree, loop)
+	if loop := storedLoop(t); a.Tree == "" || a.Tree != loop.FixTree || command(t, d, "git", "cat-file", "-t", a.Tree) != "commit" {
+		t.Fatalf("the answer names the commit it judged: %q, loop %+v", a.Tree, loop)
 	}
 }
 
-// Once everything is settled, source the last round never saw owes another round, aimed at that change. The
-// snapshot naming it is a tree of the fixed working tree; taking it moves no ref, no commit and no index entry.
-func TestNextAsksForTheNextRoundAfterTheFixChangedSource(t *testing.T) {
-	d := openRoundOne(t)
-	put(t, d, "value.go", fixedValue)
-	status := command(t, d, "git", "status", "--porcelain", "--untracked-files=all")
-	refs := command(t, d, "git", "for-each-ref")
-	head := command(t, d, "git", "rev-parse", "HEAD")
-	a := next(t, d, 1)
-	loop := storedLoop(t)
-	since := loop.Rounds[0].End
-	if a.Next != "tsp" || a.Round != 2 || a.Reason != "round 2 of 5 — the last fix changed 1 source file: value.go" ||
-		a.Review != "review 2 on topic: 1 fixed, 0 open, 0 new, 0 regressed" || len(a.Items) != 0 || a.Scope == nil ||
-		a.Scope.Since != since || a.Scope.Base != loop.Pending || !reflect.DeepEqual(a.Scope.Paths, []string{"value.go"}) {
-		t.Fatalf("answer: %+v scope %+v loop %+v", a, a.Scope, loop)
-	}
-	env, e := bench.SnapshotEnv(d)
-	if e != nil {
-		t.Fatal(e)
-	}
-	for i, v := range env {
-		env[i] = "'" + strings.ReplaceAll(v, "'", "'\\''") + "'"
-	}
-	message := fmt.Sprintf("round 2 of 5 of the TSP loop: the last fix changed value.go. Attack that change and everything it affects (`env %s git --literal-pathspecs diff %s %s -- 'value.go'`); do not re-attack code it did not touch. Then run `tsp findings record` and `tsp findings next`.", strings.Join(env, " "), since, loop.Pending)
-	if a.Message != message || a.Text() != "tsp: "+a.Reason+"\n"+a.Review+"\n"+message+"\n" {
-		t.Fatalf("message:\n%s\nwant:\n%s\ntext:\n%s", a.Message, message, a.Text())
-	}
-	if kind := snapshotCommand(t, d, "cat-file", "-t", loop.Pending); kind != "tree" {
-		t.Fatalf("pending snapshot is a %s", kind)
-	}
-	if body := snapshotCommand(t, d, "show", loop.Pending+":value.go"); body+"\n" != fixedValue {
-		t.Fatalf("snapshot holds %q", body)
-	}
-	if command(t, d, "git", "status", "--porcelain", "--untracked-files=all") != status || command(t, d, "git", "for-each-ref") != refs || command(t, d, "git", "rev-parse", "HEAD") != head {
-		t.Fatal("taking the snapshot changed the repository")
-	}
-	again := next(t, d, 1)
-	if again.Next != "tsp" || again.Round != 2 || again.Scope == nil || again.Scope.Base != a.Scope.Base {
-		t.Fatalf("a re-query moved the round: %+v", again)
-	}
-}
-
-// The reason rounds after the first are judged against the snapshot: a test that pins what the fix broke passes on
-// HEAD's code, so judged there it would pin nothing and the regression would go unrecorded.
+// Rounds after the first are judged against the fix commit: a test that pins what the fix broke passes on the base
+// commit's code, so judged there it would pin nothing and the regression would go unrecorded.
 func TestARoundAfterAFixIsJudgedAgainstTheFixedCode(t *testing.T) {
 	d := repo(t)
 	put(t, d, "double.go", "package sample\nfunc Double(x int) int { return 2 * x }\n")
-	command(t, d, "git", "add", ".")
-	command(t, d, "git", "commit", "-qm", "double")
 	put(t, d, "value_test.go", redTest)
+	commitAll(t, d, "round one")
 	record(t, d)
 	next(t, d, 1)
 	put(t, d, "value.go", fixedValue)
 	put(t, d, "double.go", "package sample\nfunc Double(x int) int { return 3 * x }\n")
+	fix := commitAll(t, d, "fix the promise and break the double")
 	a := next(t, d, 1)
-	put(t, d, "double_test.go", "package sample\nimport \"testing\"\n// Doubles its argument.\nfunc TestDouble(t *testing.T) { if Double(2) != 4 { t.Fatal(\"not doubled\") } }\n")
-	// Asking again before the round is recorded must not swallow the round's own test into the base.
-	if again := next(t, d, 1); again.Next != "fix" || len(again.Items) != 1 || again.Items[0].Test != "example.invalid/sample.TestDouble" || storedLoop(t).Pending != a.Scope.Base {
-		t.Fatalf("a re-query hid the unrecorded failure or moved the pending base: %+v", again)
+	if a.Next != "tsp" || a.Scope == nil || a.Scope.Base != fix || a.Tree != fix {
+		t.Fatalf("round two must attack the fix commit: %+v", a)
 	}
-	out, code := findings.Record(d, "", wait)
+	put(t, d, "double_test.go", "package sample\nimport \"testing\"\n// Doubles its argument.\nfunc TestDouble(t *testing.T) { if Double(2) != 4 { t.Fatal(\"not doubled\") } }\n")
+	commitAll(t, d, "pin the regression")
+	out, code := recordSuite(t, d, "")
 	if code != 0 || out != "F2 recorded double_test.go example.invalid/sample.TestDouble\n" {
 		t.Fatalf("record exit=%d: %q", code, out)
 	}
 	loop := storedLoop(t)
-	if len(loop.Rounds) != 2 || loop.Rounds[1].N != 2 || loop.Rounds[1].Base != a.Scope.Base || !reflect.DeepEqual(loop.Rounds[1].New, []string{"F2"}) || loop.Pending != "" {
+	if len(loop.Rounds) != 2 || loop.Rounds[1].N != 2 || loop.Rounds[1].Base != fix || !reflect.DeepEqual(loop.Rounds[1].New, []string{"F2"}) || loop.Pending != "" {
 		t.Fatalf("round 2: %+v", loop)
 	}
 	b := next(t, d, 1)
@@ -222,6 +177,7 @@ func TestARecordAfterTheFixKeepsWhereTheRoundEnded(t *testing.T) {
 	d := openRoundOne(t)
 	end := storedLoop(t).Rounds[0].End
 	put(t, d, "value.go", fixedValue)
+	commitAll(t, d, "fix the promise")
 	record(t, d)
 	if loop := storedLoop(t); len(loop.Rounds) != 1 || loop.Rounds[0].End != end || !reflect.DeepEqual(loop.Rounds[0].New, []string{"F1"}) {
 		t.Fatalf("refresh moved the round: %+v", loop)
@@ -234,9 +190,11 @@ func TestARecordAfterTheFixKeepsWhereTheRoundEnded(t *testing.T) {
 func TestADryRoundOverTheFixedCodeConverges(t *testing.T) {
 	d := openRoundOne(t)
 	put(t, d, "value.go", fixedValue)
+	commitAll(t, d, "fix the promise")
 	next(t, d, 1)
 	put(t, d, "more_test.go", passingTest)
-	if out, code := findings.Record(d, "", wait); code != 1 || out != "no defect witnesses recorded\n" {
+	commitAll(t, d, "passing coverage")
+	if out, code := recordSuite(t, d, ""); code != 1 || out != "no defect witnesses recorded\n" {
 		t.Fatalf("dry round exit=%d: %q", code, out)
 	}
 	a := next(t, d, 0)
@@ -256,7 +214,8 @@ func TestADryRoundOverTheFixedCodeConverges(t *testing.T) {
 func TestARoundThatFindsNothingConvergesAtOnce(t *testing.T) {
 	d := repo(t)
 	put(t, d, "value_test.go", "package sample\nimport \"testing\"\nfunc TestZero(t *testing.T) { if Value() != 0 { t.Fatal(\"no\") } }\n")
-	if out, code := findings.Record(d, "", wait); code != 1 || out != "no defect witnesses recorded\n" {
+	commitAll(t, d, "round one")
+	if out, code := recordSuite(t, d, ""); code != 1 || out != "no defect witnesses recorded\n" {
 		t.Fatalf("record exit=%d: %q", code, out)
 	}
 	a := next(t, d, 0)
@@ -280,65 +239,11 @@ func TestARejectedFindingSettlesWithoutAnotherRound(t *testing.T) {
 	if err := os.Remove(filepath.Join(d, "value_test.go")); err != nil {
 		t.Fatal(err)
 	}
+	commitAll(t, d, "remove the rejected test")
 	a := next(t, d, 0)
 	reason := "converged after 1 round: 0 fixed, 1 rejected, 0 wontfix"
 	message := reason + "\nF1 rejected value_test.go example.invalid/sample.TestPromise — the contract promises 0"
 	if a.Next != "done" || a.Reason != reason || a.Message != withNotes(message, a) || a.Text() != "done: "+reason+"\n"+a.Review+"\n"+message[len(reason)+1:]+"\n"+notesText(a) {
 		t.Fatalf("answer: %+v\n%q", a, a.Text())
 	}
-}
-
-// Five rounds is the cap: a fix after the fifth round has no round left to attack it, so the user decides.
-func TestTheFifthRoundIsTheLast(t *testing.T) {
-	d := repo(t)
-	put(t, d, "value_test.go", "package sample\nimport \"testing\"\nfunc TestAlways(t *testing.T) {}\n")
-	if out, code := findings.Record(d, "", wait); code != 1 {
-		t.Fatalf("record exit=%d: %q", code, out)
-	}
-	path := registryFile(t)
-	var raw map[string]any
-	data, _ := os.ReadFile(path)
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	loop := raw["loop"].(map[string]any)
-	first := loop["rounds"].([]any)[0].(map[string]any)
-	rounds := []any{first}
-	for n := 2; n <= 5; n++ {
-		copied := map[string]any{}
-		for k, v := range first {
-			copied[k] = v
-		}
-		copied["n"] = n
-		rounds = append(rounds, copied)
-	}
-	loop["rounds"] = rounds
-	seeded, _ := json.MarshalIndent(raw, "", "  ")
-	if err := os.WriteFile(path, seeded, 0600); err != nil {
-		t.Fatal(err)
-	}
-	put(t, d, "value.go", fixedValue)
-	a := next(t, d, 3)
-	reason := "5 rounds reached: value.go changed after round 5 and no round has attacked that change"
-	if a.Next != "stop" || a.Round != 5 || a.Reason != reason || a.Message != reason+" — the loop needs the user's decision" || a.Scope != nil || a.Text() != "stop: "+a.Message+"\n" {
-		t.Fatalf("answer: %+v\n%q", a, a.Text())
-	}
-	if !storedLoop(t).Closed {
-		t.Fatal("a stopped loop stays open")
-	}
-}
-
-func snapshotCommand(t *testing.T, d string, args ...string) string {
-	t.Helper()
-	env, e := bench.SnapshotEnv(d)
-	if e != nil {
-		t.Fatal(e)
-	}
-	c := exec.Command("git", append([]string{"-C", d}, args...)...)
-	c.Env = append(os.Environ(), env...)
-	b, e := c.CombinedOutput()
-	if e != nil {
-		t.Fatalf("private git %v: %v: %s", args, e, b)
-	}
-	return strings.TrimSpace(string(b))
 }

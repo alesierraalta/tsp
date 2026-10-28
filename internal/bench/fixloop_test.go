@@ -167,8 +167,8 @@ func TestFixLoopMeasuresBothRoundTwoArms(t *testing.T) {
 			t.Errorf("%s arm test file = %q err %v, want round 1's bytes restored", arm, got, err)
 		}
 		tree, _ := exec.Command("git", "-C", ws, "ls-tree", "-r", "--name-only", "HEAD").CombinedOutput()
-		if strings.Contains(string(tree), "agent_test.go") || !strings.Contains(string(tree), "model/model.go") {
-			t.Errorf("%s arm HEAD tree = %s, want the fix's source and round 1's tests uncommitted", arm, tree)
+		if !strings.Contains(string(tree), "agent_test.go") || !strings.Contains(string(tree), "model/model.go") {
+			t.Errorf("%s arm HEAD tree = %s, want the fix's source and round 1's tests committed, because the loop judges a commit", arm, tree)
 		}
 		src, _ := exec.Command("git", "-C", ws, "show", "HEAD:model/model.go").CombinedOutput()
 		if !strings.Contains(string(src), `return "abc"`) {

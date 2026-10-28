@@ -1190,7 +1190,7 @@ func firstLine(text string) string {
 
 // runRedcheck tells a testing agent which of its new tests pin nothing: they pass on the code HEAD holds.
 func runFindings(args []string) int {
-	const help = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings next [--cwd <dir>] [--timeout <duration>] [--json]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\nSupported suites: go test, pytest, node --test, jest, vitest run (also npx), cargo test.\nCargo witnesses must be in recognized test files (e.g. tests/), not inline unit tests.\nnext answers what the TSP loop owes now: fix, tsp, done or stop (exit 1, 1, 0, 3; 2 cannot judge).\n"
+	const help = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--since <rev>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings next [--cwd <dir>] [--timeout <duration>] [--json]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\nSupported suites: go test, pytest, node --test, jest, vitest run (also npx), cargo test.\nCargo witnesses must be in recognized test files (e.g. tests/), not inline unit tests.\nnext answers what the TSP loop owes now: fix, tsp, done or stop (exit 1, 1, 0, 3; 2 cannot judge).\n"
 	if len(args) == 0 || (args[0] != "record" && args[0] != "check" && args[0] != "next" && args[0] != "verdict") {
 		fmt.Fprint(os.Stderr, help)
 		if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
@@ -1201,7 +1201,7 @@ func runFindings(args []string) int {
 	fs := flag.NewFlagSet("findings "+args[0], flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository")
 	timeout := fs.Duration("timeout", 5*time.Minute, "cap for each suite run")
-	var suite, reason, id, decision string
+	var suite, since, reason, id, decision string
 	flags := args[1:]
 	if args[0] == "verdict" {
 		fs.StringVar(&reason, "reason", "", "why the finding is closed")
@@ -1215,6 +1215,7 @@ func runFindings(args []string) int {
 	}
 	if args[0] == "record" {
 		fs.StringVar(&suite, "suite", "", "test command: go test, pytest, node --test, jest, vitest run (also npx), cargo test (tests/ witnesses, not inline unit tests); default: inferred")
+		fs.StringVar(&since, "since", "", "commit the round starts from; default: the parent of HEAD for a new loop")
 	}
 	if code, ok := parseFlags(fs, flags); !ok {
 		return code
@@ -1240,7 +1241,7 @@ func runFindings(args []string) int {
 	var code int
 	switch args[0] {
 	case "record":
-		out, code = findings.Record(*cwd, suite, *timeout)
+		out, code = findings.Record(*cwd, suite, since, *timeout)
 	case "next":
 		answer, next := findings.Next(*cwd, *timeout)
 		if !asJSON {

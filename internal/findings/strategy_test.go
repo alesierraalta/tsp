@@ -17,7 +17,7 @@ func TestStrategyEscapedLongBranch(t *testing.T) {
 	branch := "review/" + strings.Repeat("界", 60)
 	command(t, d, "git", "switch", "-c", branch)
 	put(t, d, "value_test.go", redTest)
-	if out, code := findings.Record(d, "", wait); code != 0 {
+	if out, code := recordSuite(t, d, ""); code != 0 {
 		t.Fatalf("record on valid branch exit=%d: %s", code, out)
 	}
 	if out, code := findings.Check(d, wait); code != 1 || !strings.Contains(out, "F1 open") {
@@ -53,7 +53,7 @@ func TestPromise(t *testing.T) {
 func TestSecond(t *testing.T) { if Value() != 2 { t.Fatal("second defect") } }
 `
 	put(t, d, "value_test.go", source)
-	if out, code := findings.Record(d, "go test -count=1 -run '^TestPromise$' .", wait); code != 0 {
+	if out, code := recordSuite(t, d, "go test -count=1 -run '^TestPromise$' ."); code != 0 {
 		t.Fatalf("initial record: %d %s", code, out)
 	}
 	gate := t.TempDir()
@@ -79,7 +79,7 @@ func TestSecond(t *testing.T) { if Value() != 2 { t.Fatal("second defect") } }
 	}
 	recorded := make(chan result, 1)
 	go func() {
-		out, code := findings.Record(d, "go test -count=1 -run '^TestSecond$' .", wait)
+		out, code := recordSuite(t, d, "go test -count=1 -run '^TestSecond$' .")
 		recorded <- result{out, code}
 	}()
 	var recording result

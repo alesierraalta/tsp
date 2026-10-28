@@ -161,7 +161,7 @@ func TestATestThatFailsAgainAfterAFixStopsTheLoop(t *testing.T) {
 		t.Fatalf("the repair: %+v", a)
 	}
 	put(t, d, "more_test.go", passingTest)
-	if out, code := findings.Record(d, "", wait); code != 1 {
+	if out, code := recordSuite(t, d, ""); code != 1 {
 		t.Fatalf("dry round: %d %q", code, out)
 	}
 	put(t, d, "double.go", "package sample\nfunc Double(x int) int { return 3 * x }\n")
@@ -203,7 +203,7 @@ func TestAFailingTestFromBeforeTheLoopStillHoldsIt(t *testing.T) {
 func TestASuiteThatCannotRunMustBeFixed(t *testing.T) {
 	d := repo(t)
 	put(t, d, "value_test.go", "package sample\nimport \"testing\"\nfunc TestZero(t *testing.T) { if Value() != 0 { t.Fatal(\"no\") } }\n")
-	if out, code := findings.Record(d, "", wait); code != 1 {
+	if out, code := recordSuite(t, d, ""); code != 1 {
 		t.Fatalf("record: %d %q", code, out)
 	}
 	put(t, d, "value.go", "not valid Go")
@@ -218,7 +218,7 @@ func TestASuiteThatCannotRunMustBeFixed(t *testing.T) {
 func TestUntestedSourceHoldsTheLoopAtTheCheck(t *testing.T) {
 	d := repo(t)
 	put(t, d, "triple.go", "package sample\nfunc Triple(x int) int { return 3 * x }\n")
-	if out, code := findings.Record(d, "", wait); code != 1 || out != "no defect witnesses recorded\n" {
+	if out, code := recordSuite(t, d, ""); code != 1 || out != "no defect witnesses recorded\n" {
 		t.Fatalf("record: %d %q", code, out)
 	}
 	a := next(t, d, 1)
@@ -243,7 +243,7 @@ func TestAComplexChangeHoldsTheLoopAtTheQualityProbe(t *testing.T) {
 	b.WriteString("\treturn -1\n}\n")
 	put(t, d, "grade.go", b.String())
 	put(t, d, "grade_test.go", "package sample\nimport \"testing\"\nfunc TestValueStillZero(t *testing.T) { if Value() != 0 { t.Fatal(\"no\") } }\n")
-	if out, code := findings.Record(d, "", wait); code != 1 {
+	if out, code := recordSuite(t, d, ""); code != 1 {
 		t.Fatalf("record: %d %q", code, out)
 	}
 	a := next(t, d, 1)
@@ -272,7 +272,7 @@ func TestAForbiddenImportHoldsTheLoopAtTheArchProbe(t *testing.T) {
 	})
 	put(t, d, "svc/svc.go", "package svc\n\nimport \"example.com/m/cmd\"\n\n// Name is a service name.\nconst Name = \"svc\" + cmd.Root\n")
 	put(t, d, "svc/svc_test.go", "package svc\nimport \"testing\"\nfunc TestName(t *testing.T) { if Name != \"svcroot\" { t.Fatal(Name) } }\n")
-	if out, code := findings.Record(d, "", wait); code > 1 {
+	if out, code := recordSuite(t, d, ""); code > 1 {
 		t.Fatalf("record: %d %q", code, out)
 	}
 	a := next(t, d, 1)
@@ -289,7 +289,7 @@ func TestAForbiddenImportHoldsTheLoopAtTheArchProbe(t *testing.T) {
 func TestAGateThatCannotMeasureIsNamed(t *testing.T) {
 	d := repo(t)
 	put(t, d, "value_test.go", "package sample\nimport \"testing\"\nfunc TestZero(t *testing.T) { if Value() != 0 { t.Fatal(\"no\") } }\n")
-	if out, code := findings.Record(d, "", wait); code != 1 {
+	if out, code := recordSuite(t, d, ""); code != 1 {
 		t.Fatalf("record: %d %q", code, out)
 	}
 	a := next(t, d, 0)

@@ -51,9 +51,28 @@ func repo(t *testing.T) string {
 	command(t, d, "git", "commit", "-qm", "base")
 	return d
 }
+
+// commitPending commits whatever the test wrote, as the loop's contract asks before it judges.
+func commitPending(t *testing.T, d string) {
+	t.Helper()
+	if strings.TrimSpace(command(t, d, "git", "status", "--porcelain")) == "" {
+		return
+	}
+	command(t, d, "git", "add", "-A")
+	command(t, d, "git", "commit", "-qm", "test round")
+}
+
+// recordSuite commits the round and records it with an explicit suite, as record does for the inferred one.
+func recordSuite(t *testing.T, d, suite string) (string, int) {
+	t.Helper()
+	commitPending(t, d)
+	return findings.Record(d, suite, "", wait)
+}
+
 func record(t *testing.T, d string) {
 	t.Helper()
-	out, code := findings.Record(d, "", wait)
+	commitPending(t, d)
+	out, code := recordSuite(t, d, "")
 	want := "F1 recorded value_test.go example.invalid/sample.TestPromise\n"
 	if code != 0 || out != want {
 		t.Fatalf("record exit=%d: %q want %q", code, out, want)
@@ -97,7 +116,7 @@ func TestD1StorageAndBranchIsolation(t *testing.T) {
 	if out, c := findings.Check(d, wait); c != 2 {
 		t.Fatalf("detached exit=%d: %s", c, out)
 	}
-	if out, c := findings.Record(d, "", wait); c != 2 {
+	if out, c := recordSuite(t, d, ""); c != 2 {
 		t.Fatalf("detached record exit=%d: %s", c, out)
 	}
 }
@@ -132,7 +151,7 @@ func TestD2RecordRefreshesWitness(t *testing.T) {
 	}
 	review(t, d, 2, "open", 0, 1, 0, 0, 0, 1)
 	put(t, d, "value_test.go", redTest+"func TestSecond(t *testing.T) { t.Fatal(\"second defect\") }\n")
-	out, code := findings.Record(d, "", wait)
+	out, code := recordSuite(t, d, "")
 	want := "F1 recorded value_test.go example.invalid/sample.TestPromise\nF2 recorded value_test.go example.invalid/sample.TestSecond\n"
 	if code != 0 || out != want {
 		t.Fatalf("next id: %d %q want %q", code, out, want)
@@ -160,7 +179,7 @@ func TestPythonDecoratorChangeNeedsReview(t *testing.T) {
 	command(t, d, "git", "commit", "-qm", "python defect")
 	source := "import pytest\nfrom value import value\n# Keeps the parameter promise.\n@pytest.mark.parametrize(\n    \"want\", [pytest.param(2, id=\"\"\"expected\"\"\", marks=pytest.mark.skipif(False, reason='''brackets ) ]\n    multiline string'''))],\n)\ndef test_value(want):\n    assert value == want\n"
 	put(t, d, "test_value.py", source)
-	if out, code := findings.Record(d, "python3 -m pytest test_value.py", wait); code != 0 {
+	if out, code := recordSuite(t, d, "python3 -m pytest test_value.py"); code != 0 {
 		t.Fatalf("record: %d %s", code, out)
 	}
 	put(t, d, "value.py", "value = 2\n")
@@ -208,7 +227,7 @@ func TestD5ReportWithoutPromise(t *testing.T) {
 }
 func TestD6ExitCodes(t *testing.T) {
 	d := repo(t)
-	if out, c := findings.Record(d, "", wait); c != 1 {
+	if out, c := recordSuite(t, d, ""); c != 1 {
 		t.Fatalf("no witness: %d %s", c, out)
 	}
 	if out, c := findings.Check(d, wait); c != 0 || out != "no findings recorded on topic\n" {
@@ -233,7 +252,7 @@ func TestD6ExitCodes(t *testing.T) {
 func TestD7UnsupportedRunnerRefused(t *testing.T) {
 	d := repo(t)
 	put(t, d, "value_test.go", redTest)
-	out, c := findings.Record(d, "make test", wait)
+	out, c := recordSuite(t, d, "make test")
 	if c != 2 || !strings.Contains(out, "go test, pytest, node --test") {
 		t.Fatalf("unsupported: %d %q", c, out)
 	}
@@ -258,7 +277,7 @@ func ignoredRepo(t *testing.T) string {
 
 func TestD8IgnoredWitnessIsNeverRecorded(t *testing.T) {
 	d := ignoredRepo(t)
-	out, code := findings.Record(d, "", wait)
+	out, code := recordSuite(t, d, "")
 	want := "skipped results/run/ws/cmd/asdf/main_test.go example.invalid/sample/results/run/ws/cmd/asdf.TestBats: witness under a git-ignored path\nnothing recorded: every witness lives under a path git ignores\n"
 	if code != 1 || out != want {
 		t.Fatalf("ignored witness: exit=%d\n got %q\nwant %q", code, out, want)
@@ -271,7 +290,7 @@ func TestD8IgnoredWitnessIsNeverRecorded(t *testing.T) {
 func TestD9CheckDropsAnIgnoredWitnessAlreadyRecorded(t *testing.T) {
 	d := ignoredRepo(t)
 	put(t, d, "value_test.go", redTest)
-	recorded, c := findings.Record(d, "", wait)
+	recorded, c := recordSuite(t, d, "")
 	if want := "skipped results/run/ws/cmd/asdf/main_test.go example.invalid/sample/results/run/ws/cmd/asdf.TestBats: witness under a git-ignored path\nF1 recorded value_test.go example.invalid/sample.TestPromise\n"; c != 0 || recorded != want {
 		t.Fatalf("record: exit=%d\n got %q\nwant %q", c, recorded, want)
 	}
@@ -346,7 +365,7 @@ func seedIgnoredFinding(t *testing.T) string {
 func TestD11ADroppedWitnessIsAnnouncedOnce(t *testing.T) {
 	d := ignoredRepo(t)
 	put(t, d, "value_test.go", redTest)
-	if out, c := findings.Record(d, "", wait); c != 0 {
+	if out, c := recordSuite(t, d, ""); c != 0 {
 		t.Fatalf("record: %d %q", c, out)
 	}
 	seedIgnoredFinding(t)
@@ -369,7 +388,7 @@ func TestD11ADroppedWitnessIsAnnouncedOnce(t *testing.T) {
 func TestD13AnIgnoredWitnessStillOnDiskIsKept(t *testing.T) {
 	d := ignoredRepo(t)
 	put(t, d, "value_test.go", redTest)
-	if out, c := findings.Record(d, "", wait); c != 0 {
+	if out, c := recordSuite(t, d, ""); c != 0 {
 		t.Fatalf("record: %d %q", c, out)
 	}
 	path := seedIgnoredFinding(t)
@@ -405,7 +424,7 @@ func TestD10ADeletedTrackedWitnessStaysMissing(t *testing.T) {
 	command(t, d, "git", "add", "value_test.go")
 	command(t, d, "git", "commit", "-qm", "the witness")
 	put(t, d, "value_test.go", redTest)
-	if out, c := findings.Record(d, "", wait); c != 0 {
+	if out, c := recordSuite(t, d, ""); c != 0 {
 		t.Fatalf("record: %d %q", c, out)
 	}
 	if e := os.Remove(filepath.Join(d, "value_test.go")); e != nil {
@@ -419,7 +438,7 @@ func TestD10ADeletedTrackedWitnessStaysMissing(t *testing.T) {
 func TestD12AZeroWitnessRunKeepsTheBaselineExit(t *testing.T) {
 	d := repo(t)
 	put(t, d, "value_test.go", "package sample\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if Value() != 0 { t.Fatal(\"changed\") } }\n")
-	if out, code := findings.Record(d, "", wait); code != 1 || out != "no defect witnesses recorded\n" {
+	if out, code := recordSuite(t, d, ""); code != 1 || out != "no defect witnesses recorded\n" {
 		t.Fatalf("record exit=%d: %q", code, out)
 	}
 	if out, code := findings.Check(d, wait); code != 0 || out != "no findings recorded on topic\n" {

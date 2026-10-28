@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/alesierraalta/tsp/internal/arch"
-	"github.com/alesierraalta/tsp/internal/bench"
 	"github.com/alesierraalta/tsp/internal/check"
 	"github.com/alesierraalta/tsp/internal/gate"
 	"github.com/alesierraalta/tsp/internal/quality"
@@ -133,9 +132,9 @@ func roundBase(l *Loop, pin string) string {
 	return l.Rounds[len(l.Rounds)-1].Base
 }
 
-// alive is the loop a record or a next can still follow. Every snapshot it holds outside any ref must still answer
-// from private storage, and a closed loop is no exception: without them a later record cannot judge the round it
-// would continue, so it has to start a new loop instead of failing against a missing base.
+// alive is the loop a record or a next can still follow. Every commit it holds must still be in the repository, and
+// a closed loop is no exception: without them a later record cannot judge the round it would continue, so it has to
+// start a new loop instead of failing against a missing base.
 func alive(top string, l *Loop) (*Loop, bool) {
 	if l == nil {
 		return l, true
@@ -160,13 +159,11 @@ func alive(top string, l *Loop) (*Loop, bool) {
 	return l, true
 }
 
-// lapsed reports whether a recorded revision is no longer readable. A snapshot must answer from private storage;
-// a round based on a commit only needs the repository to still hold that commit.
+// lapsed reports whether a recorded revision is no longer readable. The loop judges commits, so a round is gone when
+// the repository no longer holds its commit: an amended, rebased or pruned round cannot be judged again.
 func lapsed(top, object string) bool {
-	if kind, e := gitIn(top, nil, "cat-file", "-t", object); e == nil && kind == "commit" {
-		return false
-	}
-	return bench.SnapshotAlive(top, object) != nil
+	kind, e := gitIn(top, nil, "cat-file", "-t", object)
+	return e != nil || kind != "commit"
 }
 
 // withSuite adds the suite a record ran to the ones its round already holds.
@@ -179,13 +176,14 @@ func withSuite(suites []string, suite string) []string {
 
 // advance books the round a record belongs to: a new loop when none is open, the round a tsp answer opened, or
 // the round already open, whose end stays where its first record put it so a later fix is never hidden from next.
-func advance(l *Loop, commit, end, suite string, created []string) *Loop {
+// The round's base is the commit it was judged from, so the change it owns is exactly the commit it recorded.
+func advance(l *Loop, base, end, suite string, created []string) *Loop {
 	now := time.Now().UTC()
 	if !open(l) {
-		return &Loop{Rounds: []Round{{N: 1, Base: commit, End: end, New: created, Suites: withSuite(nil, suite), At: now}}}
+		return &Loop{Rounds: []Round{{N: 1, Base: base, End: end, New: created, Suites: withSuite(nil, suite), At: now}}}
 	}
 	if l.Pending != "" {
-		l.Rounds = append(l.Rounds, Round{N: len(l.Rounds) + 1, Base: l.Pending, End: l.Pending, New: created, Suites: withSuite(nil, suite), At: now})
+		l.Rounds = append(l.Rounds, Round{N: len(l.Rounds) + 1, Base: l.Pending, End: end, New: created, Suites: withSuite(nil, suite), At: now})
 		l.Pending = ""
 		return l
 	}
@@ -198,11 +196,7 @@ func advance(l *Loop, commit, end, suite string, created []string) *Loop {
 // gitIn runs git in dir with extra environment and returns its standard output alone.
 func gitIn(dir string, env []string, args ...string) (string, error) {
 	c := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	private, e := bench.SnapshotEnv(dir)
-	if e != nil {
-		return "", e
-	}
-	c.Env = append(os.Environ(), append(private, env...)...)
+	c.Env = append(os.Environ(), env...)
 	var stderr strings.Builder
 	c.Stderr = &stderr
 	b, e := c.Output()
@@ -215,7 +209,24 @@ func gitIn(dir string, env []string, args ...string) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-func snapshot(top string) (string, error) { return bench.Snapshot(top) }
+// head is the commit the loop judges: a round is the change a commit made, never a working tree behind it.
+func head(top string) (string, error) { return gitIn(top, nil, "rev-parse", "HEAD") }
+
+// dirtyTree reports whether the working tree holds anything a commit would not show: a change the loop cannot name
+// is a change no round can judge.
+func dirtyTree(top string) (bool, error) {
+	out, e := gitIn(top, nil, "status", "--porcelain", "-z")
+	if e != nil {
+		return false, e
+	}
+	return out != "", nil
+}
+
+// errDirtyNext refuses to judge a working tree the loop cannot name.
+var errDirtyNext = errors.New("the working tree has uncommitted changes: commit the fix, then run `tsp findings next`")
+
+// errDirtyRecord refuses to record a working tree the loop cannot name.
+var errDirtyRecord = errors.New("the working tree has uncommitted changes: commit them, then record, so the loop judges a commit")
 
 // changedSource names the production source that differs between two trees, as `tsp check` counts it.
 func changedSource(top, from, to string) ([]string, error) {
@@ -245,41 +256,37 @@ func sameLoop(a, b *Loop) bool {
 
 // Next answers what the TSP loop on this branch owes now: fix what is unsettled, run a round over the source the
 // last fix changed, stop and hand the decision to the user, or nothing more because the loop converged.
+// nextJudgedHook is the seam a test uses to move HEAD while next judges its round.
+var nextJudgedHook func(top string)
+
 func Next(dir string, timeout time.Duration) (Answer, int) {
 	r, path, top, e := load(dir)
 	if e != nil {
 		return failed(e)
 	}
 	if _, ok := alive(top, r.Loop); !ok {
-		return failed(errors.New("the TSP loop's private snapshots are unavailable (removed state, or another clone at the same path): run the TSP flow, then `tsp findings record` to start a new loop"))
+		return failed(errors.New("the TSP loop's recorded commits are gone from this repository (amended, rebased, or pruned): run the TSP flow, then `tsp findings record` to start a new loop"))
 	}
 	noRound := fmt.Errorf("no TSP round is open on %s: run the TSP flow, then `tsp findings record`", r.Branch)
 	if r.Loop == nil || len(r.Loop.Rounds) == 0 {
 		return failed(noRound)
 	}
-	snap, e := snapshot(top)
+	if dirty, e := dirtyTree(top); e != nil {
+		return failed(e)
+	} else if dirty {
+		return failed(errDirtyNext)
+	}
+	snap, e := head(top)
 	if e != nil {
 		return failed(e)
 	}
-	env, e := bench.SnapshotEnv(top)
-	if e != nil {
-		return failed(e)
-	}
-	diffGit := "env " + quoted(env) + " git --literal-pathspecs diff"
+	diffGit := "git diff"
 	changed, e := changedSource(top, r.Loop.Rounds[len(r.Loop.Rounds)-1].End, snap)
 	if e != nil {
 		return failed(e)
 	}
-	// Asking again after a tsp answer keeps its base while the source still matches it: the round's own tests may
-	// already sit in the working tree, and a base that swallowed them would leave the round nothing to judge.
-	keep := false
-	if r.Loop.Pending != "" {
-		moved, e := changedSource(top, r.Loop.Pending, snap)
-		if e != nil {
-			return failed(e)
-		}
-		keep = len(moved) == 0
-	}
+	// A round is open at the commit its record judged: until a new commit lands there is nothing new to attack.
+	keep := r.Loop.Pending != "" && r.Loop.Pending == snap
 	var a Answer
 	var notes []string
 	var settled []byte
@@ -290,6 +297,9 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 	j, e := reviewAll(dir, timeout, suites, func(latest *registry, runs map[string]suiteRun, j judged) error {
 		if !sameLoop(latest.Loop, r.Loop) {
 			return errMoved
+		}
+		if nextJudgedHook != nil {
+			nextJudgedHook(top)
 		}
 		if e := unchanged(top, snap); e != nil {
 			return e
@@ -327,16 +337,23 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 	return a, exitOf(a.Next)
 }
 
-var errChanged = errors.New("the working tree changed while next judged it: run next again")
+var errChanged = errors.New("the commit changed while next judged it: run next again")
 
-// unchanged refuses to answer for a tree that moved while next judged it: a suite or a person edited what the
-// answer would be about, so the answer would describe code that no longer exists.
+// unchanged refuses to answer for a commit that moved while next judged it: a suite, a commit or a person changed
+// what the answer would be about, so the answer would describe code that no longer exists.
 func unchanged(top, snap string) error {
-	now, e := snapshot(top)
+	now, e := head(top)
 	if e != nil {
 		return e
 	}
 	if now != snap {
+		return errChanged
+	}
+	dirty, e := dirtyTree(top)
+	if e != nil {
+		return e
+	}
+	if dirty {
 		return errChanged
 	}
 	return nil
@@ -402,7 +419,7 @@ func settle(r *registry, runs map[string]suiteRun, top string) ([]Item, []string
 		}
 		if f.Status != "rejected" {
 			witnesses[key][f.Test] = true
-		} else if file, _, _ := relocate(top, f); file != "" {
+		} else if file, _, _ := relocate(top, f, verdictBody(f)); file != "" {
 			// Its explicit removal item already holds the loop; do not also call it an unrelated failure.
 			witnesses[key][f.Test] = true
 		}
@@ -436,6 +453,17 @@ func settle(r *registry, runs map[string]suiteRun, top string) ([]Item, []string
 	return items, notes
 }
 
+// witnessUnrecorded reports a failing test that lives in a file changed after the commit the round was recorded on:
+// that is the round's own witness, written but not recorded yet, so a fix is not asked for it. A test whose file the
+
+// verdictBody is the body a rejected witness must still have to be suppressed as the loop's own finding.
+func verdictBody(f Finding) string {
+	if f.Verdict == nil {
+		return ""
+	}
+	return f.Verdict.Fingerprint
+}
+
 // unsettled lists the findings a fix still owes: any status but fixed or a verdict, and a rejected finding whose test
 // is still in the suite, since rejecting an invented test ends with removing it.
 func unsettled(fs []Finding, top string) []Item {
@@ -445,7 +473,7 @@ func unsettled(fs []Finding, top string) []Item {
 		case "fixed", "wontfix":
 			continue
 		case "rejected":
-			if file, _, _ := relocate(top, f); file != "" {
+			if file, _, _ := relocate(top, f, ""); file != "" {
 				items = append(items, Item{ID: f.ID, Status: f.Status, File: f.File, Test: f.Test, Detail: "rejected, but its test is still in the suite: remove it"})
 			}
 			continue

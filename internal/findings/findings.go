@@ -157,21 +157,24 @@ var judgedCommitHook func(top string)
 // suiteKey is the identity of a suite command: the same suite rerun with different whitespace or another -count flag
 // is the same witness, while a suite naming another runner, package or flag stays a different one.
 func suiteKey(suite string) string {
-	fields := strings.Fields(suite)
-	kept := fields[:0]
-	for _, field := range fields {
-		if strings.HasPrefix(field, "-count=") {
+	words, e := hookcmd.ShellWords(suite)
+	if e != nil {
+		return "raw:" + suite
+	}
+	kept := words[:0]
+	for _, word := range words {
+		if strings.HasPrefix(word, "-count=") {
 			continue
 		}
-		kept = append(kept, field)
+		kept = append(kept, word)
 	}
-	return strings.Join(kept, " ")
+	return strings.Join(kept, "\x00")
 }
 
 func sameSuite(a, b string) bool { return suiteKey(a) == suiteKey(b) }
 
 // Record records or refreshes precisely the witnesses RedCheck found.
-func Record(dir, suite string, timeout time.Duration) (string, int) {
+func Record(dir, suite, since string, timeout time.Duration) (string, int) {
 	r, path, top, e := load(dir)
 	if e != nil {
 		return failure(e)
@@ -179,14 +182,10 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if suite != "" && !bench.SupportsPerTest(suite) {
 		return failure(unsupportedRunner)
 	}
-	before, e := snapshot(top)
-	if e != nil {
+	if dirty, e := dirtyTree(top); e != nil {
 		return failure(e)
-	}
-	var fresh bool
-	r.Loop, fresh = alive(top, r.Loop)
-	if !fresh || (r.Loop != nil && r.Loop.Closed && !endedOn(r.Loop, before)) {
-		r.Loop = nil
+	} else if dirty {
+		return failure(errDirtyRecord)
 	}
 	// The commit is pinned before judging: a round whose base moved mid-run would compare a fix against code it
 	// never saw, and the gates over the loop's whole change would then read the change as already reviewed.
@@ -194,7 +193,30 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if e != nil {
 		return failure(e)
 	}
+	var fresh bool
+	r.Loop, fresh = alive(top, r.Loop)
+	if !fresh || (r.Loop != nil && r.Loop.Closed && !endedOn(r.Loop, start)) {
+		r.Loop = nil
+	}
 	base := roundBase(r.Loop, start)
+	if since != "" {
+		if _, e := git(top, "rev-parse", "--verify", since+"^{commit}"); e != nil {
+			return failure(fmt.Errorf("--since %s is not a commit: %v", since, e))
+		}
+		base = since
+	}
+	// The round is the change its commit made: a new loop judges that commit against its parent, and a later round
+	// judges the commits after the one it ended on. Several commits at once would hide all but one from the loop.
+	if r.Loop == nil || len(r.Loop.Rounds) == 0 {
+		if parent, e := git(top, "rev-parse", "--verify", base+"^"); e == nil && parent != base {
+			base = parent
+		}
+	}
+	if since != "" {
+		if count, e := git(top, "rev-list", "--count", since+".."+start); e == nil && count != "0" && count != "1" {
+			return failure(fmt.Errorf("--since %s covers %s commits: judge one round at a time", since, count))
+		}
+	}
 	rep, e := bench.RedCheckAt(top, suite, base, timeout)
 	if e != nil {
 		return failure(e)
@@ -207,19 +229,17 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	}
 	var diagnostics strings.Builder
 	if !fresh {
-		diagnostics.WriteString("a new TSP loop starts: the private snapshots of the one that was open are unavailable\n")
+		diagnostics.WriteString("a new TSP loop starts: the recorded commits of the one that was open are gone from this repository\n")
 	}
 	for _, file := range rep.Uncollected {
 		fmt.Fprintf(&diagnostics, "could not collect: %s (%s)\n", file.File, file.Reason)
 	}
 	// Even a round that pins nothing is booked: the loop converges on a round that attacked the current code
 	// and found nothing, so that round has to be on record.
-	end, e := snapshot(top)
-	if e != nil {
+	if dirty, e := dirtyTree(top); e != nil {
 		return failure(e)
-	}
-	if end != before {
-		return failure(errors.New("the working tree changed while record judged it: record it again"))
+	} else if dirty {
+		return failure(errors.New("the working tree changed while the TSP loop judged the round: record it again"))
 	}
 	if judgedCommitHook != nil {
 		judgedCommitHook(top)
@@ -242,10 +262,10 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	}
 	var stillAlive bool
 	r.Loop, stillAlive = alive(top, r.Loop)
-	if !stillAlive || (r.Loop != nil && r.Loop.Closed && !endedOn(r.Loop, before)) {
+	if !stillAlive || (r.Loop != nil && r.Loop.Closed && !endedOn(r.Loop, start)) {
 		r.Loop = nil
 	}
-	if roundBase(r.Loop, start) != base {
+	if open(r.Loop) && roundBase(r.Loop, start) != base {
 		return failure(errors.New("the TSP loop moved while this round was judged: record it again"))
 	}
 	var out, skipped strings.Builder
@@ -270,16 +290,15 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 			created = append(created, r.Findings[index].ID)
 		}
 		f := &r.Findings[index]
-		if f.Suite == "" {
-			f.Suite = rep.Suite
-		}
+		// The newest command is the one the loop runs: re-recording a suite with other iterations refreshes it.
+		f.Suite = rep.Suite
 		f.File, f.Fingerprint, f.Promise, f.Commit, f.Time = file, fingerprint, promise, commit, time.Now().UTC()
 		fmt.Fprintf(&out, "%s recorded %s %s\n", f.ID, f.File, f.Test)
 	}
-	if endedOn(r.Loop, end) {
+	if endedOn(r.Loop, start) {
 		r.Loop.Closed = false
 	}
-	r.Loop = advance(r.Loop, commit, end, rep.Suite, created)
+	r.Loop = advance(r.Loop, base, start, rep.Suite, created)
 	if e = save(r, path); e != nil {
 		return failure(e)
 	}
@@ -424,7 +443,11 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 		}
 		file, fingerprint, _ := locate(top, f.Test, []string{f.File})
 		if file == "" {
-			file, fingerprint, _ = relocate(top, *f)
+			want := ""
+			if f.Verdict != nil {
+				want = f.Verdict.Fingerprint
+			}
+			file, fingerprint, _ = relocate(top, *f, want)
 		}
 		suffix := ""
 		if f.Verdict != nil {
@@ -446,7 +469,7 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 		previous := f.Status
 		passed, ran := result.tests[f.Test]
 		if file == "" && ran {
-			file, fingerprint, _ = relocate(top, *f)
+			file, fingerprint, _ = relocate(top, *f, "")
 			if file != "" {
 				f.File = file
 			}
