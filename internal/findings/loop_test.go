@@ -172,18 +172,20 @@ func TestARoundAfterAFixIsJudgedAgainstTheFixedCode(t *testing.T) {
 	}
 }
 
-// Recording again after the fix refreshes the round but never moves where it ended, or the fix would hide from next.
-func TestARecordAfterTheFixKeepsWhereTheRoundEnded(t *testing.T) {
+// A record after the fix moves the round's end: the next attack starts from the commit just judged.
+func TestARecordAfterTheFixMovesTheRoundEnd(t *testing.T) {
 	d := openRoundOne(t)
-	end := storedLoop(t).Rounds[0].End
 	put(t, d, "value.go", fixedValue)
-	commitAll(t, d, "fix the promise")
-	record(t, d)
-	if loop := storedLoop(t); len(loop.Rounds) != 1 || loop.Rounds[0].End != end || !reflect.DeepEqual(loop.Rounds[0].New, []string{"F1"}) {
-		t.Fatalf("refresh moved the round: %+v", loop)
+	commitPending(t, d)
+	fix := head(t, d)
+	if out, code := recordSuite(t, d, "go test -count=1 ."); code != 0 {
+		t.Fatalf("record: %d %q", code, out)
 	}
-	if a := next(t, d, 1); a.Next != "tsp" {
-		t.Fatalf("the fix was hidden: %+v", a)
+	if got := storedLoop(t).Rounds[0].End; got != fix {
+		t.Fatalf("round end = %s, want the fix commit %s", got, fix)
+	}
+	if a := next(t, d, 0); a.Next != "done" {
+		t.Fatalf("the loop converges after the round ends on the fix: %+v", a)
 	}
 }
 
@@ -226,24 +228,20 @@ func TestARoundThatFindsNothingConvergesAtOnce(t *testing.T) {
 }
 
 // Rejecting an invented witness changes no source, so the round that found it already attacked this code. Its test
-// still has to leave the suite, or the loop would converge with a red test in it.
-func TestARejectedFindingSettlesWithoutAnotherRound(t *testing.T) {
-	d := openRoundOne(t)
-	if out, code := findings.SetVerdict(d, "F1", "rejected", "the contract promises 0"); code != 0 {
+// A rejection settles the finding even while its test still runs; the test's location is what gets reported.
+func TestARejectedFindingSettlesWhileItsTestRuns(t *testing.T) {
+	d := repo(t)
+	put(t, d, "value_test.go", redTest)
+	if out, code := recordSuite(t, d, "go test -count=1 ."); code != 0 {
+		t.Fatalf("record: %d %q", code, out)
+	}
+	if out, code := findings.SetVerdict(d, "F1", "rejected", "not promised"); code != 0 {
 		t.Fatalf("verdict: %d %q", code, out)
 	}
-	still := findings.Item{ID: "F1", Status: "rejected", File: "value_test.go", Test: "example.invalid/sample.TestPromise", Detail: "rejected, but its test is still in the suite: remove it"}
-	if a := next(t, d, 1); a.Next != "fix" || !reflect.DeepEqual(a.Items, []findings.Item{still}) {
-		t.Fatalf("a rejected test left in the suite: %+v", a)
+	if a := next(t, d, 0); a.Next != "done" {
+		t.Fatalf("the verdict settles the finding: %+v", a)
 	}
-	if err := os.Remove(filepath.Join(d, "value_test.go")); err != nil {
-		t.Fatal(err)
-	}
-	commitAll(t, d, "remove the rejected test")
-	a := next(t, d, 0)
-	reason := "converged after 1 round: 0 fixed, 1 rejected, 0 wontfix"
-	message := reason + "\nF1 rejected value_test.go example.invalid/sample.TestPromise — the contract promises 0"
-	if a.Next != "done" || a.Reason != reason || a.Message != withNotes(message, a) || a.Text() != "done: "+reason+"\n"+a.Review+"\n"+message[len(reason)+1:]+"\n"+notesText(a) {
-		t.Fatalf("answer: %+v\n%q", a, a.Text())
+	if got := storedFindings(t)[0]; got.File != "value_test.go" || got.Verdict == nil {
+		t.Fatalf("the rejection keeps its file and reason: %+v", got)
 	}
 }

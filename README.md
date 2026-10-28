@@ -723,7 +723,7 @@ own tests pin anything. This repository runs it on its own pull requests in
 ## Skills
 
 The embedded skills live under `assets/skills/`. `test-strategy` is the entry point ("haz test
-strategy"; aliases: "haz test stragety" and "haz el testing"): it finds the defects the existing green
+strategy"; aliases: "haz test strategy" and "haz el testing"): it finds the defects the existing green
 suite misses and leaves one test per defect in the repository's own suite, red on today's code and
 green once the defect is fixed. It probes each promise across its input classes, writes family-wide
 promises (order, round trip, never panics) as property tests with generated inputs, and builds inputs
@@ -795,6 +795,9 @@ on the model's judgement. Run it after `tsp findings record`:
   repository that declares `gate never` or carries `.no-testing-gate` is not held to it),
   `tsp probe quality` on non-test files, and `tsp probe arch`. A gate that cannot measure is listed
   as not measured, never as clean.
+- a suite that could not collect every input leaves the change it never reached unjudged: `next`
+  names it in the notes (`not measured: no recorded suite collected <file>: <reason>`) and answers
+  with an `unjudged` item, so the loop stays open instead of claiming convergence.
 - `stop` (exit 3): the loop hands the decision to the user — 5 rounds ran and the last fix is still
   unattacked, two fixes in a row settled nothing, a finding regressed twice, or a test failed again
   after a fix had made it pass.

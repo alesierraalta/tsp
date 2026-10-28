@@ -156,6 +156,25 @@ var judgedCommitHook func(top string)
 
 // suiteKey is the identity of a suite command: the same suite rerun with different whitespace or another -count flag
 // is the same witness, while a suite naming another runner, package or flag stays a different one.
+// sameWitness keeps a finding attached to the test it was recorded for: the same file, or the same body
+// once that file is gone. A test that merely borrows the name is a finding of its own.
+func sameWitness(f Finding, file, fingerprint string) bool {
+	if file != "" && f.File != "" && f.File == file {
+		// The same file and name is the same witness: editing it in place refreshes the finding.
+		return true
+	}
+	// A witness that moved keeps its identity only while its body is unchanged.
+	return f.Fingerprint != "" && fingerprint != "" && f.Fingerprint == fingerprint
+}
+
+func uncollectedLines(in []bench.Uncollected) []string {
+	out := make([]string, 0, len(in))
+	for _, u := range in {
+		out = append(out, fmt.Sprintf("%s: %s", u.File, u.Reason))
+	}
+	return out
+}
+
 func suiteKey(suite string) string {
 	words, e := hookcmd.ShellWords(suite)
 	if e != nil {
@@ -278,7 +297,7 @@ func Record(dir, suite, since string, timeout time.Duration) (string, int) {
 		}
 		index := -1
 		for i := range r.Findings {
-			if r.Findings[i].Test == name && sameSuite(r.Findings[i].Suite, rep.Suite) {
+			if r.Findings[i].Test == name && sameSuite(r.Findings[i].Suite, rep.Suite) && sameWitness(r.Findings[i], file, fingerprint) {
 				index = i
 				break
 			}
@@ -298,7 +317,7 @@ func Record(dir, suite, since string, timeout time.Duration) (string, int) {
 	if endedOn(r.Loop, start) {
 		r.Loop.Closed = false
 	}
-	r.Loop = advance(r.Loop, base, start, rep.Suite, created)
+	r.Loop = advance(r.Loop, base, start, rep.Suite, created, uncollectedLines(rep.Uncollected))
 	if e = save(r, path); e != nil {
 		return failure(e)
 	}
@@ -454,6 +473,10 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 			// A verdict holds while its test is unchanged, and once the test is gone: removing an invented test is
 			// how a rejection ends, whichever of the two came first.
 			if fingerprint == f.Verdict.Fingerprint || file == "" {
+				if file != "" {
+					// The rejection names where the test lives now, not where it was recorded.
+					f.File = file
+				}
 				f.Status, f.Reviewed = f.Verdict.Decision, true
 				writeLine(*f, f.Verdict.Reason, "")
 				continue
@@ -492,7 +515,7 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 			need++
 		case !passed:
 			if f.WasFixed {
-				if previous != "regressed" {
+				if previous == "fixed" {
 					f.Regressions++
 				}
 				f.Status = "regressed"

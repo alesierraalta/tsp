@@ -70,8 +70,10 @@ type Round struct {
 	End string   `json:"end"`
 	New []string `json:"new"`
 	// Suites are every suite a record of this round ran: next reruns all of them.
-	Suites []string  `json:"suites,omitempty"`
-	At     time.Time `json:"recorded_at"`
+	Suites []string `json:"suites,omitempty"`
+	// Uncollected names the changed inputs no recorded suite reached: the round judged around them.
+	Uncollected []string  `json:"uncollected,omitempty"`
+	At          time.Time `json:"recorded_at"`
 }
 
 // Answer is what the loop owes now, as next prints it.
@@ -177,19 +179,25 @@ func withSuite(suites []string, suite string) []string {
 // advance books the round a record belongs to: a new loop when none is open, the round a tsp answer opened, or
 // the round already open, whose end stays where its first record put it so a later fix is never hidden from next.
 // The round's base is the commit it was judged from, so the change it owns is exactly the commit it recorded.
-func advance(l *Loop, base, end, suite string, created []string) *Loop {
+func advance(l *Loop, base, end, suite string, created, uncollected []string) *Loop {
 	now := time.Now().UTC()
 	if !open(l) {
-		return &Loop{Rounds: []Round{{N: 1, Base: base, End: end, New: created, Suites: withSuite(nil, suite), At: now}}}
+		return &Loop{Rounds: []Round{{N: 1, Base: base, End: end, New: created, Suites: withSuite(nil, suite), Uncollected: uncollected, At: now}}}
 	}
 	if l.Pending != "" {
-		l.Rounds = append(l.Rounds, Round{N: len(l.Rounds) + 1, Base: l.Pending, End: end, New: created, Suites: withSuite(nil, suite), At: now})
+		l.Rounds = append(l.Rounds, Round{N: len(l.Rounds) + 1, Base: l.Pending, End: end, New: created, Suites: withSuite(nil, suite), Uncollected: uncollected, At: now})
 		l.Pending = ""
 		return l
 	}
 	last := &l.Rounds[len(l.Rounds)-1]
 	last.New = append(last.New, created...)
 	last.Suites = withSuite(last.Suites, suite)
+	last.Uncollected = uncollected
+	if end != "" {
+		// The round's verdict moves its end: the next attack starts from the commit that was just judged,
+		// or the loop would keep attacking the same change forever.
+		last.End = end
+	}
 	return l
 }
 
@@ -289,6 +297,11 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 	keep := r.Loop.Pending != "" && r.Loop.Pending == snap
 	var a Answer
 	var notes []string
+	if n := len(r.Loop.Rounds); n > 0 {
+		if missed := r.Loop.Rounds[n-1].Uncollected; len(missed) > 0 {
+			notes = append(notes, "not measured: no recorded suite collected "+strings.Join(missed, ", "))
+		}
+	}
 	var settled []byte
 	suites := make([]string, 0, len(r.Loop.Rounds))
 	for _, round := range r.Loop.Rounds {
@@ -306,7 +319,19 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 		}
 		var items []Item
 		latest.Loop.Closed = false
-		items, notes = settle(latest, runs, top)
+		var settleNotes []string
+		items, settleNotes = settle(latest, runs, top)
+		if n := len(latest.Loop.Rounds); n > 0 {
+			if missed := latest.Loop.Rounds[n-1].Uncollected; len(missed) > 0 {
+				// A round whose suite could not collect every input judged around what it could not reach.
+				file, reason := missed[0], ""
+				if i := strings.Index(file, ": "); i >= 0 {
+					file, reason = file[:i], file[i+2:]
+				}
+				items = append(items, Item{Status: "unjudged", File: file, Detail: "the changed inputs were not judged (" + reason + ")"})
+			}
+		}
+		notes = append(notes, settleNotes...)
 		a = decide(latest, items, notes, snap, changed, keep, nil, diffGit)
 		conclude(latest.Loop, &a, j)
 		settled, _ = json.Marshal(latest.Loop)
@@ -473,9 +498,7 @@ func unsettled(fs []Finding, top string) []Item {
 		case "fixed", "wontfix":
 			continue
 		case "rejected":
-			if file, _, _ := relocate(top, f, ""); file != "" {
-				items = append(items, Item{ID: f.ID, Status: f.Status, File: f.File, Test: f.Test, Detail: "rejected, but its test is still in the suite: remove it"})
-			}
+			// The user's verdict settles the finding; where its test lives is a note, not a debt.
 			continue
 		case "":
 			f.Status = "open"
@@ -535,6 +558,10 @@ func runGates(top, base, snap string) gateReport {
 func decide(r *registry, items []Item, notes []string, snap string, changed []string, keep bool, gates *gateReport, diffGit string) Answer {
 	l := r.Loop
 	a := Answer{Round: len(l.Rounds), MaxRounds: MaxRounds, Items: items, Rounds: counts(l), Notes: append([]string{}, notes...), Tree: snap}
+	if a.Items == nil {
+		// `items` is a list in the JSON contract: a converged round carries [] and never null.
+		a.Items = []Item{}
+	}
 	switch {
 	case len(items) > 0:
 		a = settleOrStop(r, a, snap)

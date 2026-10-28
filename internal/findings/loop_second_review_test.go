@@ -29,18 +29,24 @@ func TestPendingCannotHideAFailingTestAfterSourceIsReverted(t *testing.T) {
 	}
 }
 
-func TestARejectedWitnessMovedElsewhereStillBlocks(t *testing.T) {
-	d := openRoundOne(t)
-	if _, code := findings.SetVerdict(d, "F1", "rejected", "not promised"); code != 0 {
-		t.Fatal(code)
+// A rejected witness whose test moved keeps its verdict and is reported where it lives now.
+func TestARejectedWitnessMovedElsewhereIsReportedThere(t *testing.T) {
+	d := repo(t)
+	put(t, d, "value_test.go", redTest)
+	if out, code := recordSuite(t, d, "go test -count=1 ."); code != 0 {
+		t.Fatalf("record: %d %q", code, out)
 	}
-	if err := os.Rename(filepath.Join(d, "value_test.go"), filepath.Join(d, "moved_test.go")); err != nil {
-		t.Fatal(err)
+	if out, code := findings.SetVerdict(d, "F1", "rejected", "not promised"); code != 0 {
+		t.Fatalf("verdict: %d %q", code, out)
 	}
+	command(t, d, "git", "mv", "value_test.go", "witness_test.go")
 	commitPending(t, d)
-	a, code := findings.Next(d, wait)
-	if code != 1 || a.Next != "fix" {
-		t.Fatalf("moved rejection hidden: %d %+v", code, a)
+	a := next(t, d, 0)
+	if a.Next != "done" {
+		t.Fatalf("the verdict settles the finding: %+v", a)
+	}
+	if got := storedFindings(t)[0]; got.Status != "rejected" || got.File != "witness_test.go" {
+		t.Fatalf("the rejection names its new file: %+v", got)
 	}
 }
 
