@@ -9,7 +9,10 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/alesierraalta/tsp/internal/bench"
 	"github.com/alesierraalta/tsp/internal/findings"
+	"os/exec"
+	"strings"
 )
 
 const fixedValue = "package sample\nfunc Value() int { return 1 }\n"
@@ -135,7 +138,7 @@ func TestNextAsksForAFixWhileAWitnessIsOpen(t *testing.T) {
 	if !reflect.DeepEqual(a.Rounds, []findings.RoundCount{{N: 1, New: []string{"F1"}}}) {
 		t.Fatalf("rounds: %+v", a.Rounds)
 	}
-	if loop := storedLoop(t); a.Tree == "" || a.Tree != loop.FixTree || command(t, d, "git", "cat-file", "-t", a.Tree) != "tree" {
+	if loop := storedLoop(t); a.Tree == "" || a.Tree != loop.FixTree || snapshotCommand(t, d, "cat-file", "-t", a.Tree) != "tree" {
 		t.Fatalf("the answer names the tree it judged: %q, loop %+v", a.Tree, loop)
 	}
 }
@@ -156,14 +159,21 @@ func TestNextAsksForTheNextRoundAfterTheFixChangedSource(t *testing.T) {
 		a.Scope.Since != since || a.Scope.Base != loop.Pending || !reflect.DeepEqual(a.Scope.Paths, []string{"value.go"}) {
 		t.Fatalf("answer: %+v scope %+v loop %+v", a, a.Scope, loop)
 	}
-	message := fmt.Sprintf("round 2 of 5 of the TSP loop: the last fix changed value.go. Attack that change and everything it affects (`git diff %s %s -- 'value.go'`); do not re-attack code it did not touch. Then run `tsp findings record` and `tsp findings next`.", since, loop.Pending)
+	env, e := bench.SnapshotEnv(d)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for i, v := range env {
+		env[i] = "'" + strings.ReplaceAll(v, "'", "'\\''") + "'"
+	}
+	message := fmt.Sprintf("round 2 of 5 of the TSP loop: the last fix changed value.go. Attack that change and everything it affects (`env %s git --literal-pathspecs diff %s %s -- 'value.go'`); do not re-attack code it did not touch. Then run `tsp findings record` and `tsp findings next`.", strings.Join(env, " "), since, loop.Pending)
 	if a.Message != message || a.Text() != "tsp: "+a.Reason+"\n"+a.Review+"\n"+message+"\n" {
 		t.Fatalf("message:\n%s\nwant:\n%s\ntext:\n%s", a.Message, message, a.Text())
 	}
-	if kind := command(t, d, "git", "cat-file", "-t", loop.Pending); kind != "tree" {
+	if kind := snapshotCommand(t, d, "cat-file", "-t", loop.Pending); kind != "tree" {
 		t.Fatalf("pending snapshot is a %s", kind)
 	}
-	if body := command(t, d, "git", "show", loop.Pending+":value.go"); body+"\n" != fixedValue {
+	if body := snapshotCommand(t, d, "show", loop.Pending+":value.go"); body+"\n" != fixedValue {
 		t.Fatalf("snapshot holds %q", body)
 	}
 	if command(t, d, "git", "status", "--porcelain", "--untracked-files=all") != status || command(t, d, "git", "for-each-ref") != refs || command(t, d, "git", "rev-parse", "HEAD") != head {
@@ -190,8 +200,8 @@ func TestARoundAfterAFixIsJudgedAgainstTheFixedCode(t *testing.T) {
 	a := next(t, d, 1)
 	put(t, d, "double_test.go", "package sample\nimport \"testing\"\n// Doubles its argument.\nfunc TestDouble(t *testing.T) { if Double(2) != 4 { t.Fatal(\"not doubled\") } }\n")
 	// Asking again before the round is recorded must not swallow the round's own test into the base.
-	if again := next(t, d, 1); again.Next != "tsp" || again.Scope == nil || again.Scope.Base != a.Scope.Base {
-		t.Fatalf("a re-query after the round's test moved the base: %+v", again)
+	if again := next(t, d, 1); again.Next != "fix" || len(again.Items) != 1 || again.Items[0].Test != "example.invalid/sample.TestDouble" || storedLoop(t).Pending != a.Scope.Base {
+		t.Fatalf("a re-query hid the unrecorded failure or moved the pending base: %+v", again)
 	}
 	out, code := findings.Record(d, "", wait)
 	if code != 0 || out != "F2 recorded double_test.go example.invalid/sample.TestDouble\n" {
@@ -316,4 +326,19 @@ func TestTheFifthRoundIsTheLast(t *testing.T) {
 	if !storedLoop(t).Closed {
 		t.Fatal("a stopped loop stays open")
 	}
+}
+
+func snapshotCommand(t *testing.T, d string, args ...string) string {
+	t.Helper()
+	env, e := bench.SnapshotEnv(d)
+	if e != nil {
+		t.Fatal(e)
+	}
+	c := exec.Command("git", append([]string{"-C", d}, args...)...)
+	c.Env = append(os.Environ(), env...)
+	b, e := c.CombinedOutput()
+	if e != nil {
+		t.Fatalf("private git %v: %v: %s", args, e, b)
+	}
+	return strings.TrimSpace(string(b))
 }

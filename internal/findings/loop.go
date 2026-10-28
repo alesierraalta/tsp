@@ -100,6 +100,7 @@ type Answer struct {
 type Item struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
+	Suite  string `json:"suite,omitempty"`
 	File   string `json:"file"`
 	Test   string `json:"test"`
 	Detail string `json:"detail"`
@@ -120,12 +121,11 @@ type RoundCount struct {
 
 func open(l *Loop) bool { return l != nil && !l.Closed && len(l.Rounds) > 0 }
 
-// roundBase is the code a record judges its tests against: the pending tree once next has answered tsp, and the
-// open round's own base for every later record of a round after the first. Round 1 is judged against HEAD on every
-// record, exactly as a record outside any loop always was.
+// roundBase retains the attacked base even when a duplicate record follows a terminal answer.
+// Record starts a fresh loop first when a closed loop's inputs have changed.
 func roundBase(l *Loop) string {
 	switch {
-	case !open(l):
+	case l == nil || len(l.Rounds) == 0:
 		return "HEAD"
 	case l.Pending != "":
 		return l.Pending
@@ -172,7 +172,7 @@ func advance(l *Loop, commit, end, suite string, created []string) *Loop {
 		return &Loop{Rounds: []Round{{N: 1, Base: commit, End: end, New: created, Suites: withSuite(nil, suite), At: now}}}
 	}
 	if l.Pending != "" {
-		l.Rounds = append(l.Rounds, Round{N: len(l.Rounds) + 1, Base: l.Pending, End: end, New: created, Suites: withSuite(nil, suite), At: now})
+		l.Rounds = append(l.Rounds, Round{N: len(l.Rounds) + 1, Base: l.Pending, End: l.Pending, New: created, Suites: withSuite(nil, suite), At: now})
 		l.Pending = ""
 		return l
 	}
@@ -185,73 +185,24 @@ func advance(l *Loop, commit, end, suite string, created []string) *Loop {
 // gitIn runs git in dir with extra environment and returns its standard output alone.
 func gitIn(dir string, env []string, args ...string) (string, error) {
 	c := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	c.Env = append(os.Environ(), env...)
+	private, e := bench.SnapshotEnv(dir)
+	if e != nil {
+		return "", e
+	}
+	c.Env = append(os.Environ(), append(private, env...)...)
 	var stderr strings.Builder
 	c.Stderr = &stderr
 	b, e := c.Output()
 	if e != nil {
 		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(stderr.String()))
 	}
+	if strings.ContainsRune(string(b), 0) {
+		return string(b), nil
+	}
 	return strings.TrimSpace(string(b)), nil
 }
 
-// snapshot writes the working tree as a git tree object: tracked files as they are now, and an untracked file only
-// when the loop reads it (source, a test or test data), so a credentials file or a log nobody can read never reaches
-// the object store. It goes through a copy of the index, so it moves no ref, makes no commit and leaves the real
-// index as it was; the objects it writes are unreferenced, and git's own garbage collection removes them.
-func snapshot(top string) (string, error) {
-	index, e := gitIn(top, nil, "rev-parse", "--path-format=absolute", "--git-path", "index")
-	if e != nil {
-		return "", e
-	}
-	tmp, e := os.CreateTemp("", "tsp-snapshot-")
-	if e != nil {
-		return "", e
-	}
-	name := tmp.Name()
-	tmp.Close()
-	defer os.Remove(name)
-	info, e := os.Stat(index)
-	switch {
-	case e == nil:
-		// The copy keeps the index's own mtime: git trusts a file's stat only when the file is older than its
-		// index, so a copy stamped now would read an edit made in the second the index was written as no change.
-		var data []byte
-		if data, e = os.ReadFile(index); e == nil {
-			if e = os.WriteFile(name, data, 0600); e == nil {
-				e = os.Chtimes(name, info.ModTime(), info.ModTime())
-			}
-		}
-	case errors.Is(e, os.ErrNotExist):
-		// No index yet: git starts one of its own, but not from an empty file.
-		e = os.Remove(name)
-	}
-	if e != nil {
-		return "", e
-	}
-	env := []string{"GIT_INDEX_FILE=" + name}
-	if _, e = gitIn(top, env, "add", "-u"); e != nil {
-		return "", e
-	}
-	out, e := gitIn(top, env, "ls-files", "-z", "--others", "--exclude-standard")
-	if e != nil {
-		return "", e
-	}
-	var read []string
-	for _, p := range strings.Split(out, "\x00") {
-		if p != "" && (gate.IsProductionSource(p) || bench.IsTestFile(p) || strings.Contains("/"+p, "/testdata/")) {
-			read = append(read, p)
-		}
-	}
-	for len(read) > 0 {
-		n := min(len(read), 500)
-		if _, e = gitIn(top, env, append([]string{"add", "--"}, read[:n]...)...); e != nil {
-			return "", e
-		}
-		read = read[n:]
-	}
-	return gitIn(top, env, "write-tree")
-}
+func snapshot(top string) (string, error) { return bench.Snapshot(top) }
 
 // changedSource names the production source that differs between two trees, as `tsp check` counts it.
 func changedSource(top, from, to string) ([]string, error) {
@@ -287,7 +238,7 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 		return failed(e)
 	}
 	if _, ok := alive(top, r.Loop); !ok {
-		return failed(errors.New("the TSP loop's snapshots are gone from this repository (git gc, or another clone at the same path): run the TSP flow, then `tsp findings record` to start a new loop"))
+		return failed(errors.New("the TSP loop's private snapshots are unavailable (removed state, or another clone at the same path): run the TSP flow, then `tsp findings record` to start a new loop"))
 	}
 	noRound := fmt.Errorf("no TSP round is open on %s: run the TSP flow, then `tsp findings record`", r.Branch)
 	if r.Loop == nil || len(r.Loop.Rounds) == 0 {
@@ -297,14 +248,11 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 	if e != nil {
 		return failed(e)
 	}
-	if r.Loop.Closed {
-		// The end of a loop is repeated while the tree is the one it judged, so a host and an agent that both ask
-		// see the same end; any other tree holds a change no round has attacked.
-		if f := r.Loop.Final; f != nil && f.Tree == snap {
-			return *f, exitOf(f.Next)
-		}
-		return failed(noRound)
+	env, e := bench.SnapshotEnv(top)
+	if e != nil {
+		return failed(e)
 	}
+	diffGit := "env " + quoted(env) + " git --literal-pathspecs diff"
 	changed, e := changedSource(top, r.Loop.Rounds[len(r.Loop.Rounds)-1].End, snap)
 	if e != nil {
 		return failed(e)
@@ -334,8 +282,9 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 			return e
 		}
 		var items []Item
+		latest.Loop.Closed = false
 		items, notes = settle(latest, runs, top)
-		a = decide(latest, items, notes, snap, changed, keep, nil)
+		a = decide(latest, items, notes, snap, changed, keep, nil, diffGit)
 		conclude(latest.Loop, &a, j)
 		settled, _ = json.Marshal(latest.Loop)
 		return nil
@@ -354,7 +303,7 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 			if e := unchanged(top, snap); e != nil {
 				return e
 			}
-			a = decide(latest, g.items, append(notes, g.notes...), snap, changed, keep, &g)
+			a = decide(latest, g.items, append(notes, g.notes...), snap, changed, keep, &g, diffGit)
 			conclude(latest.Loop, &a, j)
 			return nil
 		})
@@ -437,7 +386,12 @@ func settle(r *registry, runs map[string]suiteRun, top string) ([]Item, []string
 		if witnesses[f.Suite] == nil {
 			witnesses[f.Suite] = map[string]bool{}
 		}
-		witnesses[f.Suite][f.Test] = true
+		if f.Status != "rejected" {
+			witnesses[f.Suite][f.Test] = true
+		} else if file, _, _ := relocate(top, f); file != "" {
+			// Its explicit removal item already holds the loop; do not also call it an unrelated failure.
+			witnesses[f.Suite][f.Test] = true
+		}
 		if passed, ran := runs[f.Suite].tests[f.Test]; f.Status == "wontfix" && ran && !passed && f.Verdict != nil {
 			notes = append(notes, fmt.Sprintf("kept failing by the user's wontfix: %s %s %s — %s", f.ID, f.File, f.Test, f.Verdict.Reason))
 		}
@@ -454,18 +408,15 @@ func settle(r *registry, runs map[string]suiteRun, top string) ([]Item, []string
 			continue
 		}
 		for name, passed := range run.tests {
-			if key := itemKey(Item{Status: "failing", Test: name}); passed && l.StartedFailing[key] > 0 {
+			if key := itemKey(Item{Status: "failing", Suite: suite, Test: name}); passed && l.StartedFailing[key] > 0 {
 				if l.Recovered == nil {
 					l.Recovered = map[string]bool{}
 				}
 				l.Recovered[key] = true
 			}
 		}
-		if l.Pending != "" {
-			continue
-		}
 		for _, name := range failingTests(run, witnesses[suite]) {
-			items = append(items, Item{Status: "failing", Test: name, Detail: "fails now and is not one of the loop's findings"})
+			items = append(items, Item{Status: "failing", Suite: suite, Test: name, Detail: "fails now and is not one of the loop's findings"})
 		}
 	}
 	return items, notes
@@ -480,7 +431,7 @@ func unsettled(fs []Finding, top string) []Item {
 		case "fixed", "wontfix":
 			continue
 		case "rejected":
-			if file, _, _ := locate(top, f.Test, []string{f.File}); file != "" {
+			if file, _, _ := relocate(top, f); file != "" {
 				items = append(items, Item{ID: f.ID, Status: f.Status, File: f.File, Test: f.Test, Detail: "rejected, but its test is still in the suite: remove it"})
 			}
 			continue
@@ -539,7 +490,7 @@ func runGates(top, base, snap string) gateReport {
 
 // decide picks the answer and books it in the registry's loop. With nothing unsettled and nothing changed since the
 // last round it answers nothing until the gates have run (gates is nil): only they can call the loop converged.
-func decide(r *registry, items []Item, notes []string, snap string, changed []string, keep bool, gates *gateReport) Answer {
+func decide(r *registry, items []Item, notes []string, snap string, changed []string, keep bool, gates *gateReport, diffGit string) Answer {
 	l := r.Loop
 	a := Answer{Round: len(l.Rounds), MaxRounds: MaxRounds, Items: items, Rounds: counts(l), Notes: append([]string{}, notes...), Tree: snap}
 	switch {
@@ -558,8 +509,8 @@ func decide(r *registry, items []Item, notes []string, snap string, changed []st
 		a.Next, a.Round = NextTSP, a.Round+1
 		a.Scope = &Scope{Since: since, Base: l.Pending, Paths: changed}
 		a.Reason = fmt.Sprintf("round %d of %d — the last fix changed %s: %s", a.Round, MaxRounds, plural(len(changed), "source file"), strings.Join(changed, ", "))
-		a.Message = fmt.Sprintf("round %d of %d of the TSP loop: the last fix changed %s. Attack that change and everything it affects (`git diff %s %s -- %s`); do not re-attack code it did not touch. Then run `tsp findings record` and `tsp findings next`.",
-			a.Round, MaxRounds, strings.Join(changed, ", "), since, l.Pending, quoted(changed)) + noteLines(a.Notes)
+		a.Message = fmt.Sprintf("round %d of %d of the TSP loop: the last fix changed %s. Attack that change and everything it affects (`%s %s %s -- %s`); do not re-attack code it did not touch. Then run `tsp findings record` and `tsp findings next`.",
+			a.Round, MaxRounds, strings.Join(changed, ", "), diffGit, since, l.Pending, quoted(changed)) + noteLines(a.Notes)
 	case gates == nil:
 		return Answer{}
 	default:
@@ -674,7 +625,7 @@ func itemKey(it Item) string {
 	if it.ID != "" {
 		return it.ID + ":" + it.Status
 	}
-	return it.Status + ":" + it.File + ":" + it.Test
+	return it.Status + ":" + it.Suite + ":" + it.File + ":" + it.Test
 }
 
 func findingByID(fs []Finding, id string) *Finding {

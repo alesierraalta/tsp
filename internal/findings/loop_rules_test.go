@@ -132,7 +132,7 @@ func TestATestTheFixBreaksMustBeFixed(t *testing.T) {
 	put(t, d, "value.go", fixedValue)
 	put(t, d, "double.go", "package sample\nfunc Double(x int) int { return 3 * x }\n")
 	a := next(t, d, 1)
-	item := findings.Item{Status: "failing", Test: "example.invalid/sample.TestDouble", Detail: "fails now and is not one of the loop's findings"}
+	item := findings.Item{Status: "failing", Suite: "go test -count=1 .", Test: "example.invalid/sample.TestDouble", Detail: "fails now and is not one of the loop's findings"}
 	if a.Next != "fix" || !reflect.DeepEqual(a.Items, []findings.Item{item}) ||
 		!strings.HasPrefix(a.Message, "failing example.invalid/sample.TestDouble — fails now and is not one of the loop's findings\n") ||
 		!strings.Contains(a.Message, "A failing test is not a finding, and the loop does not converge while it fails: fix the source that makes it fail. Never edit or remove that test; when it cannot pass otherwise, stop and say so, because that decision is the user's.") {
@@ -185,7 +185,7 @@ func TestAFailingTestFromBeforeTheLoopStillHoldsIt(t *testing.T) {
 	})
 	put(t, d, "value_test.go", redTest)
 	record(t, d)
-	failing := findings.Item{Status: "failing", Test: "example.invalid/sample.TestOld", Detail: "fails now and is not one of the loop's findings"}
+	failing := findings.Item{Status: "failing", Suite: "go test -count=1 .", Test: "example.invalid/sample.TestOld", Detail: "fails now and is not one of the loop's findings"}
 	if a := next(t, d, 1); a.Next != "fix" || len(a.Items) != 2 || a.Items[0].ID != "F1" || !reflect.DeepEqual(a.Items[1], failing) || len(a.Notes) != 0 {
 		t.Fatalf("answer: %+v", a)
 	}

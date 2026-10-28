@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alesierraalta/tsp/internal/bench"
 	"github.com/alesierraalta/tsp/internal/findings"
 )
 
@@ -19,6 +20,7 @@ func TestASnapshotSeesAnEditMadeInTheSecondTheIndexWasWritten(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real git")
 	}
+	t.Setenv("TSP_HOME", t.TempDir())
 	for attempt := 0; attempt < 5; attempt++ {
 		d := t.TempDir()
 		command(t, d, "git", "init", "-q")
@@ -34,7 +36,7 @@ func TestASnapshotSeesAnEditMadeInTheSecondTheIndexWasWritten(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := command(t, d, "git", "show", tree+":a.go"); !strings.Contains(got, "return 1") {
+		if got := snapshotCommand(t, d, "show", tree+":a.go"); !strings.Contains(got, "return 1") {
 			t.Fatalf("the snapshot missed the edit:\n%s", got)
 		}
 		return
@@ -42,47 +44,58 @@ func TestASnapshotSeesAnEditMadeInTheSecondTheIndexWasWritten(t *testing.T) {
 	t.Skip("could not fit the write, the add and the edit inside one second")
 }
 
-// Untracked files enter a snapshot only when the loop reads them: source, tests and test data. A credentials file
-// never reaches the object store, and a file nobody can read does not break the record.
-func TestASnapshotTakesOnlyTheUntrackedFilesTheLoopReads(t *testing.T) {
+// Snapshot contents are private even when inputs look like credentials, and unreadable inputs fail closed.
+func TestASnapshotKeepsAllInputsPrivateAndFailsClosed(t *testing.T) {
 	d := repo(t)
 	put(t, d, "creds.txt", "token=secret-value\n")
-	put(t, d, "extra.go", "package sample\nfunc Extra() int { return 1 }\n")
-	put(t, d, "testdata/case.txt", "input\n")
-	put(t, d, "locked.log", "noise\n")
-	locked := filepath.Join(d, "locked.log")
-	if err := os.Chmod(locked, 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(locked, 0600) })
+	put(t, d, "fixtures/case.txt", "input\n")
 	put(t, d, "value_test.go", redTest)
 	record(t, d)
 	tree := storedLoop(t).Rounds[0].End
-	names := strings.Fields(command(t, d, "git", "ls-tree", "-r", "--name-only", tree))
-	if want := []string{"extra.go", "go.mod", "testdata/case.txt", "value.go", "value_test.go"}; !reflect.DeepEqual(names, want) {
+	names := strings.Fields(snapshotCommand(t, d, "ls-tree", "-r", "--name-only", tree))
+	want := []string{"creds.txt", "fixtures/case.txt", "go.mod", "value.go", "value_test.go"}
+	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("snapshot holds %v, want %v", names, want)
 	}
 	secret := command(t, d, "git", "hash-object", "creds.txt")
 	if out, err := exec.Command("git", "-C", d, "cat-file", "-e", secret).CombinedOutput(); err == nil {
-		t.Fatalf("the credentials file reached the object store: %s", out)
+		t.Fatalf("credentials published: %s", out)
+	}
+	locked := filepath.Join(d, "locked.log")
+	put(t, d, "locked.log", "noise")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0600) })
+	if os.Geteuid() != 0 {
+		if _, err := findings.Snapshot(d); err == nil {
+			t.Fatal("unreadable input silently omitted")
+		}
 	}
 }
 
-// A loop whose snapshots are gone from the repository (git gc removed them here) cannot be followed: next says so
-// without claiming a cause it cannot know, and the next record starts a new loop.
-func TestALoopWhoseSnapshotsGitRemovedStartsOver(t *testing.T) {
+// Repository gc cannot prune private snapshots. Removing the private store is reported, and record starts over.
+func TestPrivateSnapshotsSurviveGitGCAndReportLostState(t *testing.T) {
 	d := openRoundOne(t)
 	put(t, d, "value.go", fixedValue)
 	if a := next(t, d, 1); a.Next != "tsp" {
 		t.Fatalf("answer: %+v", a)
 	}
 	command(t, d, "git", "gc", "--prune=now", "--quiet")
-	gone := "the TSP loop's snapshots are gone from this repository (git gc, or another clone at the same path): run the TSP flow, then `tsp findings record` to start a new loop"
+	next(t, d, 1)
+	env, err := bench.SnapshotEnv(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.RemoveAll(strings.TrimPrefix(env[0], "GIT_OBJECT_DIRECTORY=")); err != nil {
+		t.Fatal(err)
+	}
+	gone := "the TSP loop's private snapshots are unavailable (removed state, or another clone at the same path): run the TSP flow, then `tsp findings record` to start a new loop"
 	if a := next(t, d, 2); a.Next != "error" || a.Reason != gone {
 		t.Fatalf("answer: %+v", a)
 	}
 	out, code := findings.Record(d, "", wait)
-	want := "a new TSP loop starts: the snapshots of the one that was open are gone from this repository\nF1 recorded value_test.go example.invalid/sample.TestPromise\n"
+	want := "a new TSP loop starts: the private snapshots of the one that was open are unavailable\nF1 recorded value_test.go example.invalid/sample.TestPromise\n"
 	if code != 0 || out != want {
 		t.Fatalf("record exit=%d: %q want %q", code, out, want)
 	}
@@ -103,7 +116,7 @@ func TestARoundRerunsEverySuiteItRecorded(t *testing.T) {
 			t.Fatalf("record %s: %d %q", suite, code, out)
 		}
 	}
-	failing := findings.Item{Status: "failing", Test: "example.invalid/sample/sub.TestSub", Detail: "fails now and is not one of the loop's findings"}
+	failing := findings.Item{Status: "failing", Suite: "go test -count=1 ./sub", Test: "example.invalid/sample/sub.TestSub", Detail: "fails now and is not one of the loop's findings"}
 	if a := next(t, d, 1); a.Next != "fix" || !reflect.DeepEqual(a.Items, []findings.Item{failing}) {
 		t.Fatalf("answer: %+v", a)
 	}
@@ -141,7 +154,7 @@ func TestTheRoundCommandQuotesEveryPath(t *testing.T) {
 	if a.Next != "tsp" || a.Scope == nil || !reflect.DeepEqual(a.Scope.Paths, []string{odd, "value.go"}) {
 		t.Fatalf("answer: %+v", a)
 	}
-	start := strings.Index(a.Message, "`git diff ")
+	start := strings.Index(a.Message, "`env ")
 	if start < 0 {
 		t.Fatalf("no command in %q", a.Message)
 	}
@@ -158,8 +171,7 @@ func TestTheRoundCommandQuotesEveryPath(t *testing.T) {
 	}
 }
 
-// A terminal answer is repeated while the tree is the one it judged, and a record over that tree keeps the loop
-// closed: a host and an agent that both follow the loop see the same end, with the loop's history intact.
+// A terminal state is rejudged, not blindly replayed; its rounds survive a duplicate record.
 func TestATerminalAnswerIsRepeatedOverTheSameTree(t *testing.T) {
 	d := openRoundOne(t)
 	put(t, d, "value.go", fixedValue)
@@ -172,18 +184,25 @@ func TestATerminalAnswerIsRepeatedOverTheSameTree(t *testing.T) {
 	if done.Reason != "converged after 2 rounds: 1 fixed, 0 rejected, 0 wontfix" {
 		t.Fatalf("answer: %+v", done)
 	}
-	if again := next(t, d, 0); !reflect.DeepEqual(again, done) {
-		t.Fatalf("asking again answered %+v, want %+v", again, done)
+	again := next(t, d, 0)
+	if again.Review == done.Review {
+		t.Fatal("done was replayed without a fresh review")
 	}
-	if out, code := findings.Record(d, "", wait); code != 0 {
-		t.Fatalf("record after the end: %d %q", code, out)
+	again.Review = done.Review
+	if !reflect.DeepEqual(again, done) {
+		t.Fatalf("fresh review changed the round: %+v, want %+v", again, done)
 	}
-	if after := next(t, d, 0); !reflect.DeepEqual(after, done) {
-		t.Fatalf("a record over the same tree reopened the loop: %+v", after)
+	if out, code := findings.Record(d, "", wait); code != 1 || out != "no defect witnesses recorded\n" {
+		t.Fatalf("duplicate record must be a dry round, not invent a witness: %d %q", code, out)
+	}
+	after := next(t, d, 0)
+	after.Review = done.Review
+	if !reflect.DeepEqual(after, done) {
+		t.Fatalf("duplicate record changed history: %+v, want %+v", after, done)
 	}
 	put(t, d, "more.go", "package sample\nfunc More() int { return 2 }\n")
-	if a := next(t, d, 2); a.Next != "error" {
-		t.Fatalf("the end answered for a tree it never judged: %+v", a)
+	if a := next(t, d, 1); a.Next != "tsp" || a.Scope == nil || !reflect.DeepEqual(a.Scope.Paths, []string{"more.go"}) {
+		t.Fatalf("new code did not owe an attack: %+v", a)
 	}
 }
 
@@ -256,7 +275,7 @@ func TestAWitnessCoversItsTestInItsOwnSuiteOnly(t *testing.T) {
 		t.Fatalf("record b: %d %q", code, out)
 	}
 	put(t, d, "value.go", fixedValue)
-	failing := findings.Item{Status: "failing", Test: "example.invalid/sample.TestSame", Detail: "fails now and is not one of the loop's findings"}
+	failing := findings.Item{Status: "failing", Suite: "go test -count=1 -tags=b .", Test: "example.invalid/sample.TestSame", Detail: "fails now and is not one of the loop's findings"}
 	if a := next(t, d, 1); a.Next != "fix" || !reflect.DeepEqual(a.Items, []findings.Item{failing}) {
 		t.Fatalf("answer: %+v", a)
 	}

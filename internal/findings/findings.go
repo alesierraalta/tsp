@@ -160,19 +160,29 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if suite != "" && !bench.SupportsPerTest(suite) {
 		return failure(unsupportedRunner)
 	}
+	before, e := snapshot(top)
+	if e != nil {
+		return failure(e)
+	}
 	var fresh bool
 	r.Loop, fresh = alive(top, r.Loop)
+	if !fresh || (r.Loop != nil && r.Loop.Closed && !endedOn(r.Loop, before)) {
+		r.Loop = nil
+	}
 	base := roundBase(r.Loop)
 	rep, e := bench.RedCheckAt(top, suite, base, timeout)
 	if e != nil {
 		return failure(e)
+	}
+	if rep.Suite == "" {
+		rep.Suite = suite
 	}
 	if rep.Suite != "" && !bench.SupportsPerTest(rep.Suite) {
 		return failure(unsupportedRunner)
 	}
 	var diagnostics strings.Builder
 	if !fresh {
-		diagnostics.WriteString("a new TSP loop starts: the snapshots of the one that was open are gone from this repository\n")
+		diagnostics.WriteString("a new TSP loop starts: the private snapshots of the one that was open are unavailable\n")
 	}
 	for _, file := range rep.Uncollected {
 		fmt.Fprintf(&diagnostics, "could not collect: %s (%s)\n", file.File, file.Reason)
@@ -182,6 +192,9 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	end, e := snapshot(top)
 	if e != nil {
 		return failure(e)
+	}
+	if end != before {
+		return failure(errors.New("the working tree changed while record judged it: record it again"))
 	}
 	commit, e := git(top, "rev-parse", "HEAD")
 	if e != nil {
@@ -196,7 +209,11 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if e != nil {
 		return failure(e)
 	}
-	r.Loop, _ = alive(top, r.Loop)
+	var stillAlive bool
+	r.Loop, stillAlive = alive(top, r.Loop)
+	if !stillAlive || (r.Loop != nil && r.Loop.Closed && !endedOn(r.Loop, before)) {
+		r.Loop = nil
+	}
 	if roundBase(r.Loop) != base {
 		return failure(errors.New("the TSP loop moved while this round was judged: record it again"))
 	}
@@ -210,7 +227,7 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 		}
 		index := -1
 		for i := range r.Findings {
-			if r.Findings[i].Test == name {
+			if r.Findings[i].Test == name && r.Findings[i].Suite == rep.Suite {
 				index = i
 				break
 			}
@@ -225,9 +242,10 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 		f.File, f.Fingerprint, f.Promise, f.Suite, f.Commit, f.Time = file, fingerprint, promise, rep.Suite, commit, time.Now().UTC()
 		fmt.Fprintf(&out, "%s recorded %s %s\n", f.ID, f.File, f.Test)
 	}
-	if !endedOn(r.Loop, end) {
-		r.Loop = advance(r.Loop, commit, end, rep.Suite, created)
+	if endedOn(r.Loop, end) {
+		r.Loop.Closed = false
 	}
+	r.Loop = advance(r.Loop, commit, end, rep.Suite, created)
 	if e = save(r, path); e != nil {
 		return failure(e)
 	}
@@ -370,6 +388,9 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 			}
 		}
 		file, fingerprint, _ := locate(top, f.Test, []string{f.File})
+		if file == "" {
+			file, fingerprint, _ = relocate(top, *f)
+		}
 		suffix := ""
 		if f.Verdict != nil {
 			// A verdict holds while its test is unchanged, and once the test is gone: removing an invented test is

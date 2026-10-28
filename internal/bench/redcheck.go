@@ -421,6 +421,14 @@ func pytestInterpreter(root string, files []string) string {
 // extractRev writes the tree rev records in the repository at root into dst, without its history.
 func extractRev(root, rev, dst string) error {
 	cmd := exec.Command("git", "-C", root, "archive", "--format=tar", rev)
+	// Ordinary revisions need no snapshot state. Only a private tree needs the isolated object store.
+	if _, err := gitRun(root, "cat-file", "-e", rev); err != nil {
+		env, err := SnapshotEnv(root)
+		if err != nil {
+			return err
+		}
+		cmd.Env = append(os.Environ(), env...)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
