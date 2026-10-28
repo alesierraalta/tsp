@@ -50,11 +50,15 @@ type Loop struct {
 	FixTree    string   `json:"fix_tree,omitempty"`
 	Unsettled  []string `json:"unsettled,omitempty"`
 	NoProgress int      `json:"no_progress,omitempty"`
-	// StartedFailing counts, per test that is not a finding, the answers at which it newly appeared among the
-	// failing tests: twice means a fix made it pass and a later one broke it again.
-	StartedFailing map[string]int `json:"started_failing,omitempty"`
-	// Closed is set by done and stop; the next record opens a new loop.
-	Closed bool `json:"closed,omitempty"`
+	// StartedFailing counts, per test that is not a finding, its failures that came after it was seen passing (the
+	// first failure counts one), and Recovered marks the tests seen passing since: two means a fix made the test
+	// pass and a later one broke it again.
+	StartedFailing map[string]int  `json:"started_failing,omitempty"`
+	Recovered      map[string]bool `json:"recovered,omitempty"`
+	// Closed is set by done and stop. Final is the answer that closed the loop, repeated while the tree is the one
+	// it judged; the next record over another tree opens a new loop.
+	Closed bool    `json:"closed,omitempty"`
+	Final  *Answer `json:"final,omitempty"`
 }
 
 // Round is one TSP pass of the loop.
@@ -88,6 +92,8 @@ type Answer struct {
 	// Tree is the working tree this answer judged, as a git tree id: the same tree and the same fix answer twice
 	// means nothing changed in between.
 	Tree string `json:"tree"`
+	// Lines are the review's line for every finding, so a host can show the whole review beside the verdict.
+	Lines []string `json:"lines"`
 }
 
 // Item is one thing a fix has to settle.
@@ -129,8 +135,9 @@ func roundBase(l *Loop) string {
 	return "HEAD"
 }
 
-// alive is the loop a record or a next can still follow. git gc may remove the trees an open loop holds outside any
-// ref; such a loop reads as closed (false), so next says so and the next record starts a new loop.
+// alive is the loop a record or a next can still follow. The trees an open loop holds outside any ref can be gone
+// (git gc removed them, or another clone now sits at the same path); such a loop reads as closed (false), so next
+// says so and the next record starts a new loop.
 func alive(top string, l *Loop) (*Loop, bool) {
 	if !open(l) {
 		return l, true
@@ -280,14 +287,23 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 		return failed(e)
 	}
 	if _, ok := alive(top, r.Loop); !ok {
-		return failed(errors.New("the TSP loop's snapshots are gone (git gc removed them): run the TSP flow, then `tsp findings record` to start a new loop"))
+		return failed(errors.New("the TSP loop's snapshots are gone from this repository (git gc, or another clone at the same path): run the TSP flow, then `tsp findings record` to start a new loop"))
 	}
-	if !open(r.Loop) {
-		return failed(fmt.Errorf("no TSP round is open on %s: run the TSP flow, then `tsp findings record`", r.Branch))
+	noRound := fmt.Errorf("no TSP round is open on %s: run the TSP flow, then `tsp findings record`", r.Branch)
+	if r.Loop == nil || len(r.Loop.Rounds) == 0 {
+		return failed(noRound)
 	}
 	snap, e := snapshot(top)
 	if e != nil {
 		return failed(e)
+	}
+	if r.Loop.Closed {
+		// The end of a loop is repeated while the tree is the one it judged, so a host and an agent that both ask
+		// see the same end; any other tree holds a change no round has attacked.
+		if f := r.Loop.Final; f != nil && f.Tree == snap {
+			return *f, exitOf(f.Next)
+		}
+		return failed(noRound)
 	}
 	changed, e := changedSource(top, r.Loop.Rounds[len(r.Loop.Rounds)-1].End, snap)
 	if e != nil {
@@ -304,16 +320,23 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 		keep = len(moved) == 0
 	}
 	var a Answer
+	var notes []string
 	var settled []byte
 	suites := make([]string, 0, len(r.Loop.Rounds))
 	for _, round := range r.Loop.Rounds {
 		suites = append(suites, round.Suites...)
 	}
-	j, e := reviewAll(dir, timeout, suites, func(latest *registry, runs map[string]suiteRun) error {
+	j, e := reviewAll(dir, timeout, suites, func(latest *registry, runs map[string]suiteRun, j judged) error {
 		if !sameLoop(latest.Loop, r.Loop) {
 			return errMoved
 		}
-		a = decide(latest, settle(latest, runs, top), nil, snap, changed, keep, nil)
+		if e := unchanged(top, snap); e != nil {
+			return e
+		}
+		var items []Item
+		items, notes = settle(latest, runs, top)
+		a = decide(latest, items, notes, snap, changed, keep, nil)
+		conclude(latest.Loop, &a, j)
 		settled, _ = json.Marshal(latest.Loop)
 		return nil
 	})
@@ -328,15 +351,60 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 			if now, _ := json.Marshal(latest.Loop); !bytes.Equal(now, settled) {
 				return errMoved
 			}
-			a = decide(latest, g.items, g.notes, snap, changed, keep, &g)
+			if e := unchanged(top, snap); e != nil {
+				return e
+			}
+			a = decide(latest, g.items, append(notes, g.notes...), snap, changed, keep, &g)
+			conclude(latest.Loop, &a, j)
 			return nil
 		})
 		if e != nil {
 			return failed(e)
 		}
 	}
-	a.Review = j.summary
 	return a, exitOf(a.Next)
+}
+
+var errChanged = errors.New("the working tree changed while next judged it: run next again")
+
+// unchanged refuses to answer for a tree that moved while next judged it: a suite or a person edited what the
+// answer would be about, so the answer would describe code that no longer exists.
+func unchanged(top, snap string) error {
+	now, e := snapshot(top)
+	if e != nil {
+		return e
+	}
+	if now != snap {
+		return errChanged
+	}
+	return nil
+}
+
+// conclude stamps the review an answer was judged with, and keeps a terminal answer so asking again over the same
+// tree repeats it.
+func conclude(l *Loop, a *Answer, j judged) {
+	a.Review, a.Lines = j.summary, reviewLines(j.lines)
+	if a.Next == NextDone || a.Next == NextStop {
+		final := *a
+		l.Final = &final
+	}
+}
+
+// reviewLines splits a review's per-finding text into its lines.
+func reviewLines(s string) []string {
+	lines := []string{}
+	for _, line := range strings.Split(s, "\n") {
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// endedOn reports a closed loop whose end judged this very tree: a record over it attacks nothing new, so the loop
+// stays closed and its end stands.
+func endedOn(l *Loop, tree string) bool {
+	return l != nil && l.Closed && l.Final != nil && l.Final.Tree == tree
 }
 
 // failingTests names the tests a run saw fail, outside the given witnesses.
@@ -356,14 +424,23 @@ func failingTests(run suiteRun, witnesses map[string]bool) []string {
 func ranClean(run suiteRun) bool { return run.code == 0 && len(failingTests(run, nil)) == 0 }
 
 // settle lists what a fix still owes: the findings not yet fixed or closed by a verdict, every suite that did not run
-// test by test, and every test in the suites the loop ran that fails and is not a finding. A failure older than the
-// loop counts too, because the loop cannot tell it from one the change caused. While a round is pending its tests
-// are witnesses nobody has recorded yet, so failures are read again once the round is recorded.
-func settle(r *registry, runs map[string]suiteRun, top string) []Item {
+// test by test, and every test in the suites the loop ran that fails and is not a finding of that suite. A failure
+// older than the loop counts too, because the loop cannot tell it from one the change caused. While a round is
+// pending its tests are witnesses nobody has recorded yet, so failures are read again once the round is recorded.
+// The notes name the witnesses the user kept failing with wontfix, so the end never reads as every test passing.
+func settle(r *registry, runs map[string]suiteRun, top string) ([]Item, []string) {
 	items := unsettled(r.Findings, top)
-	witnesses := map[string]bool{}
+	l := r.Loop
+	witnesses := map[string]map[string]bool{}
+	var notes []string
 	for _, f := range r.Findings {
-		witnesses[f.Test] = true
+		if witnesses[f.Suite] == nil {
+			witnesses[f.Suite] = map[string]bool{}
+		}
+		witnesses[f.Suite][f.Test] = true
+		if passed, ran := runs[f.Suite].tests[f.Test]; f.Status == "wontfix" && ran && !passed && f.Verdict != nil {
+			notes = append(notes, fmt.Sprintf("kept failing by the user's wontfix: %s %s %s — %s", f.ID, f.File, f.Test, f.Verdict.Reason))
+		}
 	}
 	suites := make([]string, 0, len(runs))
 	for suite := range runs {
@@ -376,14 +453,22 @@ func settle(r *registry, runs map[string]suiteRun, top string) []Item {
 			items = append(items, Item{Status: "suite", Test: suite, Detail: fmt.Sprintf("did not run test by test (exit %d)", run.code)})
 			continue
 		}
-		if r.Loop.Pending != "" {
+		for name, passed := range run.tests {
+			if key := itemKey(Item{Status: "failing", Test: name}); passed && l.StartedFailing[key] > 0 {
+				if l.Recovered == nil {
+					l.Recovered = map[string]bool{}
+				}
+				l.Recovered[key] = true
+			}
+		}
+		if l.Pending != "" {
 			continue
 		}
-		for _, name := range failingTests(run, witnesses) {
+		for _, name := range failingTests(run, witnesses[suite]) {
 			items = append(items, Item{Status: "failing", Test: name, Detail: "fails now and is not one of the loop's findings"})
 		}
 	}
-	return items
+	return items, notes
 }
 
 // unsettled lists the findings a fix still owes: any status but fixed or a verdict, and a rejected finding whose test
@@ -474,7 +559,7 @@ func decide(r *registry, items []Item, notes []string, snap string, changed []st
 		a.Scope = &Scope{Since: since, Base: l.Pending, Paths: changed}
 		a.Reason = fmt.Sprintf("round %d of %d — the last fix changed %s: %s", a.Round, MaxRounds, plural(len(changed), "source file"), strings.Join(changed, ", "))
 		a.Message = fmt.Sprintf("round %d of %d of the TSP loop: the last fix changed %s. Attack that change and everything it affects (`git diff %s %s -- %s`); do not re-attack code it did not touch. Then run `tsp findings record` and `tsp findings next`.",
-			a.Round, MaxRounds, strings.Join(changed, ", "), since, l.Pending, strings.Join(changed, " ")) + noteLines(a.Notes)
+			a.Round, MaxRounds, strings.Join(changed, ", "), since, l.Pending, quoted(changed)) + noteLines(a.Notes)
 	case gates == nil:
 		return Answer{}
 	default:
@@ -495,11 +580,20 @@ func settleOrStop(r *registry, a Answer, snap string) Answer {
 	for _, it := range a.Items {
 		key := itemKey(it)
 		keys = append(keys, key)
-		if it.Status == "failing" && !slices.Contains(l.Unsettled, key) {
-			if l.StartedFailing == nil {
-				l.StartedFailing = map[string]int{}
-			}
+		if it.Status != "failing" {
+			continue
+		}
+		if l.StartedFailing == nil {
+			l.StartedFailing = map[string]int{}
+		}
+		// A test counts as failing again only after it was seen passing: an answer in between that found its suite
+		// not building proves nothing about it.
+		switch {
+		case l.StartedFailing[key] == 0:
+			l.StartedFailing[key] = 1
+		case l.Recovered[key]:
 			l.StartedFailing[key]++
+			delete(l.Recovered, key)
 		}
 	}
 	switch {
@@ -563,6 +657,16 @@ func fixInstruction(items []Item) string {
 	}
 	b.WriteString(" Never edit a witness test to make it pass, and never record wontfix, a check waiver or .no-testing-gate: those decisions are the user's. Then run `tsp findings next`.")
 	return b.String()
+}
+
+// quoted joins paths for a POSIX shell command, each one quoted, so a name with spaces or shell syntax is one word
+// and runs nothing.
+func quoted(paths []string) string {
+	words := make([]string, len(paths))
+	for i, p := range paths {
+		words[i] = "'" + strings.ReplaceAll(p, "'", `'\''`) + "'"
+	}
+	return strings.Join(words, " ")
 }
 
 // itemKey names an item across answers: a finding by its id and status, anything else by what it is about.
@@ -666,7 +770,7 @@ func exitOf(next string) int {
 }
 
 func failed(e error) (Answer, int) {
-	return Answer{Next: NextError, MaxRounds: MaxRounds, Reason: e.Error(), Items: []Item{}, Rounds: []RoundCount{}, Message: e.Error(), Notes: []string{}}, 2
+	return Answer{Next: NextError, MaxRounds: MaxRounds, Reason: e.Error(), Items: []Item{}, Rounds: []RoundCount{}, Message: e.Error(), Notes: []string{}, Lines: []string{}}, 2
 }
 
 // Text is the answer for a reader: the verdict line, the review, then the items and what to do with them.

@@ -172,7 +172,7 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	}
 	var diagnostics strings.Builder
 	if !fresh {
-		diagnostics.WriteString("a new TSP loop starts: git gc removed the snapshots of the one that was open\n")
+		diagnostics.WriteString("a new TSP loop starts: the snapshots of the one that was open are gone from this repository\n")
 	}
 	for _, file := range rep.Uncollected {
 		fmt.Fprintf(&diagnostics, "could not collect: %s (%s)\n", file.File, file.Reason)
@@ -225,7 +225,9 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 		f.File, f.Fingerprint, f.Promise, f.Suite, f.Commit, f.Time = file, fingerprint, promise, rep.Suite, commit, time.Now().UTC()
 		fmt.Fprintf(&out, "%s recorded %s %s\n", f.ID, f.File, f.Test)
 	}
-	r.Loop = advance(r.Loop, commit, end, rep.Suite, created)
+	if !endedOn(r.Loop, end) {
+		r.Loop = advance(r.Loop, commit, end, rep.Suite, created)
+	}
 	if e = save(r, path); e != nil {
 		return failure(e)
 	}
@@ -324,8 +326,8 @@ func runSuite(top, suite string, timeout time.Duration) suiteRun {
 
 // reviewAll runs each recorded suite once, and every extra suite, and saves the computed review. amend, when
 // given, changes the registry that is saved, under the same lock and after the review is merged into it, with
-// every suite's run in hand; it runs even when nothing is recorded, which saves no review of its own.
-func reviewAll(dir string, timeout time.Duration, extra []string, amend func(latest *registry, runs map[string]suiteRun) error) (judged, error) {
+// every suite's run and the review in hand; it runs even when nothing is recorded, which saves no review of its own.
+func reviewAll(dir string, timeout time.Duration, extra []string, amend func(latest *registry, runs map[string]suiteRun, j judged) error) (judged, error) {
 	r, path, top, e := load(dir)
 	if e != nil {
 		return judged{}, e
@@ -341,7 +343,7 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 	if len(r.Findings) == 0 {
 		if amend != nil {
 			runExtra()
-			e = saveAmended(dir, path, func(latest *registry) error { return amend(latest, runs) })
+			e = saveAmended(dir, path, func(latest *registry) error { return amend(latest, runs, judged{branch: r.Branch}) })
 		}
 		return judged{branch: r.Branch}, e
 	}
@@ -485,14 +487,6 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 	if need > 0 {
 		report += fmt.Sprintf(", %d need review", need)
 	}
-	if amend != nil {
-		if e = amend(r, runs); e != nil {
-			return judged{}, e
-		}
-	}
-	if e = save(r, path); e != nil {
-		return judged{}, e
-	}
 	code := 0
 	if open+newCount+regressed+need > 0 {
 		code = 1
@@ -500,7 +494,16 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 	if cannotJudge {
 		code = 2
 	}
-	return judged{branch: r.Branch, summary: report, lines: lines.String(), code: code}, nil
+	j := judged{branch: r.Branch, summary: report, lines: lines.String(), code: code}
+	if amend != nil {
+		if e = amend(r, runs, j); e != nil {
+			return judged{}, e
+		}
+	}
+	if e = save(r, path); e != nil {
+		return judged{}, e
+	}
+	return j, nil
 }
 
 // saveAmended applies amend to the registry under its lock and saves the result.

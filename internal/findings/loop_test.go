@@ -156,7 +156,7 @@ func TestNextAsksForTheNextRoundAfterTheFixChangedSource(t *testing.T) {
 		a.Scope.Since != since || a.Scope.Base != loop.Pending || !reflect.DeepEqual(a.Scope.Paths, []string{"value.go"}) {
 		t.Fatalf("answer: %+v scope %+v loop %+v", a, a.Scope, loop)
 	}
-	message := fmt.Sprintf("round 2 of 5 of the TSP loop: the last fix changed value.go. Attack that change and everything it affects (`git diff %s %s -- value.go`); do not re-attack code it did not touch. Then run `tsp findings record` and `tsp findings next`.", since, loop.Pending)
+	message := fmt.Sprintf("round 2 of 5 of the TSP loop: the last fix changed value.go. Attack that change and everything it affects (`git diff %s %s -- 'value.go'`); do not re-attack code it did not touch. Then run `tsp findings record` and `tsp findings next`.", since, loop.Pending)
 	if a.Message != message || a.Text() != "tsp: "+a.Reason+"\n"+a.Review+"\n"+message+"\n" {
 		t.Fatalf("message:\n%s\nwant:\n%s\ntext:\n%s", a.Message, message, a.Text())
 	}
@@ -240,9 +240,6 @@ func TestADryRoundOverTheFixedCodeConverges(t *testing.T) {
 	}
 	if !storedLoop(t).Closed {
 		t.Fatal("a converged loop stays open")
-	}
-	if b := next(t, d, 2); b.Next != "error" {
-		t.Fatalf("a closed loop answered: %+v", b)
 	}
 }
 
