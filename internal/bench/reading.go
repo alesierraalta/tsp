@@ -3,6 +3,7 @@ package bench
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -87,6 +88,76 @@ func (c Comparison) CaughtDifference() string {
 	return fmt.Sprintf("caught difference %d/%d vs %d/%d is %s (95%% Wilson/Newcombe interval: %+.3f to %+.3f).", a.Caught, a.Defects, b.Caught, b.Defects, verdict, low, high)
 }
 
+// unclassifiedFamily buckets the case-runs whose key predates families. They are counted, never
+// dropped: a reading that silently lost them would report a better recall than the corpus supports.
+const unclassifiedFamily = "unclassified"
+
+// familyTotal is one failure kind's caught over defects across a reading's valid case-runs.
+type familyTotal struct {
+	Name    string
+	Caught  int
+	Defects int
+}
+
+// familyTotals splits a reading by the failure kind its cases declare, in the order Families lists them
+// and with unclassified last. Controls have no keyed defect and invalid or failed runs are already out
+// of recall's denominator, so all three stay out of the split.
+func familyTotals(a Aggregate) []familyTotal {
+	counts := map[string]*familyTotal{}
+	for _, r := range a.Cases {
+		if r.Control || r.Invalid || r.Failed {
+			continue
+		}
+		name := r.Family
+		if name == "" {
+			name = unclassifiedFamily
+		}
+		c := counts[name]
+		if c == nil {
+			c = &familyTotal{Name: name}
+			counts[name] = c
+		}
+		c.Caught += r.Caught
+		c.Defects += r.Total
+	}
+	totals := make([]familyTotal, 0, len(counts))
+	for _, name := range Families {
+		if c := counts[name]; c != nil {
+			totals = append(totals, *c)
+			delete(counts, name)
+		}
+	}
+	// A name outside Families (an older or hand-edited key) is still published rather than lost.
+	leftover := make([]string, 0, len(counts))
+	for name := range counts {
+		if name != unclassifiedFamily {
+			leftover = append(leftover, name)
+		}
+	}
+	slices.Sort(leftover)
+	for _, name := range leftover {
+		totals = append(totals, *counts[name])
+	}
+	if c := counts[unclassifiedFamily]; c != nil {
+		totals = append(totals, *c)
+	}
+	return totals
+}
+
+// familySection publishes which failure kinds a reading caught and which it missed, so the next run can
+// be aimed at the weakest family instead of the whole corpus.
+func familySection(a Aggregate) string {
+	totals := familyTotals(a)
+	if len(totals) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(totals))
+	for _, t := range totals {
+		parts = append(parts, fmt.Sprintf("%s %d/%d", t.Name, t.Caught, t.Defects))
+	}
+	return "\ncaught by family: " + strings.Join(parts, " · ") + "\n"
+}
+
 func planlessSummary(a Aggregate) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s", a.TS, a.Model, len(a.Cases), planlessTotals(a), roundsTotals(a)+sessionsTotals(a))
@@ -116,6 +187,7 @@ func planlessSummary(a Aggregate) string {
 		}
 		fmt.Fprintf(&b, "| %s | - | - | %s | - | - | - | %.3f | %d | %.1f | %s | - |\n", r.Case, cell(r, r.Caught), r.CostUSD, r.Turns, r.Seconds/60, note)
 	}
+	b.WriteString(familySection(a))
 	b.WriteString(missSection(a))
 	return b.String()
 }

@@ -1084,6 +1084,11 @@ noise (-0.295 to +0.187). Since test-strategy 0.7 writes no plan, readings witho
 metrics (reported, recall, no plan, light, micro, false positives, precision) as `-`, and caught is the
 measure to read; the stored history rows keep their numbers.
 
+Every summary also publishes `caught by family:`: each case declares the failure kind its defects
+belong to (`time`, `concurrency`, `contract`, `security`, …), and the line splits caught over defects
+per family so a run says which kinds it missed. Cases written before the field are counted as
+`unclassified` instead of disappearing from the split.
+
 `bench run` scaffolds `<out>/<case>/<run>/ws` (default `bench/results/<timestamp>/`), commits the
 fixture, checks its suite is green (otherwise the case is invalid and skipped), spawns
 `claude -p "haz el testing"` in it, then scores `docs/testing/test-plan.md`:

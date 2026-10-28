@@ -640,7 +640,7 @@ func unwritten(agg Aggregate, opts Options, artifact string, err error) (Aggrega
 func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	name := filepath.Base(caseDir)
 	ws := filepath.Join(opts.Out, name, fmt.Sprint(run), "ws")
-	res := Result{Case: name, Run: run, Total: len(key.Defects), Workspace: ws}
+	res := Result{Case: name, Run: run, Family: key.Family, Total: len(key.Defects), Workspace: ws}
 	suite, err := Scaffold(caseDir, ws, key, opts.SuiteTimeout)
 	res.Suite = suite
 	if err != nil {
@@ -989,6 +989,7 @@ func Summary(agg Aggregate) string {
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %d | %.3f | %d | %.1f | %s | %s |\n",
 			c.Case, reported, pinned, caught, lightTag(c), microTag(c), c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note, precision)
 	}
+	b.WriteString(familySection(agg))
 	b.WriteString(missSection(agg))
 	return b.String()
 }

@@ -160,7 +160,7 @@ Known limits of the overlays, verified by running every trigger against every va
 ## Key schema
 
 ```json
-{"id":"<id>","language":"node|go|python","suite":"node --test|go test ./...|python -m pytest","surface":"library|cli|http|worker|etl|state-machine",
+{"id":"<id>","language":"node|go|python","suite":"node --test|go test ./...|python -m pytest","surface":"library|cli|http|worker|etl|state-machine","family":"time|boundary|concurrency|contract|input-domain|numeric|performance|resilience-io|security|state-logic",
  "defects":[{"id":"D1","file":"src/x.js","line":42,"class":"<class>","keywords":["k1","k2","k3"],
    "description":"one sentence, what is wrong",
    "trigger":{"input":"<exact call or command>","expected":"<per contract>","actual":"<observed>"},
@@ -181,6 +181,15 @@ construction, and adjudication refuses to confirm a trap id as a defect. Trap ke
  disjoint from the case's defect keywords, and a trap's line must sit more than five lines from
 every defect line, so a trap report can never be mechanically mis-attributed to a real defect.
 Each entry's `documented` names the fixture README line that states the behavior is intentional.
+
+`family` is the failure kind the case's defects belong to, one of `Families` (boundary, concurrency,
+contract, input-domain, numeric, performance, resilience-io, security, state-logic, time). Every
+reading publishes a `caught by family:` line next to its table, in that declared order, so a run says
+which kinds it caught and which it missed instead of one aggregate that hides a weak family behind a
+strong one. Cases written before the field carry no family and are published together as
+`unclassified` rather than dropped: a reading that lost them would report more recall than the corpus
+supports. A key that names a family outside `Families` is refused when it is loaded, and a control,
+invalid or failed case-run stays out of the split because it is already out of recall's denominator.
 
 ## Cost and wall clock
 
