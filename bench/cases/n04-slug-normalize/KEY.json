@@ -1,4 +1,4 @@
-{"id":"n04-slug-normalize","language":"node","suite":"node --test","surface":"library",
+{"id":"n04-slug-normalize","language":"node","suite":"node --test","surface":"library","family":"input-domain",
  "request":"the slug behaviour","defects":[
   {"id":"D1","file":"src/slug.js","line":4,"class":"idempotence","keywords":["idempotent","leading","dash","twice","strip"],
    "description":"Only one leading dash is removed per call, so a title starting with two dashes yields a slug with a leading dash and slugify(slugify(x)) differs from slugify(x).",

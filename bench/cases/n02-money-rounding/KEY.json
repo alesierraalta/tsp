@@ -1,4 +1,4 @@
-{"id":"n02-money-rounding","language":"node","suite":"node --test","surface":"library",
+{"id":"n02-money-rounding","language":"node","suite":"node --test","surface":"library","family":"numeric",
  "request":"the ledger behaviour","defects":[
   {"id":"D1","file":"src/ledger.js","line":11,"class":"float-precision","keywords":["float","precision","cents","integer","accumulate"],
    "description":"The balance accumulates parsed floats, so three postings of 0.10 do not sum to 0.30 and two ledgers can disagree at the cent.",

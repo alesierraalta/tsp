@@ -1,4 +1,4 @@
-{"id":"n23-independent-io-serialization","language":"node","suite":"node --test","surface":"http",
+{"id":"n23-independent-io-serialization","language":"node","suite":"node --test","surface":"http","family":"performance",
  "request":"the dashboard load behaviour","defects":[
   {"id":"D1","file":"src/dashboard.js","line":9,"class":"io-serialization","keywords":["concurrent","serial","await","overlap","promise"],
    "description":"load() awaits each source before starting the next, so the three independent requests never overlap and the peak in-flight count stays at 1 instead of the 3 the contract promises.",

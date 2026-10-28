@@ -2,7 +2,7 @@
   "id": "n26-fee-split",
   "language": "node",
   "suite": "node --test",
-  "surface": "cli",
+  "surface": "cli","family": "numeric",
   "request": "the fee split behavior",
   "defects": [
     {

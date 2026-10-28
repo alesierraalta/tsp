@@ -1,4 +1,4 @@
-{"id":"n03-subscription-window","language":"node","suite":"node --test","surface":"library",
+{"id":"n03-subscription-window","language":"node","suite":"node --test","surface":"library","family":"time",
  "request":"the subscription-window behaviour","defects":[
   {"id":"D1","file":"src/subscription.js","line":7,"class":"timezone","keywords":["timezone","utc","local","boundary","inclusive"],
    "description":"start and end are parsed as UTC midnight while a Date built from calendar components is local midnight, so the first or last inclusive day is reported inactive in any non-UTC zone.",

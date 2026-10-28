@@ -2,7 +2,7 @@
   "id": "n30-attr-escape-http",
   "language": "node",
   "suite": "node --test",
-  "surface": "http",
+  "surface": "http","family": "security",
   "request": "the escaped markup renderer",
   "defects": [
     {

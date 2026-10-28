@@ -2,7 +2,7 @@
   "id": "g06-worker-result-order",
   "language": "go",
   "suite": "go test ./...",
-  "surface": "worker",
+  "surface": "worker","family": "state-logic",
   "request": "Test ordered worker results for distinct inputs.",
   "defects": [
     {

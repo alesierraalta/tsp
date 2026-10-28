@@ -2,13 +2,13 @@
  "id": "n17-event-consumer",
  "language": "node",
  "suite": "node --test",
- "surface": "worker",
+ "surface": "worker","family": "resilience-io",
  "request": "the event consumer that keeps the per-order ledger",
  "defects": [
   {
    "id": "D1",
    "file": "src/consumer.js",
-   "line": 14,
+   "line": 11,
    "class": "non-idempotent-consumer",
    "keywords": [
     "idempotent",

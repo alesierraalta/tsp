@@ -1,4 +1,4 @@
-{"id":"n01-csv-rfc4180","language":"node","suite":"node --test","surface":"library",
+{"id":"n01-csv-rfc4180","language":"node","suite":"node --test","surface":"library","family":"input-domain",
  "request":"the csv-line behaviour","defects":[
   {"id":"D1","file":"src/csv.js","line":7,"class":"escaping","keywords":["quote","double","escape","rfc","embedded"],
    "description":"renderLine quotes a field that contains a comma but never doubles an embedded double quote, so the rendered line is not RFC 4180 and cannot round-trip.",

@@ -2,13 +2,13 @@
   "id": "n34-event-replay",
   "language": "node",
   "suite": "node --test",
-  "surface": "state-machine",
+  "surface": "state-machine","family": "state-logic",
   "request": "Test replay behavior when events arrive out of sequence.",
   "defects": [
     {
       "id": "D1",
       "file": "src/replay.js",
-      "line": 16,
+      "line": 20,
       "class": "resequencing",
       "keywords": ["sequence", "ordering", "buffer", "gap", "replay"],
       "description": "Events are applied as they arrive instead of waiting for missing sequence numbers, so delivering sequence 2 before 1 leaves the state at the older value.",

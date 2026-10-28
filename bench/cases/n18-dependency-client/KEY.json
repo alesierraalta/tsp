@@ -2,7 +2,7 @@
  "id": "n18-dependency-client",
  "language": "node",
  "suite": "node --test",
- "surface": "http",
+ "surface": "http","family": "resilience-io",
  "request": "the payments client that calls the charge service with retries",
  "defects": [
   {

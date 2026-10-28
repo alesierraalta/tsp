@@ -1,4 +1,4 @@
-{"id":"n20-batched-query-amplification","language":"node","suite":"node --test","surface":"library",
+{"id":"n20-batched-query-amplification","language":"node","suite":"node --test","surface":"library","family":"performance",
  "request":"the order-report behaviour","defects":[
   {"id":"D1","file":"src/report.js","line":12,"class":"query-amplification","keywords":["batch","items","amplification","n+1"],
    "description":"listOrders fills each order with its own itemsFor(id) call instead of one itemsForOrders(ids) batch, so a listing reads the repository once per row.",

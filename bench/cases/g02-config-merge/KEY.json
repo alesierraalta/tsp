@@ -1,4 +1,4 @@
-{"id":"g02-config-merge","language":"go","suite":"go test ./...","surface":"library",
+{"id":"g02-config-merge","language":"go","suite":"go test ./...","surface":"library","family":"contract",
  "request":"the config behaviour","defects":[
   {"id":"D1","file":"config.go","line":20,"class":"config-merge","keywords":["zero value","false","disable","override","explicit"],
    "description":"Merge applies Debug only when the override sets it to true, so an explicit false is treated as unset and no higher layer can ever disable debug.",

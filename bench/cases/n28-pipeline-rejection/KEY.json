@@ -2,7 +2,7 @@
   "id": "n28-pipeline-rejection",
   "language": "node",
   "suite": "node --test",
-  "surface": "worker",
+  "surface": "worker","family": "resilience-io",
   "request": "the worker item pipeline",
   "defects": [
     {
