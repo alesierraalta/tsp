@@ -907,7 +907,15 @@ func merge(res, scored Result) Result {
 	scored.Suite, scored.Invalid, scored.InvalidReason = res.Suite, res.Invalid, res.InvalidReason
 	scored.Failed, scored.FailReason = res.Failed, res.FailReason
 	scored.FinalMessage = res.FinalMessage
-	scored.Notes = append(res.Notes, scored.Notes...)
+	// A rescore re-reads the plan and the tests, so the notes it produces are the ones the run already
+	// holds. Keeping a note once makes the reading independent of how often it was re-scored.
+	notes := append([]string(nil), res.Notes...)
+	for _, note := range scored.Notes {
+		if !slices.Contains(notes, note) {
+			notes = append(notes, note)
+		}
+	}
+	scored.Notes = notes
 	return scored
 }
 
@@ -964,6 +972,43 @@ func invalidTag(r Result) string {
 		return " FAILED: " + r.FailReason
 	}
 	return ""
+}
+
+// noteText is the note column of one case: the tags that name a run's state, then the notes the run
+// and its catch check recorded, with any note a tag already states dropped. A cell that says the same
+// fact twice reads like two problems where there is one.
+func noteText(r Result) string {
+	notes := make([]string, 0, len(r.Notes)+len(r.Catch.Notes))
+	add := func(note string) {
+		note = strings.TrimSpace(note)
+		if note == "" || statedByTag(r, note) {
+			return
+		}
+		notes = append(notes, note)
+	}
+	for _, note := range r.Notes {
+		add(note)
+	}
+	if r.Catch.Checked {
+		for _, note := range r.Catch.Notes {
+			add(note)
+		}
+	}
+	tag := strings.TrimSpace(invalidTag(r) + noPlanTag(r))
+	return strings.TrimSpace(tag + " " + strings.Join(notes, "; "))
+}
+
+// statedByTag says whether a tag already names what the note says, so the note is not repeated.
+func statedByTag(r Result, note string) bool {
+	switch {
+	case !r.Invalid && !r.Failed && !r.PlanFound && (strings.EqualFold(note, "no plan") || strings.EqualFold(note, "no_plan")):
+		return true
+	case r.Invalid && r.InvalidReason != "" && strings.EqualFold(note, r.InvalidReason):
+		return true
+	case r.Failed && r.FailReason != "" && strings.EqualFold(note, r.FailReason):
+		return true
+	}
+	return false
 }
 
 // A pattern without a path separator names cases under <benchDir>/cases, so `n0*` works from
@@ -1025,17 +1070,12 @@ func Summary(agg Aggregate) string {
 	}
 	b.WriteString("\n\n| case | reported | pinned | caught | light | micro | false positives | cost USD | turns | minutes | note | precision (pending) |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, c := range agg.Cases {
-		note := strings.TrimSpace(invalidTag(c) + noPlanTag(c))
-		if len(c.Notes) > 0 {
-			note = strings.TrimSpace(note + " " + strings.Join(c.Notes, "; "))
-		}
-		if c.Catch.Checked && len(c.Catch.Notes) > 0 {
-			note = strings.TrimSpace(note + " " + strings.Join(c.Catch.Notes, "; "))
-		}
-		reported := fmt.Sprintf("%d/%d", c.Found, c.Total)
-		pinned := fmt.Sprintf("%d/%d", c.ClaimedPinned, c.Total)
-		caught := fmt.Sprintf("%d/%d", c.Caught, c.Total)
-		precision := casePrecision(c)
+		note := noteText(c)
+		var reported, pinned, caught, precision string
+		reported = fmt.Sprintf("%d/%d", c.Found, c.Total)
+		pinned = fmt.Sprintf("%d/%d", c.ClaimedPinned, c.Total)
+		caught = fmt.Sprintf("%d/%d", c.Caught, c.Total)
+		precision = casePrecision(c)
 		if c.Control {
 			reported, pinned, caught = controlCell(c.ControlInventions, c.PlanFound), "clean", "clean"
 		}

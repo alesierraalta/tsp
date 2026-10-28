@@ -267,13 +267,7 @@ func planlessSummary(a Aggregate) string {
 			fmt.Fprintf(&b, "| %s | %s | %s | %s | - | - | - | %.3f | %d | %.1f | %s | - |\n", r.Case, cell, cell, cell, r.CostUSD, r.Turns, r.Seconds/60, strings.TrimSpace(noPlanTag(r)))
 			continue
 		}
-		note := strings.TrimSpace(invalidTag(r) + noPlanTag(r))
-		if len(r.Notes) > 0 {
-			note = strings.TrimSpace(note + " " + strings.Join(r.Notes, "; "))
-		}
-		if r.Catch.Checked && len(r.Catch.Notes) > 0 {
-			note = strings.TrimSpace(note + " " + strings.Join(r.Catch.Notes, "; "))
-		}
+		note := noteText(r)
 		fmt.Fprintf(&b, "| %s | - | - | %s | - | - | - | %.3f | %d | %.1f | %s | - |\n", r.Case, cell(r, r.Caught), r.CostUSD, r.Turns, r.Seconds/60, note)
 	}
 	b.WriteString(familySection(a))
