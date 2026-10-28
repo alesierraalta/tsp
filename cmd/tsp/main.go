@@ -2068,7 +2068,7 @@ func runBenchRun(args []string) int {
 	}
 	_, code := bench.Run(bench.Options{
 		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, FixLoop: *fixLoop, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
-		Families: commaList(*families),
+		Families:     commaList(*families),
 		Timeout:      *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,

@@ -753,8 +753,10 @@ func TestSummaryOnAMissingLedgerSaysSo(t *testing.T) {
 }
 
 func TestEmbeddedSkillIdentityNamesTheEmbeddedSkill(t *testing.T) {
-	if got := EmbeddedSkillIdentity(); got != "test-strategy 0.7.6" {
-		t.Fatalf("embedded skill identity = %q, want %q", got, "test-strategy 0.7.6")
+	// The identity is what a report attributes a run to, and what the bench records as skill_version, so it moves
+	// with the embedded SKILL.md rather than with any separate constant in this package.
+	if got := EmbeddedSkillIdentity(); got != "test-strategy 0.7.7" {
+		t.Fatalf("embedded skill identity = %q, want %q", got, "test-strategy 0.7.7")
 	}
 }
 

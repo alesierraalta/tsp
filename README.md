@@ -725,9 +725,18 @@ own tests pin anything. This repository runs it on its own pull requests in
 The embedded skills live under `assets/skills/`. `test-strategy` is the entry point ("haz test
 strategy"; aliases: "haz test strategy" and "haz el testing"): it finds the defects the existing green
 suite misses and leaves one test per defect in the repository's own suite, red on today's code and
-green once the defect is fixed. It probes each promise across its input classes, writes family-wide
-promises (order, round trip, never panics) as property tests with generated inputs, and builds inputs
-that must pass a validator with the code's own encoder before perturbing them. It writes no plan file:
+green once the defect is fixed. It works promise by promise, harvested from four sources: the
+contract, every name and comment that asserts a behaviour (a name that lies is a defect), the
+implicit promises of the failure classes, and the evidence the session already has (the diff, the bug
+report, the log line). Each promise is attacked across its input classes, with two classes a green
+suite never reaches: resources must not grow (memory, open files, goroutines, temp files, cache
+entries, measured over N and 2N repetitions, including the failure path), and load must not degrade
+the answer (the same workload at 1× and 10× concurrency). Family-wide promises (order, round trip,
+never panics) become property tests with generated inputs, and inputs that must pass a validator are
+built with the code's own encoder before perturbing them. A probe it cannot falsify proves nothing,
+so every probe names the input that would have made it fail, and the work stops when
+promise × class is covered — not when the suite is green — reporting the cells left unprobed and
+why. It writes no plan file:
 the tests are the deliverable, and `tsp redcheck` says which new tests actually fail on the unmodified
 code (`go test`, `node --test`, pytest, Jest, `vitest run` and `cargo test` are read test by test). This lean version replaced the plan-driven skill
 after the benchmark showed most of that skill's cost was ceremony; `tsp check` without a plan asks for
