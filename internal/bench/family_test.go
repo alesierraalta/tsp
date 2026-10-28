@@ -75,3 +75,36 @@ func TestSummaryShowsCaughtByFamily(t *testing.T) {
 		t.Fatalf("planless summary does not report the unclassified bucket:\n%s", got)
 	}
 }
+
+// TestPerFamilyCaughtPublishesAFamilyOutsideTheList pins the branch a key from an older or hand-edited
+// case takes: a name the list does not know is still published, in a stable order and before the
+// unclassified bucket, so a caught defect never disappears from the split.
+func TestPerFamilyCaughtPublishesAFamilyOutsideTheList(t *testing.T) {
+	agg := Aggregate{Cases: []Result{
+		{Case: "a", Family: "time", Total: 1, Caught: 1},
+		{Case: "b", Family: "zzz-older", Total: 1, Caught: 0},
+		{Case: "c", Family: "typo-family", Total: 2, Caught: 1},
+		{Case: "d", Total: 1, Caught: 1},
+	}}
+	got := familyTotals(agg)
+	want := []familyTotal{
+		{Name: "time", Caught: 1, Defects: 1},
+		{Name: "typo-family", Caught: 1, Defects: 2},
+		{Name: "zzz-older", Caught: 0, Defects: 1},
+		{Name: unclassifiedFamily, Caught: 1, Defects: 1},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("familyTotals = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("familyTotals[%d] = %+v, want %+v (all: %+v)", i, got[i], want[i], got)
+		}
+	}
+	section := familySection(agg)
+	for _, name := range []string{"typo-family", "zzz-older"} {
+		if !strings.Contains(section, name) {
+			t.Fatalf("the split lost %q: %s", name, section)
+		}
+	}
+}

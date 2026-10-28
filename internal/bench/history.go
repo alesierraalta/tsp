@@ -34,6 +34,10 @@ type HistoryEntry struct {
 	SourceRun      string  `json:"source_run,omitempty"` // rescore: the results directory it re-read
 	Scorer         string  `json:"scorer"`               // build that produced the numbers, so two readings of one run are ordered
 	Corpus         string  `json:"corpus,omitempty"`     // digest of the measurement the run made: cases, requests, runs
+	// Families is the aim of the reading, when it was set: a run over two families measures nine
+	// defects, and a row that does not say so reads like a reading of the whole corpus that caught
+	// everything. Empty means every case ran.
+	Families []string `json:"families,omitempty"`
 	// LightActivated is how many of the run's cases declared a scoped run their own plan validates. It
 	// is written even when it is zero: a row without the field was written before the column existed, so
 	// it says nothing about the mode, while a zero says the mode was watched and did not run.
@@ -75,7 +79,7 @@ const (
 	KindRescore = "rescore"
 )
 
-const historyHeader = "| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus | light | runs | metrics version | unique defects | unique found | unique confirmed | unique caught | defect runs | controls | precision | pending | out of scope | inconclusive | unstable | agent config | environment | micro | rounds | sessions |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+const historyHeader = "| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus | families | light | runs | metrics version | unique defects | unique found | unique confirmed | unique caught | defect runs | controls | precision | pending | out of scope | inconclusive | unstable | agent config | environment | micro | rounds | sessions |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
 
 // reported and caught count different things, so neither bounds the other.
 const historyIntro = "# Benchmark history\n\nOne row per `tpp bench run`; never rewritten. A `rescore` row re-reads an earlier\nrun with newer scoring rules: it spends nothing, so summing the cost column over rescore\nrows would count the same money twice. `reported and caught are independent`: reported\ncounts defects written in the plan, caught counts defects some test distinguishes, and\neither can exceed the other.\n\nEvery row names the `scorer` build that produced its numbers. When the scoring rules change,\na later rescore of one source run supersedes an earlier one, and the scorer column is what\ntells the two apart; rows are never rewritten.\n\nA row written before the adjudicated metrics carries no `metrics version` column and is read as version 1, which is why `bench compare` refuses to compare it with a version 2 row.\n\nA row written before the agent-config column carries no agent-config mode and cannot be compared with one that does.\n\n"
@@ -148,6 +152,9 @@ func ensureHistoryHeader(md, header string) error {
 		return nil
 	}
 	var notes []string
+	if !strings.Contains(string(existing), "| families |") {
+		notes = append(notes, "Rows above this header predate the families column and record no aim: they were readings of every case, and their recall is the whole corpus's.")
+	}
 	if !strings.Contains(string(existing), "| light |") {
 		notes = append(notes, "Rows above this header predate the activation column and record no scoped run either way: they are non-activation measurements, not zero-activation ones.")
 	}
@@ -175,9 +182,17 @@ func historyRow(e HistoryEntry, ts, kind string) string {
 	if unstable == "" {
 		unstable = "-"
 	}
-	return fmt.Sprintf("| %s | %s | %s | %s | %d | %d | %d | %.2f | %d | %.2f | %d | %d | %d | %d | %.3f | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s | %s | %d | %d | %d |\n",
-		ts, kind, e.Out, e.Model, e.Cases, e.Defects, e.Found, e.Recall, e.Caught, e.RecallCaught, e.FalsePositives, e.Failed, e.Invalid, e.NoPlan, e.CostUSD, e.SkillVersion, e.Scorer, e.Corpus, e.LightActivated, e.Runs,
+	return fmt.Sprintf("| %s | %s | %s | %s | %d | %d | %d | %.2f | %d | %.2f | %d | %d | %d | %d | %.3f | %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s | %s | %d | %d | %d |\n",
+		ts, kind, e.Out, e.Model, e.Cases, e.Defects, e.Found, e.Recall, e.Caught, e.RecallCaught, e.FalsePositives, e.Failed, e.Invalid, e.NoPlan, e.CostUSD, e.SkillVersion, e.Scorer, e.Corpus, aimText(e.Families), e.LightActivated, e.Runs,
 		e.MetricsVersion, e.UniqueDefects, e.UniqueFound, e.UniqueConfirmed, e.UniqueCaught, e.DefectRuns, e.Controls, historyPrecision(e.Precision), e.PendingAdjudication, e.OutOfScope, e.Inconclusive, unstable, e.AgentConfig, e.Environment, e.MicroActivated, e.Rounds, e.Sessions)
+}
+
+// aimText names the families a reading was aimed at, or "-" for a reading of every case.
+func aimText(families []string) string {
+	if len(families) == 0 {
+		return "-"
+	}
+	return strings.Join(families, ", ")
 }
 
 func historyPrecision(precision *float64) string {

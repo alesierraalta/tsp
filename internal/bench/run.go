@@ -338,8 +338,6 @@ func normalizeOptions(opts Options) Options {
 	return opts
 }
 
-// resolveCaseDirs turns the case globs into directories. A pattern list that matches nothing is not an empty run:
-// it is said out loud, and the run stops before it writes anything.
 // resolveCaseDirs expands the glob and refuses a run that matches no case. The selection below only narrows what
 // this found, so a reading always reports which cases it actually ran.
 func resolveCaseDirs(opts Options) ([]string, bool) {
@@ -666,7 +664,7 @@ func historyEntry(agg Aggregate, caseDirs []string, opts Options) HistoryEntry {
 		Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
 		FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
 		Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan, Kind: KindRun,
-		SkillVersion: SkillVersion(opts.SkillFile), Corpus: agg.Corpus,
+		SkillVersion: SkillVersion(opts.SkillFile), Corpus: agg.Corpus, Families: agg.Families,
 		LightActivated: agg.LightActivated, MicroActivated: agg.MicroActivated, Runs: opts.Runs,
 		MetricsVersion: agg.MetricsVersion, UniqueDefects: agg.UniqueDefects, UniqueFound: agg.UniqueFound,
 		UniqueConfirmed: agg.UniqueConfirmed, UniqueCaught: agg.UniqueCaught, DefectRuns: agg.DefectRuns,
@@ -981,7 +979,7 @@ func noteText(r Result) string {
 	notes := make([]string, 0, len(r.Notes)+len(r.Catch.Notes))
 	add := func(note string) {
 		note = strings.TrimSpace(note)
-		if note == "" || statedByTag(r, note) {
+		if note == "" || statedByTag(r, note) || slices.Contains(notes, note) {
 			return
 		}
 		notes = append(notes, note)

@@ -69,3 +69,13 @@ func TestRescoreKeepsOneOfEachNote(t *testing.T) {
 		t.Fatalf("a rescore changed the reading:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// TestOneResultSaysANoteOnce pins the note a run holds twice: a scorer and a probe can report the same
+// failure, and a cell that repeats it reads like two problems where there is one.
+func TestOneResultSaysANoteOnce(t *testing.T) {
+	reason := "the plan copy failed"
+	twice := Aggregate{Cases: []Result{{Case: "c", Family: "time", Total: 1, Notes: []string{reason, reason}}}}
+	if got := noteCell(t, Summary(twice), "c"); strings.Count(got, reason) != 1 {
+		t.Fatalf("note cell = %q, want %q once", got, reason)
+	}
+}
