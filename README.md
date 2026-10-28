@@ -785,10 +785,11 @@ on the model's judgement. Run it after `tsp findings record`:
   decisions, not the agent's.
 - `tsp` (exit 1): everything is settled, but the last fix changed source no round has attacked. The
   next round attacks only that change and what it affects (`git diff <since> <base> -- <paths>`, both
-  trees named in the answer); every earlier finding is reviewed again anyway, so a regression
-  anywhere still shows.
+  trees named in the answer and every path quoted, so a file name never runs as shell); every
+  earlier finding is reviewed again anyway, so a regression anywhere still shows.
 - `done` (exit 0): the last round ran on exactly the current code, everything it and earlier rounds
-  found is settled, every test in the suites the loop ran passes, and the gates over the change since
+  found is settled, every test in the suites the loop ran passes (a witness the user kept as
+  `wontfix` is named in the notes instead), and the gates over the change since
   the commit the loop started from are clean: what `tsp check` owes for the source it changed (a
   repository that declares `gate never` or carries `.no-testing-gate` is not held to it),
   `tsp probe quality` on non-test files, and `tsp probe arch`. A gate that cannot measure is listed
@@ -796,17 +797,24 @@ on the model's judgement. Run it after `tsp findings record`:
 - `stop` (exit 3): the loop hands the decision to the user — 5 rounds ran and the last fix is still
   unattacked, two fixes in a row settled nothing, a finding regressed twice, or a test failed again
   after a fix had made it pass.
-- exit 2: nothing to judge (no round recorded since the last `done` or `stop`) or a registry that
-  cannot be read.
+- exit 2: nothing to judge (no round recorded since the last `done` or `stop`, and the tree is not
+  the one that answer judged), the working tree changed while `next` judged it (ask again), the
+  loop's snapshots are gone from the repository (`git gc` removed them, or another clone sits at the
+  same path; the next record starts a new loop), or a registry that cannot be read.
 
 `--json` prints the same answer as one object (`next`, `round`, `max_rounds`, `reason`, `review`,
-`items`, `scope`, `rounds`, `message`, `notes`, `tree`) for a host; the Pi extension drives the
-loop from it. The loop's state lives in the branch's registry. Rounds after the first are judged
-against a snapshot of the fixed working tree, a git tree object written through a temporary copy of
-the index: the loop makes no commit, moves no ref and leaves the index alone (the objects a snapshot
-writes are unreferenced, and `git gc` removes them), and a test that catches what the fix broke
-counts as a witness even before the fix is committed. `tree` names the snapshot an answer judged, so
-the same fix answer over the same tree means nothing changed in between. A verdict survives the
+`items`, `scope`, `rounds`, `message`, `notes`, `tree`, `lines`) for a host; the Pi extension
+drives the loop from it, and `lines` carries the review's line for every finding. The loop's state
+lives in the branch's registry. Every record of a round after the first is judged against a
+snapshot of the fixed working tree, a git tree object written through a temporary copy of the
+index that holds tracked files as they are and an untracked file only when the loop reads it
+(source, tests, test data), so a credentials file never reaches the object store. The loop makes no
+commit, moves no ref and leaves the index alone (the objects a snapshot writes are unreferenced, and
+`git gc` removes them), and a test that catches what the fix broke counts as a witness even before
+the fix is committed. `next` reruns every suite a round's records ran. `tree` names the snapshot
+an answer judged: the same fix answer over the same tree means nothing changed in between, and
+asking again over the tree a `done` or `stop` judged repeats that answer, while a record over that
+tree keeps the loop closed, so a host and an agent that both follow the loop see the same end. A verdict survives the
 removal of its test, so rejecting an invented witness and deleting it settles the finding in either
 order.
 
