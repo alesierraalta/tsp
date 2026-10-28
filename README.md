@@ -784,8 +784,9 @@ on the model's judgement. Run it after `tsp findings record`:
   witness test to make it pass; `wontfix`, a check waiver and `.no-testing-gate` are the user's
   decisions, not the agent's.
 - `tsp` (exit 1): everything is settled, but the last fix changed source no round has attacked. The
-  next round attacks only that change and what it affects (`git diff <since> <base> -- <paths>`, both
-  trees named in the answer and every path quoted, so a file name never runs as shell); every
+  next round attacks only that change and what it affects (the answer supplies an environment-prefixed
+  `git --literal-pathspecs diff <since> <base> -- <paths>` command to read the private trees, with every
+  argument quoted so filenames are neither shell programs nor Git pathspecs); every
   earlier finding is reviewed again anyway, so a regression anywhere still shows.
 - `done` (exit 0): the last round ran on exactly the current code, everything it and earlier rounds
   found is settled, every test in the suites the loop ran passes (a witness the user kept as
@@ -797,26 +798,29 @@ on the model's judgement. Run it after `tsp findings record`:
 - `stop` (exit 3): the loop hands the decision to the user — 5 rounds ran and the last fix is still
   unattacked, two fixes in a row settled nothing, a finding regressed twice, or a test failed again
   after a fix had made it pass.
-- exit 2: nothing to judge (no round recorded since the last `done` or `stop`, and the tree is not
-  the one that answer judged), the working tree changed while `next` judged it (ask again), the
-  loop's snapshots are gone from the repository (`git gc` removed them, or another clone sits at the
-  same path; the next record starts a new loop), or a registry that cannot be read.
+- exit 2: no round is recorded, the working tree changed while `next` judged it (ask again), the
+  loop's private snapshots are unavailable (state was removed, or another clone sits at the same
+  path; the next record starts a new loop), an input is unreadable, or a registry cannot be read.
 
 `--json` prints the same answer as one object (`next`, `round`, `max_rounds`, `reason`, `review`,
 `items`, `scope`, `rounds`, `message`, `notes`, `tree`, `lines`) for a host; the Pi extension
 drives the loop from it, and `lines` carries the review's line for every finding. The loop's state
 lives in the branch's registry. Every record of a round after the first is judged against a
-snapshot of the fixed working tree, a git tree object written through a temporary copy of the
-index that holds tracked files as they are and an untracked file only when the loop reads it
-(source, tests, test data), so a credentials file never reaches the object store. The loop makes no
-commit, moves no ref and leaves the index alone (the objects a snapshot writes are unreferenced, and
-`git gc` removes them), and a test that catches what the fix broke counts as a witness even before
-the fix is committed. `next` reruns every suite a round's records ran. `tree` names the snapshot
-an answer judged: the same fix answer over the same tree means nothing changed in between, and
-asking again over the tree a `done` or `stop` judged repeats that answer, while a record over that
-tree keeps the loop closed, so a host and an agent that both follow the loop see the same end. A verdict survives the
-removal of its test, so rejecting an invented witness and deleting it settles the finding in either
-order.
+snapshot of the fixed working tree, a Git tree written through a temporary copy of the index.
+All non-ignored working inputs are captured, including fixtures outside source directories. They may
+contain private data: objects are written only under the private TSP state directory
+(`snapshots/<repository-id>/objects`, private directories mode 0700), never into the repository's
+object database. Ignored inputs are not snapshotted; unreadable non-ignored inputs fail closed.
+The loop makes no commit, moves no ref and leaves the real index alone. Repository `git gc` cannot
+prune private snapshots. Do not publish private state; it is retained until you remove that state.
+A test that catches what an uncommitted fix broke counts as a witness too. `next` reruns every suite
+a round recorded and the gates, including after `done` or `stop`: an unchanged tree alone never
+proves that verdicts, suites or results are unchanged. A record on the same tree keeps the round's
+history and includes new suites and findings. A round after the first is based on the snapshot it
+was asked to attack; a source edit made while it ran owes another focused round. Recovery and
+relapse belong to the same test **and suite**. `tree` names the inputs an answer judged; Pi uses it
+with the fix message for its no-change guard. A verdict survives removal of its test, so rejecting
+an invented witness and deleting it settles the finding in either order.
 
 What is measured and what is not: on hard23, a second TSP pass after the agent's own fix found
 real defects in 7 of 56 runs, including regressions the fix introduced, while repeating passes over

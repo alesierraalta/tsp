@@ -102,7 +102,8 @@ answers `done` or `stop`:
   or `arch` item is fixed in the code or the tests it names. When an item cannot be settled under
   these rules, stop and report it as one decision for the human. Then run `tsp findings next` again.
 - **`tsp`** — run the test-strategy flow again, aimed at the change it names
-  (`git diff <since> <base> -- <paths>`) and everything that change affects. Do not re-attack code
+  (use the exact environment-prefixed diff command in the answer: private snapshot trees are not in
+  the repository's object database) and everything that change affects. Do not re-attack code
   it did not touch: a pass over unchanged code makes tests that fail on correct code, not defects.
   Then run `tsp findings record` and `tsp findings next`.
 - **`done`** (exit 0) — the loop converged. Report the rounds it took and every rejected finding with
