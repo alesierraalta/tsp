@@ -509,7 +509,7 @@ test("with feedback off the loop message follows the TSP run at once, and a stop
   const stop = { stdout: JSON.stringify({ next: "stop", review: "review 9", reason: "no progress", message: "no progress — the loop needs the user's decision" }), stderr: "", code: 3 };
   const h = offerHarness({ findings: { next: stop, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
   await h.run("haz el TSP — round 5 of 5", []);
-  assert.deepEqual(h.notes, [{ message: "review 9\nno progress", type: "warning" }]);
+  assert.deepEqual(h.notes, [{ message: "review 9\nno progress — the loop needs the user's decision", type: "warning" }]);
   assert.equal(h.sent.length, 1);
   assert.ok(h.sent[0].startsWith(FEEDBACK_LEAD));
   await h.run(h.sent[0], []);
@@ -517,12 +517,24 @@ test("with feedback off the loop message follows the TSP run at once, and a stop
   assert.deepEqual(h.asked, []);
 });
 
-test("the loop's notes reach the user with the answer, so a gate that could not measure never reads as clean", async () => {
-  const done = { stdout: JSON.stringify({ next: "done", review: "review 4", reason: "converged after 2 rounds: 1 fixed, 0 rejected, 0 wontfix", message: "converged", notes: ["not measured: probe arch: no rules", "failing before the loop, not the loop's: TestOld"] }), stderr: "", code: 0 };
+test("the loop's notes reach the user with a round, so what the loop did not hold against is never hidden", async () => {
+  const tsp = { stdout: JSON.stringify({ next: "tsp", review: "review 4", reason: "round 2 of 5 — the last fix changed 1 source file: a.go", message: "round 2 of 5 of the TSP loop", notes: ["kept failing by the user's wontfix: F3 c_test.go TestC — accepted"] }), stderr: "", code: 1 };
+  const h = offerHarness({ findings: { next: tsp } });
+  await h.run("haz el TSP", []);
+  assert.deepEqual(h.notes, [{ message: "review 4\nround 2 of 5 — the last fix changed 1 source file: a.go\nkept failing by the user's wontfix: F3 c_test.go TestC — accepted", type: "info" }]);
+  assert.deepEqual(h.sent, ["haz el TSP — round 2 of 5 of the TSP loop"]);
+});
+
+test("the notice shows every finding's review line, and for an end the whole message the agent is no longer sent", async () => {
+  const done = { stdout: JSON.stringify({ next: "done", review: "review 5 on feat/x: 0 fixed, 0 open, 0 new, 0 regressed", lines: ["F1 fixed a_test.go TestA — A holds", "F2 rejected b_test.go TestB — not promised"], reason: "converged after 2 rounds: 1 fixed, 1 rejected, 0 wontfix", message: "converged after 2 rounds: 1 fixed, 1 rejected, 0 wontfix\nF2 rejected b_test.go TestB — not promised\nnot measured: probe arch: no rules", notes: ["not measured: probe arch: no rules"] }), stderr: "", code: 0 };
   const h = offerHarness({ findings: { next: done } });
   await h.run("haz el TSP", []);
-  assert.deepEqual(h.notes, [{ message: "review 4\nconverged after 2 rounds: 1 fixed, 0 rejected, 0 wontfix\nnot measured: probe arch: no rules\nfailing before the loop, not the loop's: TestOld", type: "info" }]);
+  assert.deepEqual(h.notes, [{ message: "review 5 on feat/x: 0 fixed, 0 open, 0 new, 0 regressed\nF1 fixed a_test.go TestA — A holds\nF2 rejected b_test.go TestB — not promised\nconverged after 2 rounds: 1 fixed, 1 rejected, 0 wontfix\nF2 rejected b_test.go TestB — not promised\nnot measured: probe arch: no rules", type: "info" }]);
   assert.deepEqual(h.sent, []);
+  const fix = { stdout: JSON.stringify({ next: "fix", review: "review 2", lines: ["F1 open a_test.go TestA — A holds"], reason: "round 1 of 5 left 1 item unsettled", message: "F1 open a_test.go TestA — A holds\nsettle each item", notes: [] }), stderr: "", code: 1 };
+  const f = offerHarness({ findings: { next: fix } });
+  await f.run("haz el TSP", []);
+  assert.deepEqual(f.notes, [{ message: "review 2\nF1 open a_test.go TestA — A holds\nround 1 of 5 left 1 item unsettled", type: "info" }]);
 });
 
 test("a fix run that changes nothing ends the loop instead of sending the same fix again", async () => {
@@ -540,11 +552,11 @@ test("a fix run that changes nothing ends the loop instead of sending the same f
 });
 
 test("loop verdicts drive the next turn without an offer", async () => {
-  for (const [next, type, sent] of [["fix", "info", "The TSP loop found defects to settle.\n\nwork"], ["tsp", "info", "haz el TSP — work"], ["done", "info", ""], ["stop", "warning", ""], ["error", "warning", ""]]) {
+  for (const [next, type, sent, shown] of [["fix", "info", "The TSP loop found defects to settle.\n\nwork", "review\nreason"], ["tsp", "info", "haz el TSP — work", "review\nreason"], ["done", "info", "", "review\nwork"], ["stop", "warning", "", "review\nwork"], ["error", "warning", "", "review\nwork"]]) {
     const h = offerHarness({ findings: { next: { stdout: JSON.stringify({ next, review: "review", reason: "reason", message: "work" }), stderr: "", code: 1 } } });
     await h.run("The TSP loop found defects to settle.\n\nfix", [["edit", "a.go"]]);
     assert.deepEqual(h.calls.map(c => c.argv), [["findings", "next", "--cwd", "/repo", "--json"]]);
-    assert.deepEqual(h.notes, [{ message: "review\nreason", type }]);
+    assert.deepEqual(h.notes, [{ message: shown, type }], `${next}: an end shows its whole message, a fix or a round its reason`);
     assert.deepEqual(h.sent, sent ? [sent] : []);
     assert.deepEqual(h.asked, []);
   }

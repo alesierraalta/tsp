@@ -347,15 +347,19 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
     const result = await run("next", ["--json"]);
     let parsed: unknown;
     try { parsed = JSON.parse(result.stdout.trim()); } catch { parsed = null; }
-    const reply = parsed && !Array.isArray(parsed) && typeof parsed === "object" ? parsed as { next?: unknown; review?: unknown; reason?: unknown; message?: unknown; notes?: unknown; tree?: unknown } : null;
+    const reply = parsed && !Array.isArray(parsed) && typeof parsed === "object" ? parsed as { next?: unknown; review?: unknown; reason?: unknown; message?: unknown; notes?: unknown; tree?: unknown; lines?: unknown } : null;
     if (!reply || typeof reply.next !== "string" || !["fix", "tsp", "done", "stop", "error"].includes(reply.next)) {
       const review = await run("check");
       notify(shown(review), REVIEW_TYPE[review.code as 0 | 1] ?? "error");
       return NO_STEP;
     }
-    const notes = Array.isArray(reply.notes) ? reply.notes : [];
-    notify(notice([reply.review, reply.reason, ...notes].filter((s): s is string => typeof s === "string" && s !== "").join("\n")), reply.next === "stop" || reply.next === "error" ? "warning" : "info");
+    const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
     const message = typeof reply.message === "string" ? reply.message : "";
+    // An end sends the agent nothing more, so its whole message (the rejected findings, the items the user has to
+    // decide on) is shown; a fix or a round shows its reason and notes, and its message goes to the agent.
+    const terminal = reply.next === "done" || reply.next === "stop" || reply.next === "error";
+    const shownLines = [reply.review, ...list(reply.lines), ...(terminal ? [message] : [reply.reason, ...list(reply.notes)])];
+    notify(notice(shownLines.filter((s): s is string => typeof s === "string" && s !== "").join("\n")), reply.next === "stop" || reply.next === "error" ? "warning" : "info");
     if (reply.next === "fix") {
       const tree = typeof reply.tree === "string" ? reply.tree : "";
       return { message: `${FIX_LEAD}\n\n${message}`, fix: tree === "" ? "" : `${tree}\n${message}` };
