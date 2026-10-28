@@ -151,6 +151,25 @@ func ignored(dir, rel string) bool {
 
 func failure(e error) (string, int) { return "tsp findings: " + e.Error() + "\n", 2 }
 
+// judgedCommitHook is the seam a test uses to move HEAD while a round is judged.
+var judgedCommitHook func(top string)
+
+// suiteKey is the identity of a suite command: the same suite rerun with different whitespace or another -count flag
+// is the same witness, while a suite naming another runner, package or flag stays a different one.
+func suiteKey(suite string) string {
+	fields := strings.Fields(suite)
+	kept := fields[:0]
+	for _, field := range fields {
+		if strings.HasPrefix(field, "-count=") {
+			continue
+		}
+		kept = append(kept, field)
+	}
+	return strings.Join(kept, " ")
+}
+
+func sameSuite(a, b string) bool { return suiteKey(a) == suiteKey(b) }
+
 // Record records or refreshes precisely the witnesses RedCheck found.
 func Record(dir, suite string, timeout time.Duration) (string, int) {
 	r, path, top, e := load(dir)
@@ -169,7 +188,13 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if !fresh || (r.Loop != nil && r.Loop.Closed && !endedOn(r.Loop, before)) {
 		r.Loop = nil
 	}
-	base := roundBase(r.Loop)
+	// The commit is pinned before judging: a round whose base moved mid-run would compare a fix against code it
+	// never saw, and the gates over the loop's whole change would then read the change as already reviewed.
+	start, e := git(top, "rev-parse", "HEAD")
+	if e != nil {
+		return failure(e)
+	}
+	base := roundBase(r.Loop, start)
 	rep, e := bench.RedCheckAt(top, suite, base, timeout)
 	if e != nil {
 		return failure(e)
@@ -196,9 +221,15 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if end != before {
 		return failure(errors.New("the working tree changed while record judged it: record it again"))
 	}
+	if judgedCommitHook != nil {
+		judgedCommitHook(top)
+	}
 	commit, e := git(top, "rev-parse", "HEAD")
 	if e != nil {
 		return failure(e)
+	}
+	if commit != start {
+		return failure(errors.New("the commit changed while the TSP loop judged the round: record it again"))
 	}
 	unlock, e := lockRegistry(path)
 	if e != nil {
@@ -214,7 +245,7 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if !stillAlive || (r.Loop != nil && r.Loop.Closed && !endedOn(r.Loop, before)) {
 		r.Loop = nil
 	}
-	if roundBase(r.Loop) != base {
+	if roundBase(r.Loop, start) != base {
 		return failure(errors.New("the TSP loop moved while this round was judged: record it again"))
 	}
 	var out, skipped strings.Builder
@@ -227,7 +258,7 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 		}
 		index := -1
 		for i := range r.Findings {
-			if r.Findings[i].Test == name && r.Findings[i].Suite == rep.Suite {
+			if r.Findings[i].Test == name && sameSuite(r.Findings[i].Suite, rep.Suite) {
 				index = i
 				break
 			}
@@ -239,7 +270,10 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 			created = append(created, r.Findings[index].ID)
 		}
 		f := &r.Findings[index]
-		f.File, f.Fingerprint, f.Promise, f.Suite, f.Commit, f.Time = file, fingerprint, promise, rep.Suite, commit, time.Now().UTC()
+		if f.Suite == "" {
+			f.Suite = rep.Suite
+		}
+		f.File, f.Fingerprint, f.Promise, f.Commit, f.Time = file, fingerprint, promise, commit, time.Now().UTC()
 		fmt.Fprintf(&out, "%s recorded %s %s\n", f.ID, f.File, f.Test)
 	}
 	if endedOn(r.Loop, end) {
@@ -326,6 +360,7 @@ type judged struct {
 
 // suiteRun is one run of a suite: each test's outcome, and whether the run could be judged at all.
 type suiteRun struct {
+	suite  string
 	tests  map[string]bool
 	failed bool
 	code   int
@@ -339,7 +374,7 @@ func runSuite(top, suite string, timeout time.Duration) suiteRun {
 	// parsed per-test report makes that exit code judgeable.
 	argv, _ := hookcmd.ShellWords(suite)
 	cargoFailure := code == 101 && len(argv) > 1 && argv[0] == "cargo" && argv[1] == "test"
-	return suiteRun{tests: tests, failed: err != nil || whole || len(tests) == 0 || code < 0 || (code > 1 && !cargoFailure), code: code}
+	return suiteRun{suite: suite, tests: tests, failed: err != nil || whole || len(tests) == 0 || code < 0 || (code > 1 && !cargoFailure), code: code}
 }
 
 // reviewAll runs each recorded suite once, and every extra suite, and saves the computed review. amend, when
@@ -353,8 +388,8 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 	runs := map[string]suiteRun{}
 	runExtra := func() {
 		for _, suite := range extra {
-			if _, done := runs[suite]; !done && suite != "" {
-				runs[suite] = runSuite(top, suite, timeout)
+			if _, done := runs[suiteKey(suite)]; !done && suite != "" {
+				runs[suiteKey(suite)] = runSuite(top, suite, timeout)
 			}
 		}
 	}
@@ -403,10 +438,10 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 			f.Verdict = nil
 			suffix = " (verdict dropped: test changed)"
 		}
-		result, ok := runs[f.Suite]
+		result, ok := runs[suiteKey(f.Suite)]
 		if !ok {
 			result = runSuite(top, f.Suite, timeout)
-			runs[f.Suite] = result
+			runs[suiteKey(f.Suite)] = result
 		}
 		previous := f.Status
 		passed, ran := result.tests[f.Test]

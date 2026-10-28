@@ -806,19 +806,28 @@ on the model's judgement. Run it after `tsp findings record`:
 `items`, `scope`, `rounds`, `message`, `notes`, `tree`, `lines`) for a host; the Pi extension
 drives the loop from it, and `lines` carries the review's line for every finding. The loop's state
 lives in the branch's registry. Every record of a round after the first is judged against a
-snapshot of the fixed working tree, a Git tree written through a temporary copy of the index.
-All non-ignored working inputs are captured, including fixtures outside source directories. They may
-contain private data: objects are written only under the private TSP state directory
-(`snapshots/<repository-id>/objects`, private directories mode 0700), never into the repository's
-object database. Ignored inputs are not snapshotted; unreadable non-ignored inputs fail closed.
-The loop makes no commit, moves no ref and leaves the real index alone. Repository `git gc` cannot
-prune private snapshots. Do not publish private state; it is retained until you remove that state.
+snapshot of the fixed working tree, a Git tree the tool builds by reading each input's bytes and
+writing that blob into its own private object store. All non-ignored working inputs are captured,
+including fixtures outside source directories. The capture is byte-exact: a clean filter
+(Git LFS), a text-normalization rule, an `assume-unchanged` bit or a copied index cannot hide a
+fix. Blobs may contain private data, so they are copied into the private TSP state directory
+(`snapshots/<repository-id>/objects`, private directories mode 0700) and never into the
+repository's object database. Ignored inputs are not snapshotted; unreadable non-ignored inputs
+fail closed. A TSP state directory that sits inside the worktree is not captured either, and a
+worktree that holds a submodule is refused: the loop cannot capture what a submodule's working
+tree changes. The loop makes no commit, moves no ref and leaves the real index alone. Repository
+`git gc` cannot prune private snapshots, because every blob is written there even when the
+repository already has an identical object. Do not publish private state; it is retained until
+you remove that state.
 A test that catches what an uncommitted fix broke counts as a witness too. `next` reruns every suite
 a round recorded and the gates, including after `done` or `stop`: an unchanged tree alone never
 proves that verdicts, suites or results are unchanged. A record on the same tree keeps the round's
 history and includes new suites and findings. A round after the first is based on the snapshot it
-was asked to attack; a source edit made while it ran owes another focused round. Recovery and
-relapse belong to the same test **and suite**. `tree` names the inputs an answer judged; Pi uses it
+was asked to attack; a source edit made while it ran owes another focused round. The first round
+records the commit it judged, so work committed between two records never becomes its base, and a
+commit that moves while a record runs is refused: record again. Recovery and relapse belong to the
+same test **and suite**, and `go test .` and `go test -count=1 .` count as the same suite, so a
+verdict settles both. `tree` names the inputs an answer judged; Pi uses it
 with the fix message for its no-change guard. A verdict survives removal of its test, so rejecting
 an invented witness and deleting it settles the finding in either order.
 

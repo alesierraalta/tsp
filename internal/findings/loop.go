@@ -121,39 +121,52 @@ type RoundCount struct {
 
 func open(l *Loop) bool { return l != nil && !l.Closed && len(l.Rounds) > 0 }
 
-// roundBase retains the attacked base even when a duplicate record follows a terminal answer.
-// Record starts a fresh loop first when a closed loop's inputs have changed.
-func roundBase(l *Loop) string {
+// roundBase retains the attacked base even when a duplicate record follows a terminal answer. A round without one is
+// pinned to the commit its record judges, so work committed between records never silently becomes its base.
+func roundBase(l *Loop, pin string) string {
 	switch {
 	case l == nil || len(l.Rounds) == 0:
-		return "HEAD"
+		return pin
 	case l.Pending != "":
 		return l.Pending
-	case len(l.Rounds) > 1:
-		return l.Rounds[len(l.Rounds)-1].Base
 	}
-	return "HEAD"
+	return l.Rounds[len(l.Rounds)-1].Base
 }
 
-// alive is the loop a record or a next can still follow. The trees an open loop holds outside any ref can be gone
-// (git gc removed them, or another clone now sits at the same path); such a loop reads as closed (false), so next
-// says so and the next record starts a new loop.
+// alive is the loop a record or a next can still follow. Every snapshot it holds outside any ref must still answer
+// from private storage, and a closed loop is no exception: without them a later record cannot judge the round it
+// would continue, so it has to start a new loop instead of failing against a missing base.
 func alive(top string, l *Loop) (*Loop, bool) {
-	if !open(l) {
+	if l == nil {
 		return l, true
 	}
-	last := l.Rounds[len(l.Rounds)-1]
-	for _, object := range []string{l.Pending, last.End, last.Base} {
-		if object == "" {
+	gone := func() (*Loop, bool) {
+		closed := *l
+		closed.Closed = true
+		return &closed, false
+	}
+	held := []string{l.Pending}
+	for _, round := range l.Rounds {
+		held = append(held, round.Base, round.End)
+	}
+	for _, object := range held {
+		switch {
+		case object == "", object == "HEAD":
 			continue
-		}
-		if _, e := gitIn(top, nil, "cat-file", "-e", object); e != nil {
-			gone := *l
-			gone.Closed = true
-			return &gone, false
+		case lapsed(top, object):
+			return gone()
 		}
 	}
 	return l, true
+}
+
+// lapsed reports whether a recorded revision is no longer readable. A snapshot must answer from private storage;
+// a round based on a commit only needs the repository to still hold that commit.
+func lapsed(top, object string) bool {
+	if kind, e := gitIn(top, nil, "cat-file", "-t", object); e == nil && kind == "commit" {
+		return false
+	}
+	return bench.SnapshotAlive(top, object) != nil
 }
 
 // withSuite adds the suite a record ran to the ones its round already holds.
@@ -383,16 +396,17 @@ func settle(r *registry, runs map[string]suiteRun, top string) ([]Item, []string
 	witnesses := map[string]map[string]bool{}
 	var notes []string
 	for _, f := range r.Findings {
-		if witnesses[f.Suite] == nil {
-			witnesses[f.Suite] = map[string]bool{}
+		key := suiteKey(f.Suite)
+		if witnesses[key] == nil {
+			witnesses[key] = map[string]bool{}
 		}
 		if f.Status != "rejected" {
-			witnesses[f.Suite][f.Test] = true
+			witnesses[key][f.Test] = true
 		} else if file, _, _ := relocate(top, f); file != "" {
 			// Its explicit removal item already holds the loop; do not also call it an unrelated failure.
-			witnesses[f.Suite][f.Test] = true
+			witnesses[key][f.Test] = true
 		}
-		if passed, ran := runs[f.Suite].tests[f.Test]; f.Status == "wontfix" && ran && !passed && f.Verdict != nil {
+		if passed, ran := runs[suiteKey(f.Suite)].tests[f.Test]; f.Status == "wontfix" && ran && !passed && f.Verdict != nil {
 			notes = append(notes, fmt.Sprintf("kept failing by the user's wontfix: %s %s %s — %s", f.ID, f.File, f.Test, f.Verdict.Reason))
 		}
 	}
@@ -404,7 +418,7 @@ func settle(r *registry, runs map[string]suiteRun, top string) ([]Item, []string
 	for _, suite := range suites {
 		run := runs[suite]
 		if run.failed && !ranClean(run) {
-			items = append(items, Item{Status: "suite", Test: suite, Detail: fmt.Sprintf("did not run test by test (exit %d)", run.code)})
+			items = append(items, Item{Status: "suite", Test: run.suite, Detail: fmt.Sprintf("did not run test by test (exit %d)", run.code)})
 			continue
 		}
 		for name, passed := range run.tests {
@@ -415,8 +429,8 @@ func settle(r *registry, runs map[string]suiteRun, top string) ([]Item, []string
 				l.Recovered[key] = true
 			}
 		}
-		for _, name := range failingTests(run, witnesses[suite]) {
-			items = append(items, Item{Status: "failing", Suite: suite, Test: name, Detail: "fails now and is not one of the loop's findings"})
+		for _, name := range failingTests(run, witnesses[suiteKey(run.suite)]) {
+			items = append(items, Item{Status: "failing", Suite: run.suite, Test: name, Detail: "fails now and is not one of the loop's findings"})
 		}
 	}
 	return items, notes
@@ -625,7 +639,7 @@ func itemKey(it Item) string {
 	if it.ID != "" {
 		return it.ID + ":" + it.Status
 	}
-	return it.Status + ":" + it.Suite + ":" + it.File + ":" + it.Test
+	return it.Status + ":" + suiteKey(it.Suite) + ":" + it.File + ":" + it.Test
 }
 
 func findingByID(fs []Finding, id string) *Finding {
