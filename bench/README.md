@@ -196,6 +196,13 @@ reading is aimed at the families the previous one missed; the header then carrie
 the corpus hash covers just the cases that ran. A name outside `Families`, or a selection no case
 declares, is refused rather than reported as a green run over nothing.
 
+The summary also carries one `index: n/100` with its parts: `recall` (caught over defect-runs,
+weight 0.5), `breadth` (the share of the corpus's families it caught anything in, 0.3) and
+`precision` (1 minus inventions on clean control code, 0.2). The weights are a convention stated
+here so the number is auditable; with no control case the precision weight is dropped and the line
+says `precision not measured`. Cost is not part of the index: it needs a reference price, which is a
+product decision, and it stays the published number beside it.
+
 ## Cost and wall clock
 
 The cost of a run is the number of agent turns; concurrency does not change it. The wall clock is

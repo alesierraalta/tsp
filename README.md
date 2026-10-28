@@ -1105,6 +1105,15 @@ ran, so such a reading is never mistaken for a full one. A family outside the li
 is a selection no case declares, because a misspelling would otherwise publish a green run that
 measured nothing.
 
+Every summary also publishes a single `index: 82/100` with its parts, so two readings can be
+compared without holding five numbers at once: recall (how much of the planted breakage the reading
+proved, weight 0.5), breadth (the share of the corpus's failure kinds it caught anything in, 0.3),
+and precision (1 minus the inventions on clean control code, 0.2). The weights are a stated
+convention rather than a measurement, and when no control case ran the precision weight is dropped
+and the line says `precision not measured` instead of crediting a measurement that never happened.
+Cost is deliberately outside the index: folding dollars in needs a reference price, which is a
+product decision, so cost stays the separate number beside it.
+
 `bench run` scaffolds `<out>/<case>/<run>/ws` (default `bench/results/<timestamp>/`), commits the
 fixture, checks its suite is green (otherwise the case is invalid and skipped), spawns
 `claude -p "haz el testing"` in it, then scores `docs/testing/test-plan.md`:

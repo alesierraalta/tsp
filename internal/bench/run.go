@@ -1043,6 +1043,7 @@ func Summary(agg Aggregate) string {
 			c.Case, reported, pinned, caught, lightTag(c), microTag(c), c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note, precision)
 	}
 	b.WriteString(familySection(agg))
+	b.WriteString(indexSection(agg))
 	b.WriteString(missSection(agg))
 	return b.String()
 }
