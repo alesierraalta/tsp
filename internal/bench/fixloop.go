@@ -135,6 +135,7 @@ func runFixLoop(caseDir, ws string, key Key, runOpts, opts Options) *FixLoop {
 	loop.Witnesses = append([]string(nil), rep.Red...)
 	// D2: the registry is written before the fix, so it holds the witnesses of the code round 1 measured.
 	home := filepath.Join(filepath.Dir(ws), FindingsDir)
+	commitWorkspace(ws)
 	record, code, err := runTsp(ws, findingsEnv(home), opts, "findings", "record", "--cwd", ws, "--suite", key.Suite,
 		"--timeout", opts.SuiteTimeout.String())
 	if err != nil || code != 0 {
@@ -449,6 +450,15 @@ func findingsEnv(home string) []string {
 		env = append(env, kv)
 	}
 	return append(env, "TSP_HOME="+home)
+}
+
+// commitWorkspace commits what the round left in dir, because `tsp findings record` judges a commit and refuses a
+// dirty tree. A directory that is not a repository is left alone.
+func commitWorkspace(dir string) {
+	for _, args := range [][]string{{"add", "-A", "--", "."}, {"commit", "-qm", "bench round"}} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		_ = cmd.Run()
+	}
 }
 
 // runTsp runs the bench's own binary as tsp in dir and returns its output and exit code. A binary that could not

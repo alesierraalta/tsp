@@ -32,7 +32,9 @@ type Finding struct {
 	Status      string    `json:"status,omitempty"`
 	Reviewed    bool      `json:"reviewed"`
 	WasFixed    bool      `json:"was_fixed"`
-	Verdict     *Verdict  `json:"verdict,omitempty"`
+	// Regressions counts the times the finding went from fixed back to failing.
+	Regressions int      `json:"regressions,omitempty"`
+	Verdict     *Verdict `json:"verdict,omitempty"`
 }
 
 type Verdict struct {
@@ -49,6 +51,7 @@ type registry struct {
 	Review     int       `json:"review"`
 	NextID     int       `json:"next_id"`
 	Findings   []Finding `json:"findings"`
+	Loop       *Loop     `json:"loop,omitempty"`
 }
 
 func git(dir string, args ...string) (string, error) {
@@ -148,8 +151,49 @@ func ignored(dir, rel string) bool {
 
 func failure(e error) (string, int) { return "tsp findings: " + e.Error() + "\n", 2 }
 
+// judgedCommitHook is the seam a test uses to move HEAD while a round is judged.
+var judgedCommitHook func(top string)
+
+// suiteKey is the identity of a suite command: the same suite rerun with different whitespace or another -count flag
+// is the same witness, while a suite naming another runner, package or flag stays a different one.
+// sameWitness keeps a finding attached to the test it was recorded for: the same file, or the same body
+// once that file is gone. A test that merely borrows the name is a finding of its own.
+func sameWitness(f Finding, file, fingerprint string) bool {
+	if file != "" && f.File != "" && f.File == file {
+		// The same file and name is the same witness: editing it in place refreshes the finding.
+		return true
+	}
+	// A witness that moved keeps its identity only while its body is unchanged.
+	return f.Fingerprint != "" && fingerprint != "" && f.Fingerprint == fingerprint
+}
+
+func uncollectedLines(in []bench.Uncollected) []string {
+	out := make([]string, 0, len(in))
+	for _, u := range in {
+		out = append(out, fmt.Sprintf("%s: %s", u.File, u.Reason))
+	}
+	return out
+}
+
+func suiteKey(suite string) string {
+	words, e := hookcmd.ShellWords(suite)
+	if e != nil {
+		return "raw:" + suite
+	}
+	kept := words[:0]
+	for _, word := range words {
+		if strings.HasPrefix(word, "-count=") {
+			continue
+		}
+		kept = append(kept, word)
+	}
+	return strings.Join(kept, "\x00")
+}
+
+func sameSuite(a, b string) bool { return suiteKey(a) == suiteKey(b) }
+
 // Record records or refreshes precisely the witnesses RedCheck found.
-func Record(dir, suite string, timeout time.Duration) (string, int) {
+func Record(dir, suite, since string, timeout time.Duration) (string, int) {
 	r, path, top, e := load(dir)
 	if e != nil {
 		return failure(e)
@@ -157,23 +201,74 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if suite != "" && !bench.SupportsPerTest(suite) {
 		return failure(unsupportedRunner)
 	}
-	rep, e := bench.RedCheck(top, suite, timeout)
+	if dirty, e := dirtyTree(top); e != nil {
+		return failure(e)
+	} else if dirty {
+		return failure(errDirtyRecord)
+	}
+	// The commit is pinned before judging: a round whose base moved mid-run would compare a fix against code it
+	// never saw, and the gates over the loop's whole change would then read the change as already reviewed.
+	start, e := git(top, "rev-parse", "HEAD")
 	if e != nil {
 		return failure(e)
+	}
+	var fresh bool
+	r.Loop, fresh = alive(top, r.Loop)
+	if !fresh || (r.Loop != nil && r.Loop.Closed && !endedOn(r.Loop, start)) {
+		r.Loop = nil
+	}
+	base := roundBase(r.Loop, start)
+	if since != "" {
+		if _, e := git(top, "rev-parse", "--verify", since+"^{commit}"); e != nil {
+			return failure(fmt.Errorf("--since %s is not a commit: %v", since, e))
+		}
+		base = since
+	}
+	// The round is the change its commit made: a new loop judges that commit against its parent, and a later round
+	// judges the commits after the one it ended on. Several commits at once would hide all but one from the loop.
+	if r.Loop == nil || len(r.Loop.Rounds) == 0 {
+		if parent, e := git(top, "rev-parse", "--verify", base+"^"); e == nil && parent != base {
+			base = parent
+		}
+	}
+	if since != "" {
+		if count, e := git(top, "rev-list", "--count", since+".."+start); e == nil && count != "0" && count != "1" {
+			return failure(fmt.Errorf("--since %s covers %s commits: judge one round at a time", since, count))
+		}
+	}
+	rep, e := bench.RedCheckAt(top, suite, base, timeout)
+	if e != nil {
+		return failure(e)
+	}
+	if rep.Suite == "" {
+		rep.Suite = suite
 	}
 	if rep.Suite != "" && !bench.SupportsPerTest(rep.Suite) {
 		return failure(unsupportedRunner)
 	}
 	var diagnostics strings.Builder
+	if !fresh {
+		diagnostics.WriteString("a new TSP loop starts: the recorded commits of the one that was open are gone from this repository\n")
+	}
 	for _, file := range rep.Uncollected {
 		fmt.Fprintf(&diagnostics, "could not collect: %s (%s)\n", file.File, file.Reason)
 	}
-	if len(rep.Red) == 0 {
-		return diagnostics.String() + "no defect witnesses recorded\n", 1
+	// Even a round that pins nothing is booked: the loop converges on a round that attacked the current code
+	// and found nothing, so that round has to be on record.
+	if dirty, e := dirtyTree(top); e != nil {
+		return failure(e)
+	} else if dirty {
+		return failure(errors.New("the working tree changed while the TSP loop judged the round: record it again"))
+	}
+	if judgedCommitHook != nil {
+		judgedCommitHook(top)
 	}
 	commit, e := git(top, "rev-parse", "HEAD")
 	if e != nil {
 		return failure(e)
+	}
+	if commit != start {
+		return failure(errors.New("the commit changed while the TSP loop judged the round: record it again"))
 	}
 	unlock, e := lockRegistry(path)
 	if e != nil {
@@ -184,7 +279,16 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 	if e != nil {
 		return failure(e)
 	}
+	var stillAlive bool
+	r.Loop, stillAlive = alive(top, r.Loop)
+	if !stillAlive || (r.Loop != nil && r.Loop.Closed && !endedOn(r.Loop, start)) {
+		r.Loop = nil
+	}
+	if open(r.Loop) && roundBase(r.Loop, start) != base {
+		return failure(errors.New("the TSP loop moved while this round was judged: record it again"))
+	}
 	var out, skipped strings.Builder
+	created := []string{}
 	for _, name := range rep.Red {
 		file, fingerprint, promise := locate(top, name, rep.TestFiles)
 		if ignored(top, file) {
@@ -193,7 +297,7 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 		}
 		index := -1
 		for i := range r.Findings {
-			if r.Findings[i].Test == name {
+			if r.Findings[i].Test == name && sameSuite(r.Findings[i].Suite, rep.Suite) && sameWitness(r.Findings[i], file, fingerprint) {
 				index = i
 				break
 			}
@@ -202,18 +306,27 @@ func Record(dir, suite string, timeout time.Duration) (string, int) {
 			r.Findings = append(r.Findings, Finding{ID: fmt.Sprintf("F%d", r.NextID), Test: name})
 			r.NextID++
 			index = len(r.Findings) - 1
+			created = append(created, r.Findings[index].ID)
 		}
 		f := &r.Findings[index]
-		f.File, f.Fingerprint, f.Promise, f.Suite, f.Commit, f.Time = file, fingerprint, promise, rep.Suite, commit, time.Now().UTC()
+		// The newest command is the one the loop runs: re-recording a suite with other iterations refreshes it.
+		f.Suite = rep.Suite
+		f.File, f.Fingerprint, f.Promise, f.Commit, f.Time = file, fingerprint, promise, commit, time.Now().UTC()
 		fmt.Fprintf(&out, "%s recorded %s %s\n", f.ID, f.File, f.Test)
 	}
-	// A run with no red witness at all returned above, before locking, exactly as before this change. Reaching
-	// here with nothing recorded means every witness it found lives where git cannot version it.
-	if out.Len() == 0 {
-		return diagnostics.String() + skipped.String() + "nothing recorded: every witness lives under a path git ignores\n", 1
+	if endedOn(r.Loop, start) {
+		r.Loop.Closed = false
 	}
+	r.Loop = advance(r.Loop, base, start, rep.Suite, created, uncollectedLines(rep.Uncollected))
 	if e = save(r, path); e != nil {
 		return failure(e)
+	}
+	if len(rep.Red) == 0 {
+		return diagnostics.String() + "no defect witnesses recorded\n", 1
+	}
+	// Reaching here with nothing recorded means every witness the run found lives where git cannot version it.
+	if out.Len() == 0 {
+		return diagnostics.String() + skipped.String() + "nothing recorded: every witness lives under a path git ignores\n", 1
 	}
 	return diagnostics.String() + skipped.String() + out.String(), 0
 }
@@ -265,20 +378,67 @@ func SetVerdict(dir, id, decision, reason string) (string, int) {
 
 // Check runs each recorded suite once and saves the computed review.
 func Check(dir string, timeout time.Duration) (string, int) {
-	r, path, top, e := load(dir)
+	j, e := reviewAll(dir, timeout, nil, nil)
 	if e != nil {
 		return failure(e)
 	}
+	if j.summary == "" {
+		return fmt.Sprintf("no findings recorded on %s\n", j.branch), 0
+	}
+	return j.summary + "\n" + j.lines, j.code
+}
+
+// judged is one review of every recorded finding, as it was saved.
+type judged struct {
+	branch  string
+	summary string // the review line; empty when nothing is recorded
+	lines   string // one line per finding
+	code    int    // check's exit code
+}
+
+// suiteRun is one run of a suite: each test's outcome, and whether the run could be judged at all.
+type suiteRun struct {
+	suite  string
+	tests  map[string]bool
+	failed bool
+	code   int
+}
+
+// runSuite runs one suite test by test.
+func runSuite(top, suite string, timeout time.Duration) suiteRun {
+	tests, code, _, err := bench.PerTest(top, suite, timeout)
+	_, whole := tests["suite"]
+	// Cargo uses 101 for test failures as well as build errors; only a
+	// parsed per-test report makes that exit code judgeable.
+	argv, _ := hookcmd.ShellWords(suite)
+	cargoFailure := code == 101 && len(argv) > 1 && argv[0] == "cargo" && argv[1] == "test"
+	return suiteRun{suite: suite, tests: tests, failed: err != nil || whole || len(tests) == 0 || code < 0 || (code > 1 && !cargoFailure), code: code}
+}
+
+// reviewAll runs each recorded suite once, and every extra suite, and saves the computed review. amend, when
+// given, changes the registry that is saved, under the same lock and after the review is merged into it, with
+// every suite's run and the review in hand; it runs even when nothing is recorded, which saves no review of its own.
+func reviewAll(dir string, timeout time.Duration, extra []string, amend func(latest *registry, runs map[string]suiteRun, j judged) error) (judged, error) {
+	r, path, top, e := load(dir)
+	if e != nil {
+		return judged{}, e
+	}
+	runs := map[string]suiteRun{}
+	runExtra := func() {
+		for _, suite := range extra {
+			if _, done := runs[suiteKey(suite)]; !done && suite != "" {
+				runs[suiteKey(suite)] = runSuite(top, suite, timeout)
+			}
+		}
+	}
 	if len(r.Findings) == 0 {
-		return fmt.Sprintf("no findings recorded on %s\n", r.Branch), 0
+		if amend != nil {
+			runExtra()
+			e = saveAmended(dir, path, func(latest *registry) error { return amend(latest, runs, judged{branch: r.Branch}) })
+		}
+		return judged{branch: r.Branch}, e
 	}
 	original := append([]Finding(nil), r.Findings...)
-	type run struct {
-		tests  map[string]bool
-		failed bool
-		code   int
-	}
-	runs := map[string]run{}
 	fixed, open, newCount, regressed, need := 0, 0, 0, 0, 0
 	cannotJudge := false
 	var dropped []Finding // witnesses whose path git ignores: pruned from the registry, never reported as debt
@@ -301,9 +461,22 @@ func Check(dir string, timeout time.Duration) (string, int) {
 			}
 		}
 		file, fingerprint, _ := locate(top, f.Test, []string{f.File})
+		if file == "" {
+			want := ""
+			if f.Verdict != nil {
+				want = f.Verdict.Fingerprint
+			}
+			file, fingerprint, _ = relocate(top, *f, want)
+		}
 		suffix := ""
 		if f.Verdict != nil {
-			if fingerprint == f.Verdict.Fingerprint {
+			// A verdict holds while its test is unchanged, and once the test is gone: removing an invented test is
+			// how a rejection ends, whichever of the two came first.
+			if fingerprint == f.Verdict.Fingerprint || file == "" {
+				if file != "" {
+					// The rejection names where the test lives now, not where it was recorded.
+					f.File = file
+				}
 				f.Status, f.Reviewed = f.Verdict.Decision, true
 				writeLine(*f, f.Verdict.Reason, "")
 				continue
@@ -311,21 +484,15 @@ func Check(dir string, timeout time.Duration) (string, int) {
 			f.Verdict = nil
 			suffix = " (verdict dropped: test changed)"
 		}
-		result, ok := runs[f.Suite]
+		result, ok := runs[suiteKey(f.Suite)]
 		if !ok {
-			tests, code, _, err := bench.PerTest(top, f.Suite, timeout)
-			_, whole := tests["suite"]
-			// Cargo uses 101 for test failures as well as build errors; only a
-			// parsed per-test report makes that exit code judgeable.
-			argv, _ := hookcmd.ShellWords(f.Suite)
-			cargoFailure := code == 101 && len(argv) > 1 && argv[0] == "cargo" && argv[1] == "test"
-			result = run{tests: tests, failed: err != nil || whole || len(tests) == 0 || code < 0 || (code > 1 && !cargoFailure), code: code}
-			runs[f.Suite] = result
+			result = runSuite(top, f.Suite, timeout)
+			runs[suiteKey(f.Suite)] = result
 		}
 		previous := f.Status
 		passed, ran := result.tests[f.Test]
 		if file == "" && ran {
-			file, fingerprint, _ = relocate(top, *f)
+			file, fingerprint, _ = relocate(top, *f, "")
 			if file != "" {
 				f.File = file
 			}
@@ -348,6 +515,9 @@ func Check(dir string, timeout time.Duration) (string, int) {
 			need++
 		case !passed:
 			if f.WasFixed {
+				if previous == "fixed" {
+					f.Regressions++
+				}
 				f.Status = "regressed"
 				regressed++
 			} else {
@@ -372,14 +542,15 @@ func Check(dir string, timeout time.Duration) (string, int) {
 		f.Reviewed = true
 		writeLine(*f, f.Promise, suffix)
 	}
+	runExtra()
 	unlock, e := lockRegistry(path)
 	if e != nil {
-		return failure(e)
+		return judged{}, e
 	}
 	defer unlock()
 	latest, _, _, e := load(dir)
 	if e != nil {
-		return failure(e)
+		return judged{}, e
 	}
 	for i := range latest.Findings {
 		for j, computed := range r.Findings {
@@ -418,9 +589,6 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	if need > 0 {
 		report += fmt.Sprintf(", %d need review", need)
 	}
-	if e = save(r, path); e != nil {
-		return failure(e)
-	}
 	code := 0
 	if open+newCount+regressed+need > 0 {
 		code = 1
@@ -428,5 +596,31 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	if cannotJudge {
 		code = 2
 	}
-	return report + "\n" + lines.String(), code
+	j := judged{branch: r.Branch, summary: report, lines: lines.String(), code: code}
+	if amend != nil {
+		if e = amend(r, runs, j); e != nil {
+			return judged{}, e
+		}
+	}
+	if e = save(r, path); e != nil {
+		return judged{}, e
+	}
+	return j, nil
+}
+
+// saveAmended applies amend to the registry under its lock and saves the result.
+func saveAmended(dir, path string, amend func(latest *registry) error) error {
+	unlock, e := lockRegistry(path)
+	if e != nil {
+		return e
+	}
+	defer unlock()
+	latest, _, _, e := load(dir)
+	if e != nil {
+		return e
+	}
+	if e = amend(latest); e != nil {
+		return e
+	}
+	return save(latest, path)
 }

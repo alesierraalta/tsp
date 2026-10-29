@@ -1,1 +1,4 @@
-{"sandboxImage": "golang:1.26"}
+{
+  "sandboxImage": "golang:1.26",
+  "gate": "always"
+}

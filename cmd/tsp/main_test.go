@@ -147,6 +147,8 @@ func verdictCLI(t *testing.T) (func(int, string, string, ...string), string, str
 	if e := os.WriteFile(filepath.Join(dir, "value_test.go"), []byte("package witness\nimport \"testing\"\nfunc TestValue(t *testing.T) { if Value()!=1 { t.Fatal(\"broken\") } }\n"), 0600); e != nil {
 		t.Fatal(e)
 	}
+	git("add", ".")
+	git("commit", "-qm", "round one")
 	run := func(code int, stdout, stderr string, args ...string) {
 		t.Helper()
 		c := exec.Command(bin, append([]string{"findings"}, args...)...)

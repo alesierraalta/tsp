@@ -465,7 +465,7 @@ duplicates nothing of Gentle's: ODD, Engram memory, and the review lifecycle rem
 | `tsp repair` | Claude-only: re-syncs the managed skills and re-wires Claude's Stop hook; the Pi extension is untouched. |
 
 Load the extension (`pi --extension <path>/tsp.ts`, or let Pi load it from
-`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks "¿Quieres hacer TSP?" in the chat, and only when the scoped check (`tsp check --paths`, one flag per path) says the source that run touched still owes a test — a plan target open from earlier work, or a run that only wrote a report, asks nothing; "Sí" sends "haz el TSP", which invokes `test-strategy`, and "No" is remembered for those files (details in `assets/hosts/README.md`). Dependency trees (`node_modules/`, `vendor/`, `.venv/`, `venv/`, `site-packages/`, `dist-packages/`, and `__pypackages__/`) are excluded from production source and tests. Test files never trigger it (`*.test.*`, `*.spec.*`, `x_test.go`, `test_x.py`, `x_test.py`, and anything under `tests/`, `__tests__/`, `testdata/`, `e2e/` or `spec/`), nor does a TSP run, an aborted run, a session without UI, a delegated subagent session (`GENTLE_PI_AGENTS_CHILD=1`), or a repository with `.no-testing-gate`. A TSP run is one whose agent loads the installed test-strategy skill, or whose prompt is exactly "haz el TSP"; a message that only mentions tsp, or reading the repository's own copy of the skill, is not one. When a TSP run ends, the extension runs `tsp findings record` and then `tsp findings check`, and shows the review in the chat; the agent is not told about it. It then sends the agent the template `tsp feedback --template` prints and asks it to record its feedback on that run with `tsp feedback --file`, so each TSP run in Pi is asked for a report `tsp feedback --summary` and `--pending` read back; whether the agent submits it is not checked. Nothing is sent while feedback is disabled; a `tsp` that cannot print the template is shown as a warning instead, and the feedback run triggers no review, no TSP question and no further request. Edits made through a shell command are not seen. This was watched in a live Pi 1.3.0 session. `/tsp check` keeps a quoted argument whole, so `/tsp check --suite "npm test"` reaches the CLI as one value. The Pi Stop hook is a separate,
+`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks the scoped check (`tsp check --json --paths`, one flag per path, `--since` the commit the turn started from, so a work unit committed before the turn ended is still answered for) what that source owes and who decides: `none` ends the turn in silence, `required` sends "haz el TSP" on its own, and only `ask` shows the question "¿Quieres hacer TSP?" in the chat — a plan target open from earlier work, or a run that only wrote a report, asks nothing; "Sí" sends "haz el TSP", which invokes `test-strategy`, and "No" is remembered for those files (details in `assets/hosts/README.md`, policy in [Who decides when TSP runs](#who-decides-when-tsp-runs)). Dependency trees (`node_modules/`, `vendor/`, `.venv/`, `venv/`, `site-packages/`, `dist-packages/`, and `__pypackages__/`) are excluded from production source and tests. Test files never trigger it (`*.test.*`, `*.spec.*`, `x_test.go`, `test_x.py`, `x_test.py`, and anything under `tests/`, `__tests__/`, `testdata/`, `e2e/` or `spec/`), nor does a TSP run or a loop's fix run, an aborted run, a session without UI, a delegated subagent session (`GENTLE_PI_AGENTS_CHILD=1`), or a repository with `.no-testing-gate`. A TSP run is one whose agent loads the installed test-strategy skill, or whose prompt is exactly "haz el TSP"; a message that only mentions tsp, or reading the repository's own copy of the skill, is not one. When a TSP run ends, the extension runs `tsp findings record` and then `tsp findings next --json`, shows the review, the answer and its notes in the chat, and drives the loop: `fix` sends the agent the findings to settle ("The TSP loop found defects to settle.") and asks `next` again when that fix run ends, and a fix run that leaves the same answer over the same tree ends the loop with a warning instead of sending the same fix again; `tsp` sends "haz el TSP — round N …", a round aimed only at what the last fix changed; `done` and `stop` end the loop with a notice (see [Loop until the change converges](#loop-until-the-change-converges)). A `tsp` without `findings next` falls back to `tsp findings check`. Each TSP run is still followed by the template `tsp feedback --template` prints, asking the agent to record its feedback on that run with `tsp feedback --file`, so each TSP run in Pi is asked for a report `tsp feedback --summary` and `--pending` read back; the loop's next message waits until that feedback run ends, an aborted turn or the user's own message drops it, and whether the agent submits the report is not checked. Nothing is sent while feedback is disabled; a `tsp` that cannot print the template is shown as a warning instead, and the feedback run triggers no review, no TSP question and no further request. Edits made through a shell command are not seen. This was watched in a live Pi 1.3.0 session. `/tsp check` keeps a quoted argument whole, so `/tsp check --suite "npm test"` reaches the CLI as one value. The Pi Stop hook is a separate,
 **not verified** surface: its payload contract was read from the pi-hooks package and nobody has
 watched it fire here, so merging `assets/hosts/pi/settings.stop-hook.json` into Pi's settings is
 ready to test, not working.
@@ -486,7 +486,9 @@ ones win when both are present:
   (state, backups, update cache) to `~/.config/tsp`, retaining both old paths as symlink aliases.
   An existing TSP root wins; divergent legacy roots are not merged, and a failed move leaves the old root in use.
 - `.tsp.json` is the canonical repository declaration; `.tpp.json` and `.rdd-plus.json` remain
-  read-only legacy names. If any two or three are present, tsp refuses them even when contents match.
+  read-only legacy names. Its optional `gate` key — `ask`, `always` or `never` — decides whether a
+  finished change runs TSP on its own, asks, or stays quiet (see
+  [Who decides when TSP runs](#who-decides-when-tsp-runs)). If any two or three are present, tsp refuses them even when contents match.
   No declaration file is automatically renamed, deleted, merged or rewritten.
 - `TSP_UPDATE_BASE_URL` is canonical for the update check; `TPP_UPDATE_BASE_URL` and then
   `RDD_PLUS_UPDATE_BASE_URL` are legacy fallbacks while the newer name is unset. `RDD_PLUS_HOME` is read when
@@ -544,17 +546,40 @@ Additional commands:
 
 | Command | What it does |
 |---|---|
-| `tsp check` | Says what the repository still owes from git, tests, and an optional plan. |
+| `tsp check [--cwd <dir>] [--path <plan>] [--since <commit>] [--json]` | Says what the repository still owes from git, tests, and an optional plan. `--since` also counts the paths a commit range changed, so a work unit that was committed before the check runs is still answered for. `--json` prints one verdict object — `decision`, `debt`, `reason`, `exit` — where `decision` is `none`, `ask` or `required`: the policy the repository declares in `.tsp.json` (see [Who decides when TSP runs](#who-decides-when-tsp-runs)). |
 | `tsp check --base <ref>` | The same question for the commit range `<ref>...HEAD`, which is the candidate CI has: the tests are run against `<ref>`'s code, so a test that only passes because the change is next to it pins nothing. |
 | `tsp redcheck` | Runs added or changed tests against HEAD's code to identify defect witnesses. |
 | `tsp mutate [--base <ref>] [--fail-on-survivors <n>]` | Mutates the production source the change touched and reports the mutants no test kills; the engine (gremlins) stays external, the scope, budget and gate stay here. Exit 0 no survivor at the threshold, 1 survivors, 2 nothing measured. |
 | `tsp scan [--base <ref>] [--sarif <report>] [--level <l>]` | Brings a scanner's real findings into the change: runs gitleaks when installed and semgrep beside it when it is too, or reads any SARIF report, keeps only the files the change touched, and gates at `--level` (default `warning`). Exit 0 nothing at that level, 1 findings, 2 nothing scanned. |
-| `tsp findings record\|check\|verdict` | Records defect witnesses, checks their state at the next review, or records a verdict. |
+| `tsp findings record\|check\|next\|verdict` | Records defect witnesses, checks their state at the next review, answers what the TSP loop owes next, or records a verdict. |
 | `tsp probe env [dir] [--json]` | Reports undelivered environment settings (read-only). |
 | `tsp probe quality [--cwd <dir>] [--base <ref>]` | Reports complexity and copied blocks inside the lines a change touches, and names the languages it cannot measure. Exit 0 clean, 1 findings, 2 nothing measurable. |
 | `tsp probe arch [--cwd <dir>] [--base <ref>] [--rules <file>]` | Reports the import edges a change added that `.tsp-arch.json` refuses. Exit 0 clean, 1 findings, 2 nothing measurable. |
 | `tsp plan upgrade [--run <slug>] [--path <path>]` | Upgrades a plan to the current contract. |
 | `tsp bench adjudicate` | Records or shows decisions for finding rows; undecided rows stay pending. |
+
+## Who decides when TSP runs
+
+A change that owes a test is not automatically a run. The repository decides, and the check reports
+that decision:
+
+| `.tsp.json` `gate` | Decision | What a host does |
+|---|---|---|
+| `never` | `none` | Nothing. The debt is still named in the check's text and in `--json`'s `debt`, so a report can show it. |
+| `always` | `required` | Runs TSP without asking. |
+| `ask` | `ask` | Asks the human, once, naming the debt. |
+
+Without a declaration the runtime decides: a verified Gentle session (`TSP_GENTLE_OBSERVATION`, set by
+the Pi extension and only under a live Gentle session) is `required`, because that harness exists to run
+the discipline; anywhere else the decision is `ask`, because nothing there can authorize a run on the
+human's behalf. The exit follows the decision — `required` and `ask` both exit 1, `none` exits 0 — so a
+Stop hook, a CI step and an interactive host all read the same verdict. A request the check cannot
+answer (a `--since` that does not resolve, a declaration it cannot read) exits 2 and is never reported
+as a debt.
+
+`never` is the repository saying the discipline does not apply here; `.no-testing-gate` says the same
+for the older Stop gate and the offer. `always` is the repository saying it does, which is what a
+harness already spends its turns on.
 
 ## How the gate decides
 
@@ -698,7 +723,7 @@ own tests pin anything. This repository runs it on its own pull requests in
 ## Skills
 
 The embedded skills live under `assets/skills/`. `test-strategy` is the entry point ("haz test
-strategy"; aliases: "haz test stragety" and "haz el testing"): it finds the defects the existing green
+strategy"; aliases: "haz test strategy" and "haz el testing"): it finds the defects the existing green
 suite misses and leaves one test per defect in the repository's own suite, red on today's code and
 green once the defect is fixed. It probes each promise across its input classes, writes family-wide
 promises (order, round trip, never panics) as property tests with generated inputs, and builds inputs
@@ -729,18 +754,88 @@ the decision. A finding with a verdict schedules no suite run and its outcome ne
 the report, counts or exit code; if its test executes because another active finding shares
 the suite, that outcome is ignored.
 If a closed finding's test body changes, check drops the verdict, computes the status again, and
-notes `(verdict dropped: test changed)` on the finding's line.
+notes `(verdict dropped: test changed)` on the finding's line. A test that was removed keeps its
+verdict: removing an invented test is how a rejection ends.
 
 Check reports `open`, `fixed`, or `regressed`. A weakened test is `test-changed`, a deleted
 test is `missing`, and an unreadable suite is `unknown`; these need review, never count as fixes.
-Its summary counts newly fixed, still open, new and regressed findings. This tracks existing
-witnesses, not instructions for an agent to hunt for more bugs.
+Its summary counts newly fixed, still open, new and regressed findings. Check tracks existing
+witnesses; telling an agent what to do next is `tsp findings next`, below.
 
 Check exits 0 when nothing remains unresolved (including an empty registry), 1 for unresolved
 findings, and 2 when it cannot judge a finding (a suite does not build or times out), or the
 registry cannot be read. Record exits 0 for recorded or refreshed witnesses, 1 for
 none, and 2 for errors. Re-recording a failing witness refreshes its body fingerprint rather
 than allocating another id.
+
+### Loop until the change converges
+
+One TSP pass is not the end: the fix can break what the pass did not test. `tsp findings next`
+answers what the loop TSP → fix → TSP owes now, so the loop stops on a rule the tool computes, not
+on the model's judgement. Run it after `tsp findings record`:
+
+- `fix` (exit 1): a finding is open, new, regressed or needs review, a rejected finding's test is
+  still in the suite, a suite did not run test by test, any other test in the suites the loop ran
+  fails, or a gate below found something. A failure older than the loop holds it too: the loop
+  cannot tell it from one the change caused. Compare what each witness asserts with the contract
+  (README, doc comments, the public API): when the contract promises it, fix the source; when it
+  does not, run `tsp findings verdict F<n> rejected --reason "<why>"` and remove that test. A
+  failing test that is not a finding is fixed in the source, never edited or removed. Never edit a
+  witness test to make it pass; `wontfix`, a check waiver and `.no-testing-gate` are the user's
+  decisions, not the agent's.
+- `tsp` (exit 1): everything is settled, but the last fix changed source no round has attacked. The
+  next round attacks only that change and what it affects (the answer supplies an environment-prefixed
+  `git --literal-pathspecs diff <since> <base> -- <paths>` command to read the private trees, with every
+  argument quoted so filenames are neither shell programs nor Git pathspecs); every
+  earlier finding is reviewed again anyway, so a regression anywhere still shows.
+- `done` (exit 0): the last round ran on exactly the current code, everything it and earlier rounds
+  found is settled, every test in the suites the loop ran passes (a witness the user kept as
+  `wontfix` is named in the notes instead), and the gates over the change since
+  the commit the loop started from are clean: what `tsp check` owes for the source it changed (a
+  repository that declares `gate never` or carries `.no-testing-gate` is not held to it),
+  `tsp probe quality` on non-test files, and `tsp probe arch`. A gate that cannot measure is listed
+  as not measured, never as clean.
+- a suite that could not collect every input leaves the change it never reached unjudged: `next`
+  names it in the notes (`not measured: no recorded suite collected <file>: <reason>`) and answers
+  with an `unjudged` item, so the loop stays open instead of claiming convergence.
+- `stop` (exit 3): the loop hands the decision to the user — 5 rounds ran and the last fix is still
+  unattacked, two fixes in a row settled nothing, a finding regressed twice, or a test failed again
+  after a fix had made it pass.
+- exit 2: no round is recorded, the working tree has uncommitted changes (commit them, then record
+  or ask `next` again), the commit changed while `next` judged it (ask again), the commits a round
+  recorded are gone (amended, rebased or pruned; the next record starts a new loop), a `--since`
+  revision is not a commit or covers several, or a registry cannot be read.
+
+`--json` prints the same answer as one object (`next`, `round`, `max_rounds`, `reason`, `review`,
+`items`, `scope`, `rounds`, `message`, `notes`, `tree`, `lines`) for a host; the Pi extension
+drives the loop from it, and `lines` carries the review's line for every finding. The loop's state
+lives in the branch's registry. The loop judges commits, never a working tree: `tsp findings record`
+refuses a dirty tree, so the round it books is the commit it judged, and `next` refuses to judge a
+tree that changed or a commit that moved while it ran. Round one records `HEAD` against its parent;
+`tsp findings record --since <rev>` names another base when a round starts elsewhere. Every later
+round is judged against the commit it was asked to attack, so a fix that was committed is the round,
+and a source change committed after that round owes another focused round. The suggested diff
+command is a plain `git diff <since> <base> -- <paths>` with every argument quoted, so a filename is
+neither a shell program nor a Git pathspec. The loop makes no commit, moves no ref and leaves the
+index alone: committing the round is the caller's step, and a repository holding a submodule is
+judged like any other. A commit a round recorded and the repository no longer holds (amended,
+rebased or pruned) ends the loop honestly, and the next record starts a new one.
+`next` reruns every suite a round recorded and the gates, including after `done` or `stop`: an
+unchanged commit alone never proves that verdicts, suites or results are unchanged. A record on the
+same commit keeps the round's history and includes new suites and findings. Recovery and relapse
+belong to the same test **and suite**; `go test .`, `go test -count=1 .` and `go test -count=3 .`
+name the same finding, the newest command supplied is the one stored, and every command a round
+recorded still runs, so a failure that only the third iteration shows is still caught. `tree` names
+the commit an answer judged; Pi uses it with the fix message for its no-change guard. A verdict
+survives removal of its test, so rejecting an invented witness and deleting it settles the finding
+in either order.
+
+What is measured and what is not: on hard23, a second TSP pass after the agent's own fix found
+real defects in 7 of 56 runs, including regressions the fix introduced, while repeating passes over
+unchanged code found nothing new and multiplied the tests that fail on correct code — which is why
+later rounds attack only the last fix. Rounds 3 and later and the stop rule itself have not been
+measured. The loop re-runs only the suites its rounds wrote tests in; the rest of the project's
+tests are not re-run by it.
 
 `breakcheck` is an explicitly invoked bounded adversarial campaign for one candidate between the Verifier and RDD; it reports evidence and a readiness disposition, not a score.
 

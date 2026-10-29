@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+
 	"github.com/alesierraalta/tsp/internal/admit"
 	"github.com/alesierraalta/tsp/internal/base"
 	"github.com/alesierraalta/tsp/internal/bench"
@@ -74,7 +75,11 @@ commands:
            hook payload, no transcript, no host. Without a plan, changed source needs a new test that
            fails on HEAD's code (see redcheck; --suite names how to run it), a waiver
            recorded with --no-test-needed "<reason>", or a .no-testing-gate. --base <ref> judges the
-           commit range a pull request carries instead of the working tree. Exit 1 when there is
+           commit range a pull request carries instead of the working tree. --since <commit> also
+           counts what that range changed, so a work unit already committed is still read. The
+           verdict carries a gate level: a .tsp.json "gate" of never, ask or always wins, and with
+           none declared a verified Gentle session (TSP_GENTLE_OBSERVATION) requires the run while
+           every other caller asks. --json prints that level for a host. Exit 1 when there is
            something to do.
   redcheck run the tests added or changed since HEAD against HEAD's code and say which new tests
            fail there (defect witnesses) and which pass (they pin nothing). Exit 0 when at least one
@@ -89,6 +94,8 @@ commands:
   findings record defect witnesses after a TSP run; check their state at the next review
            (record [--cwd <dir>] [--suite <test command>] [--timeout <duration>])
            (check [--cwd <dir>] [--timeout <duration>])
+           (next [--cwd <dir>] [--timeout <duration>] [--json]: what the TSP loop owes now — fix, tsp,
+            done or stop; exit 0 done, 1 fix or tsp, 2 cannot judge, 3 stop: the user decides)
            (verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear)
   probe    env [dir] [--json]: report undelivered environment settings (read-only)
            arch [--base <ref>] [--json]: refuse an import edge this repository does not allow,
@@ -187,7 +194,7 @@ plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--
             --record writes the freshly observed digest back into the named rows and requires
             --execute, because a dry run makes no observation to pin; exit 1 when any row is
             refused or a digest cannot be written)
-check [--cwd .] [--path <path>]
+check [--cwd .] [--path <path>] [--since <commit>] [--json]
 status [--json]
 update [--check]  --check only checks and refreshes the cache; it never installs
 restore [--id <backup-id>] [--dry-run]   (default: the latest backup)
@@ -1072,6 +1079,8 @@ func runCheck(args []string) int {
 	suite := fs.String("suite", "", "command that runs the changed tests when there is no plan (default: their Go packages, pytest on changed .py tests, or node --test on them)")
 	waive := fs.String("no-test-needed", "", "record in "+check.WaiverName+" that the change needs no new test, with this reason; with --base it covers the range's files, otherwise the tree; editing the code again voids it")
 	base := fs.String("base", "", "check the commit range <base>...HEAD instead of the working tree: what CI does, where the tree holds HEAD and nothing looks changed; the plan document is not consulted for a range")
+	since := fs.String("since", "", "count the paths this commit range changed as part of this change, so a work unit already committed still owes what it owes; the ref must resolve to a commit")
+	asJSON := fs.Bool("json", false, "print the verdict as one JSON object {decision, reason, exit} instead of text: the decision is none, ask or required, and error when the check could not answer")
 	// One path per occurrence, never a comma-split list: a changed file may itself carry a comma in
 	// its name, and folding it into a joined value would name paths that do not exist — the check
 	// would then answer "nothing to check" while the change really owes a test.
@@ -1086,25 +1095,29 @@ func runCheck(args []string) int {
 		return code
 	}
 	if flagSet(fs, "no-test-needed") && strings.TrimSpace(*waive) == "" {
-		fmt.Fprintln(os.Stderr, "check: --no-test-needed needs a reason")
-		return 2
+		return refuseCheck(*asJSON, "check: --no-test-needed needs a reason")
 	}
 	if flagSet(fs, "paths") && flagSet(fs, "no-test-needed") {
-		fmt.Fprintln(os.Stderr, "check: --paths answers for one change; --no-test-needed records a waiver for the whole change")
-		return 2
+		return refuseCheck(*asJSON, "check: --paths answers for one change; --no-test-needed records a waiver for the whole change")
 	}
 	if flagSet(fs, "paths") && flagSet(fs, "suite") {
-		fmt.Fprintln(os.Stderr, "check: --paths answers for one change; --suite runs the changed tests for the whole change")
-		return 2
+		return refuseCheck(*asJSON, "check: --paths answers for one change; --suite runs the changed tests for the whole change")
+	}
+	if flagSet(fs, "since") && flagSet(fs, "no-test-needed") {
+		return refuseCheck(*asJSON, "check: --since reads a commit range; --no-test-needed records a waiver for the change in the tree")
+	}
+	if flagSet(fs, "json") && flagSet(fs, "no-test-needed") {
+		return refuseCheck(*asJSON, "check: --json reports a verdict; --no-test-needed records a waiver and reports none")
+	}
+	if flagSet(fs, "since") && strings.TrimSpace(*since) == "" {
+		return refuseCheck(*asJSON, "check: --since names no ref: pass the commit this work unit started from")
 	}
 	if flagSet(fs, "paths") && len(named) == 0 {
-		fmt.Fprintln(os.Stderr, "check: --paths names no path: pass one --paths per path")
-		return 2
+		return refuseCheck(*asJSON, "check: --paths names no path: pass one --paths per path")
 	}
 	if flagSet(fs, "path") {
 		if err := plan.ValidatePlanPath("--path", *path); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 2
+			return refuseCheck(*asJSON, err.Error())
 		}
 	}
 	// A --cwd that cannot be read hands git a directory it cannot stand in, and git's failure is
@@ -1113,18 +1126,72 @@ func runCheck(args []string) int {
 	// the directory is validated here, before git is asked about a tree it never stood in. A directory
 	// that exists but is not a repository keeps its answer: there, git was read and found nothing.
 	if info, err := os.Stat(*cwd); err != nil || !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "check: --cwd %s is not a directory: name an existing directory inside the repository\n", *cwd)
-		return 2
+		return refuseCheck(*asJSON, fmt.Sprintf("check: --cwd %s is not a directory: name an existing directory inside the repository", *cwd))
 	}
-	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named, Base: strings.TrimSpace(*base)})
+	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named, Base: strings.TrimSpace(*base), Since: strings.TrimSpace(*since)})
+	if *asJSON {
+		return printCheckVerdict(res)
+	}
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
 }
 
+// refuseCheck answers a run the flags made impossible. --json promised one object, so a caller that
+// reads the check programmatically gets the refusal in that shape instead of prose it cannot parse:
+// a rejected flag that reads as "no verdict" is exactly how a typo becomes silence.
+func refuseCheck(asJSON bool, msg string) int {
+	if asJSON {
+		return printCheckVerdict(check.Result{Exit: 2, Reason: msg})
+	}
+	fmt.Fprintln(os.Stderr, msg)
+	return 2
+}
+
+// printCheckVerdict answers a host that reads the decision instead of the prose: one object and the
+// exit the decision implies, so the caller never parses a sentence to learn whether to ask, run or
+// stay silent. A check that reached no verdict reports "error", which is outside the three levels a
+// repository can declare.
+func printCheckVerdict(res check.Result) int {
+	verdict := struct {
+		Decision string `json:"decision"`
+		Debt     string `json:"debt"`
+		Reason   string `json:"reason"`
+		Exit     int    `json:"exit"`
+	}{Decision: res.Gate, Reason: res.Reason, Exit: res.Exit}
+	if verdict.Decision == "" {
+		verdict.Decision = "error"
+	}
+	// Nothing owed means nothing to show a human: the quiet sentence the check prints when it found no
+	// production source to answer for is its own words, not a debt.
+	if line := check.DebtLine(res.Text); !strings.Contains(line, "nothing to check") {
+		verdict.Debt = line
+	}
+	if verdict.Reason == "" {
+		verdict.Reason = firstLine(res.Text)
+	}
+	body, err := json.Marshal(verdict)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "check: the verdict could not be encoded: "+err.Error())
+		return 2
+	}
+	fmt.Println(string(body))
+	return res.Exit
+}
+
+// firstLine is the first line that carries something, which is the verdict's own wording.
+func firstLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 // runRedcheck tells a testing agent which of its new tests pin nothing: they pass on the code HEAD holds.
 func runFindings(args []string) int {
-	const help = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\nSupported suites: go test, pytest, node --test, jest, vitest run (also npx), cargo test.\nCargo witnesses must be in recognized test files (e.g. tests/), not inline unit tests.\n"
-	if len(args) == 0 || (args[0] != "record" && args[0] != "check" && args[0] != "verdict") {
+	const help = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--since <rev>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings next [--cwd <dir>] [--timeout <duration>] [--json]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\nSupported suites: go test, pytest, node --test, jest, vitest run (also npx), cargo test.\nCargo witnesses must be in recognized test files (e.g. tests/), not inline unit tests.\nnext answers what the TSP loop owes now: fix, tsp, done or stop (exit 1, 1, 0, 3; 2 cannot judge).\n"
+	if len(args) == 0 || (args[0] != "record" && args[0] != "check" && args[0] != "next" && args[0] != "verdict") {
 		fmt.Fprint(os.Stderr, help)
 		if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 			return 0
@@ -1134,7 +1201,7 @@ func runFindings(args []string) int {
 	fs := flag.NewFlagSet("findings "+args[0], flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository")
 	timeout := fs.Duration("timeout", 5*time.Minute, "cap for each suite run")
-	var suite, reason, id, decision string
+	var suite, since, reason, id, decision string
 	flags := args[1:]
 	if args[0] == "verdict" {
 		fs.StringVar(&reason, "reason", "", "why the finding is closed")
@@ -1142,8 +1209,13 @@ func runFindings(args []string) int {
 			id, decision, flags = args[1], args[2], args[3:]
 		}
 	}
+	asJSON := false
+	if args[0] == "next" {
+		fs.BoolVar(&asJSON, "json", false, "print the answer as one JSON object")
+	}
 	if args[0] == "record" {
 		fs.StringVar(&suite, "suite", "", "test command: go test, pytest, node --test, jest, vitest run (also npx), cargo test (tests/ witnesses, not inline unit tests); default: inferred")
+		fs.StringVar(&since, "since", "", "commit the round starts from; default: the parent of HEAD for a new loop")
 	}
 	if code, ok := parseFlags(fs, flags); !ok {
 		return code
@@ -1167,9 +1239,21 @@ func runFindings(args []string) int {
 	}
 	var out string
 	var code int
-	if args[0] == "record" {
-		out, code = findings.Record(*cwd, suite, *timeout)
-	} else {
+	switch args[0] {
+	case "record":
+		out, code = findings.Record(*cwd, suite, since, *timeout)
+	case "next":
+		answer, next := findings.Next(*cwd, *timeout)
+		if !asJSON {
+			fmt.Print(answer.Text())
+			return next
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(answer); err != nil {
+			fmt.Fprintln(os.Stderr, "tsp findings:", err)
+			return 2
+		}
+		return next
+	default:
 		out, code = findings.Check(*cwd, *timeout)
 	}
 	fmt.Print(out)

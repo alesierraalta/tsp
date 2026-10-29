@@ -4,10 +4,10 @@ description: "Trigger: terminé la implementación, implementation done, a code 
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.2.3"
+  version: "0.2.4"
   requires_tsp: "0.7.1"
   scope: [common]
-  auto_invoke: "After ODD finishes an implementation and before the RDD review or declaring done: run `tsp check` with one `--paths` per changed production source path (e.g. `tsp check --paths a.go --paths b.go`), say the verdict in one line, then run the full test-strategy flow when it is owed. No production source from this work means no implementation, so no TSP."
+  auto_invoke: "After ODD finishes an implementation and before the RDD review or declaring done: run `tsp check` with one `--paths` per changed production source path (e.g. `tsp check --paths a.go --paths b.go`), say the verdict in one line, then run the full test-strategy flow when it is owed and loop with `tsp findings next` until it answers done or stop. No production source from this work means no implementation, so no TSP."
 ---
 
 # TSP Own Verifier
@@ -84,15 +84,46 @@ validated and what was NOT reachable, and every finding carries an executed evid
 `~/.claude/skills/test-strategy/references/evidence.md`.
 
 Treat this as verification, not as a new implementation: fix only what the flow proves broken,
-and re-run the affected targets until they are green on the final tree.
+and only through the loop below, which decides when the change is done.
+
+## Loop until `tsp findings next` says done
+
+One pass is not the end: a fix can break what the pass did not test. After the flow pins its
+defects, run `tsp findings record` and then `tsp findings next`, and do what it answers until it
+answers `done` or `stop`:
+
+- **`fix`** — settle every item it lists. Compare what each test asserts with the contract (README,
+  doc comments, the public API). When the contract promises it, fix the source. When it does not,
+  run `tsp findings verdict F<n> rejected --reason "<why the contract does not promise it>"` and
+  remove that test. Never edit a witness test to make it pass, never change code to satisfy an
+  invented test, and never record `wontfix`, a check waiver or `.no-testing-gate`: those decisions
+  are the human's. A `failing` item is a test that is not a finding: fix the source that makes it
+  fail and never edit or remove that test. A `suite` item is fixed first, and a `check`, `quality`
+  or `arch` item is fixed in the code or the tests it names. When an item cannot be settled under
+  these rules, stop and report it as one decision for the human. Then run `tsp findings next` again.
+- **`tsp`** — run the test-strategy flow again, aimed at the change it names
+  (use the exact `git diff <since> <base> -- <paths>` command in the answer) and everything that
+  change affects. Do not re-attack code
+  it did not touch: a pass over unchanged code makes tests that fail on correct code, not defects.
+  `tsp findings record` refuses a dirty tree: commit the round's tests before recording, then run
+  `tsp findings next`.
+- **`done`** (exit 0) — the loop converged. Report the rounds it took and every rejected finding with
+  its reason, then continue to the RDD review or the delivery.
+- **`stop`** (exit 3) — report its reason and the unsettled items as one decision for the human. Do
+  not start another round on your own.
+
+The loop's state and its decision live in `tsp`, never in this conversation: ask `next` instead of
+judging from memory whether a finding was already fixed. When the host drives the loop (the Pi
+extension sends "The TSP loop found defects to settle." and "haz el TSP — round …"), end the turn
+after the flow and let the host send the next step.
 
 ## Read Boundaries
 
 - This gate decides whether to validate and over what, from repository state; it does not review
   the code and does not replace the RDD review, native review authority, receipts, consent
   envelopes, or delivery policy.
-- The gate reads the repository and runs one flow. It never asks the human, never invents a second
-  gate, never widens the scope past what the report names, and never records a skipped validation
-  as a success.
-- Read-only outside the test-strategy flow this skill delegates to; the flow owns plan and
-  evidence writes.
+- The gate reads the repository and runs the flow, and `tsp findings next` decides how many rounds
+  follow. It never asks the human, never invents a second gate, never widens the scope past what the
+  report and the loop name, and never records a skipped validation as a success.
+- Outside the test-strategy flow this skill delegates to, it writes only the fixes and the verdicts
+  `tsp findings next` asks for; the flow owns plan and evidence writes.

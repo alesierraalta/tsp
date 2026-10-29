@@ -72,13 +72,16 @@ func locate(root, name string, files []string) (string, string, string) {
 	}
 	return "", "", ""
 }
-func relocate(root string, f Finding) (string, string, string) {
+
+// relocate finds a recorded test wherever it lives now. want, when set, is the body a match must have: a test that
+// carries the same name in another file is a different test, so a verdict is never moved onto it.
+func relocate(root string, f Finding, want string) (string, string, string) {
 	if strings.HasSuffix(f.File, "_test.go") {
 		files, _ := filepath.Glob(filepath.Join(root, filepath.Dir(f.File), "*_test.go"))
 		for i, file := range files {
 			files[i], _ = filepath.Rel(root, file)
 		}
-		return locate(root, f.Test, files)
+		return locateMatching(root, f.Test, files, want)
 	}
 	var files []string
 	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
@@ -102,7 +105,21 @@ func relocate(root string, f Finding) (string, string, string) {
 		if parts := strings.SplitN(name, "::", 2); len(parts) == 2 && strings.HasSuffix(file, ".py") {
 			name = filepath.ToSlash(file) + "::" + parts[1]
 		}
-		if found, fingerprint, promise := locate(root, name, []string{file}); found != "" {
+		if found, fingerprint, promise := locateMatching(root, name, []string{file}, want); found != "" {
+			return found, fingerprint, promise
+		}
+	}
+	return "", "", ""
+}
+
+// locateMatching is locate restricted to a body fingerprint: with want empty it takes the first match, otherwise the
+// first file whose test has that body.
+func locateMatching(root, name string, files []string, want string) (string, string, string) {
+	if want == "" {
+		return locate(root, name, files)
+	}
+	for _, file := range files {
+		if found, fingerprint, promise := locate(root, name, []string{file}); found != "" && fingerprint == want {
 			return found, fingerprint, promise
 		}
 	}

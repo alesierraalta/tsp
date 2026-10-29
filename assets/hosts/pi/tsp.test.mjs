@@ -181,19 +181,30 @@ test("without UI nothing renders — and help never spawns a process", async () 
   assert.match(help.rec.notify[0].message, /Usage/);
 });
 
-// The TSP offer: after a run that changed source code, Pi asks in the chat whether to run TSP; "Sí" sends the
-// identity prompt "haz el TSP" as if the user typed it. Every collaborator is faked: no Pi, no files.
+// The check's verdict, in the one object the extension reads: the criterion and the policy arrive together, so no
+// test has to spell out prose the check would have to be parsed for.
+const GATE_REASON = "no gate is declared in .tsp.json and no verified Gentle signal is active";
+const askVerdict = (debt, reason = GATE_REASON) => ({ stdout: JSON.stringify({ decision: "ask", debt, reason, exit: 1 }), stderr: "", code: 1 });
+const noneVerdict = () => ({ stdout: JSON.stringify({ decision: "none", debt: "", reason: "", exit: 0 }), stderr: "", code: 0 });
+const requiredVerdict = (debt, reason = "a verified Gentle session is active: TSP is required") => ({ stdout: JSON.stringify({ decision: "required", debt, reason, exit: 1 }), stderr: "", code: 1 });
+const errorVerdict = (reason) => ({ stdout: JSON.stringify({ decision: "error", debt: "", reason, exit: 2 }), stderr: "", code: 2 });
+
+// The TSP offer: after a run that changed source code, Pi runs TSP when the repository requires it and asks in the
+// chat when the repository left that to the human; "Sí" sends the identity prompt "haz el TSP" as if the user typed
+// it. Every collaborator is faked: no Pi, no files, no git.
 function offerHarness(opts = {}) {
-  const { hasUI = true, optedOut = false, env = {}, findings = {}, check = { stdout: "run m1: layers swept: 1 of 3\n", stderr: "", code: 1 } } = opts;
+  const { hasUI = true, optedOut = false, env = {}, findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3") } = opts;
   const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
   const asked = [], sent = [], calls = [], notes = [];
   // findings maps a findings subcommand to the child it answers with; a missing one answers exit 0, no output.
-  // check is the pre-offer `tsp check` the offer derives its criterion from; the default reports one run still to plan.
+  // check is the pre-offer `tsp check --json` the offer derives its verdict from; the default names one run to plan.
   const exec = async (argv, o) => {
     calls.push({ argv: [...argv], cwd: o.cwd });
     // A feedback template nobody configured answers as tsp does with feedback switched off: no request, no notice.
     const fallback = argv[0] === "feedback" ? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
-    const outcome = argv[0] === "check" && argv[1] === "--cwd" ? check : findings[argv[1]] ?? fallback;
+    const outcome = argv[0] === "check" && argv[1] === "--cwd"
+      ? (typeof check === "function" ? check(calls.length) : check)
+      : findings[argv[1]] ?? fallback;
     if (outcome instanceof Error) throw outcome;
     return outcome;
   };
@@ -204,7 +215,7 @@ function offerHarness(opts = {}) {
     on: (event, handler) => { handlers[event] = handler; },
     sendUserMessage: (text) => sent.push(text),
   };
-  tppExtension(pi, { optedOut: () => optedOut, env, exec });
+  tppExtension(pi, { optedOut: () => optedOut, env, exec, head });
   const ctx = { hasUI, cwd: "/repo", ui: {
     select: async (title, options) => { asked.push({ title, options }); return answer; },
     notify: (message, type) => notes.push({ message, type }),
@@ -220,10 +231,13 @@ function offerHarness(opts = {}) {
   return { asked, sent, calls, notes, run };
 }
 
+// The check's argv: one object of output, the turn's own base commit, and one --paths per path.
+const CHECK = (paths) => ["check", "--cwd", "/repo", "--json", "--since", "abc123", ...paths.flatMap((p) => ["--paths", p])];
+
 test("a run that edits source code ends with the TSP question, and Sí sends haz el TSP", async () => {
   const h = offerHarness();
   await h.run("add a retry limit", [["edit", "internal/retry/retry.go"], ["write", "src/new.ts"]]);
-  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo", "--paths", "internal/retry/retry.go", "--paths", "src/new.ts"], cwd: "/repo" }], "the check is scoped to the source this run touched, one --paths per path, never to the whole repository");
+  assert.deepEqual(h.calls, [{ argv: CHECK(["internal/retry/retry.go", "src/new.ts"]), cwd: "/repo" }], "the check is scoped to the source this run touched, one --paths per path, and reads the commit the turn started from");
   assert.deepEqual(h.asked, [{ title: "¿Quieres hacer TSP?\nrun m1: layers swept: 1 of 3", options: ["Sí", "No"] }]);
   assert.deepEqual(h.sent, ["haz el TSP"]);
 });
@@ -231,50 +245,76 @@ test("a run that edits source code ends with the TSP question, and Sí sends haz
 test("a changed path carrying a comma is asked for as its own path, never folded into a list", async () => {
   const h = offerHarness();
   await h.run("rename the record type", [["edit", "internal/a,b/a,b.go"], ["edit", "src/new.ts"]]);
-  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo", "--paths", "internal/a,b/a,b.go", "--paths", "src/new.ts"], cwd: "/repo" }], "the check splits its list on commas, so a path containing one has to travel in its own --paths");
+  assert.deepEqual(h.calls, [{ argv: CHECK(["internal/a,b/a,b.go", "src/new.ts"]), cwd: "/repo" }], "the check splits its list on commas, so a path containing one has to travel in its own --paths");
   assert.equal(h.asked.length, 1, "a comma in a filename must not hide the debt");
 });
 
-test("the offer names the debt under the check's intro lines: a warning and the changed-file line never become the question", async () => {
-  const h = offerHarness({ check: {
-    stdout: "warning: git ignores plan/tpp.md: the run's evidence cannot be versioned\n1 production source file(s) changed: internal/retry/retry.go\nrun m1: layers swept: 1 of 3, ranked targets 0 of 2\n",
-    stderr: "",
-    code: 1,
-  } });
+test("a repository that requires TSP gets the run without a question and is told why", async () => {
+  const h = offerHarness({ check: requiredVerdict("no test was added or changed with it") });
   await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
-  assert.deepEqual(h.asked, [{ title: "¿Quieres hacer TSP?\nrun m1: layers swept: 1 of 3, ranked targets 0 of 2", options: ["Sí", "No"] }]);
+  assert.deepEqual(h.asked, [], "the repository already answered, so nobody is asked");
+  assert.deepEqual(h.sent, ["haz el TSP"]);
+  assert.deepEqual(h.notes, [{ message: "TSP required: a verified Gentle session is active: TSP is required", type: "info" }]);
 });
 
-test("the offer asks for this change's own debt, so a plan target still open never becomes the question", async () => {
-  // Scoped to the run's source, the check answers for that change alone: what reaches the question is its
-  // debt. A plan's remaining targets are the run's agenda, and asking for them was the false alarm this pins.
-  const h = offerHarness({ check: {
-    stdout: "1 production source file(s) changed: internal/findings/findings.go\nno test was added or changed with it\n",
-    stderr: "",
-    code: 1,
-  } });
+test("a repository that owes nothing, or cannot answer, is left silent", async () => {
+  for (const check of [noneVerdict(), errorVerdict("--since nope is not a commit in this repository: name a ref that resolves")]) {
+    const h = offerHarness({ check });
+    await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+    assert.deepEqual(h.asked, [], JSON.stringify(check));
+    assert.deepEqual(h.sent, [], JSON.stringify(check));
+  }
+});
+
+test("a reply that is not one verdict is no criterion: the offer stays silent", async () => {
+  for (const check of [
+    { stdout: "1 production source file(s) changed: a.go\nno test was added or changed with it\n", stderr: "", code: 1 },
+    { stdout: "", stderr: "tsp check: --path must name a plan file\n", code: 2 },
+    { stdout: JSON.stringify({ decision: "maybe", debt: "x" }), stderr: "", code: 1 },
+    { stdout: JSON.stringify({ debt: "no test was added or changed with it" }), stderr: "", code: 1 },
+  ]) {
+    const h = offerHarness({ check });
+    await h.run("change a", [["edit", "a.go"]]);
+    assert.deepEqual(h.asked, [], JSON.stringify(check).slice(0, 60));
+    assert.deepEqual(h.sent, []);
+  }
+});
+
+test("a turn whose base commit cannot be read asks without --since rather than inventing one", async () => {
+  const h = offerHarness({ head: () => "" });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo", "--json", "--paths", "a.go"], cwd: "/repo" }]);
+  assert.equal(h.asked.length, 1);
+});
+
+test("the question is the debt the verdict names, and the gate's own reason only when there is no debt", async () => {
+  // The gate's reason explains the level; the debt is what this change owes. The question shows the debt, so a
+  // repository that asks is asked about its own change and not about the policy that decided to ask.
+  const h = offerHarness({ check: askVerdict("no test was added or changed with it") });
   await h.run("fix the findings noise", [["edit", "internal/findings/findings.go"]]);
-  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo", "--paths", "internal/findings/findings.go"], cwd: "/repo" }], "the check is scoped to this run's source");
   assert.deepEqual(h.asked, [{ title: "¿Quieres hacer TSP?\nno test was added or changed with it", options: ["Sí", "No"] }]);
+  const noDebt = offerHarness({ check: askVerdict("", "run m1 still owes 2 targets") });
+  await noDebt.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(noDebt.asked, [{ title: "¿Quieres hacer TSP?\nrun m1 still owes 2 targets", options: ["Sí", "No"] }]);
+  const blank = offerHarness({ check: askVerdict("", "") });
+  await blank.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(blank.asked, [], "a verdict that names nothing asks nothing");
+  assert.deepEqual(blank.sent, []);
 });
 
-test("only the plan data marker is parenthesized bookkeeping: any other parenthesized line is the debt", async () => {
-  // `/^\(.*\)$/` once suppressed every parenthesized line; the only bookkeeping line of that
-  // shape is the plan data marker, so a different parenthesized line is what the offer must show.
-  const h = offerHarness({ check: {
-    stdout: "1 production source file(s) changed: m1.go\n(plan m1 still owes 2 targets)\n",
-    stderr: "",
-    code: 1,
-  } });
+test("a plan target still in parentheses is the debt itself and reaches the question whole", async () => {
+  // Only the check's own bookkeeping is filtered, and the check filters it: a parenthesized pending target
+  // is what this change owes and must survive to the question.
+  const h = offerHarness({ check: askVerdict("(plan m1 still owes 2 targets)") });
   await h.run("change a", [["edit", "m1.go"]]);
   assert.deepEqual(h.asked, [{ title: "¿Quieres hacer TSP?\n(plan m1 still owes 2 targets)", options: ["Sí", "No"] }]);
 });
 
 test("the reason reaching the UI is bounded: control characters stripped, cut at 300 with an ellipsis", async () => {
-  // The reason can be plan-file text quoted verbatim into a UI question, so it is bounded
-  // before it gets there: no control characters survive, and a long line is cut short.
+  // The debt can quote plan-file text verbatim into a UI question, so it is bounded before it gets there: no control
+  // characters survive, and a long line is cut short.
   const long = `still pending: ${"x".repeat(280)}\u001b[31mred\u001b[0m`;
-  const h = offerHarness({ check: { stdout: `1 production source file(s) changed: a.go\n${long}\n`, stderr: "", code: 1 } });
+  const h = offerHarness({ check: askVerdict(long) });
   await h.run("change a", [["edit", "a.go"]]);
   const title = h.asked[0]?.title ?? "";
   const reason = title.slice("¿Quieres hacer TSP?\n".length);
@@ -287,110 +327,83 @@ test("the reason reaching the UI is bounded: control characters stripped, cut at
 test("a cut never splits a character: the reason reaching the UI stays well-formed text", async () => {
   // The cut lands inside a character outside the Basic Multilingual Plane, which JavaScript stores as two halves.
   const long = `still pending: ${"x".repeat(283)}${"😀".repeat(50)}`;
-  const h = offerHarness({ check: { stdout: `${long}\n`, stderr: "", code: 1 } });
+  const h = offerHarness({ check: askVerdict(long) });
   await h.run("change a", [["edit", "a.go"]]);
   const reason = (h.asked[0]?.title ?? "").slice("¿Quieres hacer TSP?\n".length);
   assert.ok(reason.endsWith("…"), "the long reason was cut");
   assert.ok(reason.isWellFormed(), "no half of a character reaches the UI question");
 });
 
-test("a reason made only of zero-width characters never reaches the UI blank", async () => {
-  // U+200B is not a control character, so stripping controls leaves a line that renders as nothing.
-  const owed = "no test was added or changed with it";
-  const h = offerHarness({ check: { stdout: `\u200b\u200b\u200b\n${owed}\n`, stderr: "", code: 1 } });
+test("a decline answers one question: a repository that then requires the run still gets it", async () => {
+  // The first turn asks and the human says no; the second turn edits the same file, and the repository
+  // has since declared that the run always happens. A remembered decline cannot outrank a new policy.
+  const h = offerHarness({ answer: "No", check: (n) => (n <= 1 ? askVerdict("run m1: layers swept: 1 of 3") : requiredVerdict("run m1")) });
+  await h.run("fix it", [["edit", "a.go"]]);
+  assert.equal(h.sent.length, 0, "the decline sent nothing");
+  await h.run("fix it again", [["edit", "a.go"]]);
+  assert.deepEqual(h.sent, ["haz el TSP"], "the repository requires the run the decline had silenced");
+  assert.equal(h.asked.length, 1, "the required run is no question");
+});
+
+test("a policy that cannot be read is reported once, never as testing debt", async () => {
+  const h = offerHarness({ check: errorVerdict("the plan declaration could not be read: permission denied") });
+  await h.run("fix it", [["edit", "a.go"]]);
+  await h.run("fix it again", [["edit", "a.go"]]);
+  assert.equal(h.asked.length, 0, "an unreadable policy is not a debt to answer");
+  assert.equal(h.sent.length, 0, "nothing is claimed to be required when the level is unknown");
+  assert.deepEqual(h.notes, [{ message: "tsp check: the plan declaration could not be read: permission denied", type: "warning" }]);
+});
+
+test("a debt made only of zero-width characters asks nothing, and the level's reason is no substitute", async () => {
+  // U+200B is not a control character, so stripping controls leaves text that renders as nothing. The verdict did
+  // name a debt, so the question cannot fall back to the gate's own reason: it would ask about the policy instead.
+  const h = offerHarness({ check: askVerdict("\u200b\u200b\u200b") });
   await h.run("change a", [["edit", "a.go"]]);
-  assert.deepEqual(h.asked.map((a) => a.title), [`¿Quieres hacer TSP?\n${owed}`], "the offer names the debt, not a line nobody can read");
+  assert.deepEqual(h.asked, [], "a debt nobody can read is not a reason to ask");
 });
 
 test("the cut cannot hide the only thing that painted: a padded line is not a reason", async () => {
   // The line passes the visibility test on its last character, and the cut then throws that character away.
-  const owed = "no test was added or changed with it";
-  const h = offerHarness({ check: { stdout: `${"\u200b".repeat(400)}a\n${owed}\n`, stderr: "", code: 1 } });
+  const h = offerHarness({ check: askVerdict(`${"\u200b".repeat(400)}a`) });
   await h.run("change a", [["edit", "a.go"]]);
-  assert.deepEqual(h.asked.map((a) => a.title), [`¿Quieres hacer TSP?\n${owed}`], "what is shown has to be what was judged visible");
+  assert.deepEqual(h.asked, [], "what is shown has to be what was judged visible");
 });
 
 test("a reason of only combining marks is not visible text either", async () => {
   // Combining marks attach to a base character; alone they paint nothing, like the zero-width family.
-  const owed = "no test was added or changed with it";
-  const h = offerHarness({ check: { stdout: `\u0301\u0301\u0301\n${owed}\n`, stderr: "", code: 1 } });
+  const h = offerHarness({ check: askVerdict("\u0301\u0301\u0301") });
   await h.run("change a", [["edit", "a.go"]]);
-  assert.deepEqual(h.asked.map((a) => a.title), [`¿Quieres hacer TSP?\n${owed}`], "a line that paints nothing is not a reason");
+  assert.deepEqual(h.asked, [], "a line that paints nothing is not a reason");
 });
 
 test("bounded text is not visible text: a long invisible line never becomes the reason", async () => {
   // The cut runs before the visibility test, so a line longer than the cap gains a visible ellipsis it never had.
-  const owed = "no test was added or changed with it";
-  const h = offerHarness({ check: { stdout: `${"\u200b".repeat(400)}\n${owed}\n`, stderr: "", code: 1 } });
+  const h = offerHarness({ check: askVerdict("\u200b".repeat(400)) });
   await h.run("change a", [["edit", "a.go"]]);
-  assert.deepEqual(h.asked.map((a) => a.title), [`¿Quieres hacer TSP?\n${owed}`], "an ellipsis the cut added is not a reason");
+  assert.deepEqual(h.asked, [], "an ellipsis the cut added is not a reason");
 });
 
 test("no C1 control character reaches the UI question either", async () => {
   // U+009B is the 8-bit control sequence introducer: a terminal treats it like ESC [.
-  const h = offerHarness({ check: { stdout: "still pending: a\u009b31mred\n", stderr: "", code: 1 } });
+  const h = offerHarness({ check: askVerdict("still pending: a\u009b31mred") });
   await h.run("change a", [["edit", "a.go"]]);
   const reason = (h.asked[0]?.title ?? "").slice("¿Quieres hacer TSP?\n".length);
   assert.match(reason, /^still pending: a/, "the pending line is still the reason");
   assert.doesNotMatch(reason, /[\u0080-\u009f]/, "no C1 control character ever reaches the UI question");
 });
 
-test("a line that is only control characters never hides the debt line after it", async () => {
-  const owed = "no test was added or changed with it";
-  const h = offerHarness({ check: { stdout: `\u001b\u001b\n${owed}\n`, stderr: "", code: 1 } });
-  await h.run("change a", [["edit", "a.go"]]);
-  assert.deepEqual(h.asked.map((a) => a.title), [`¿Quieres hacer TSP?\n${owed}`], "the check printed a debt, so the offer names it");
-});
-
-test("a check that exits 1 with no line at all asks nothing: an empty reply is no criterion", async () => {
-  const h = offerHarness({ check: { stdout: "", stderr: "", code: 1 } });
-  await h.run("change a", [["edit", "a.go"]]);
-  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo", "--paths", "a.go"], cwd: "/repo" }]);
-  assert.deepEqual(h.asked, [], "a check that says nothing offers nothing, never a sentence of its own");
-  assert.deepEqual(h.sent, []);
-  const meta = offerHarness({ check: { stdout: "1 production source file(s) changed: a.go\n", stderr: "", code: 1 } });
-  await meta.run("change a", [["edit", "a.go"]]);
-  assert.deepEqual(meta.asked, [], "bookkeeping alone names no debt");
-});
-
-test("a check that fails on its own terms asks nothing: its error text never becomes the question", async () => {
-  const h = offerHarness({ check: { stdout: "", stderr: "tsp check: --path must name a plan file\n", code: 2 } });
-  await h.run("change a", [["edit", "a.go"]]);
-  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo", "--paths", "a.go"], cwd: "/repo" }]);
-  assert.deepEqual(h.asked, [], "only exit 1 owes work; anything else means the check could not answer");
-  assert.deepEqual(h.sent, []);
-});
-
 test("the offer speaks the debt line the check really prints, whatever its wording", async () => {
-  // The literal exit-1 text `tsp check` emits for a change with no test beside it: the offer must never lose it.
+  // The literal text `tsp check` reports for a change with no test beside it: the offer must never lose it.
   const owed = 'no test was added or changed with it: run the testing discipline ("haz el TSP"), record tsp check --no-test-needed "<reason>" when this change warrants no test, or add .no-testing-gate when this repository does not warrant it';
-  const h = offerHarness({ check: { stdout: `1 production source file(s) changed: sample.go\n${owed}\n`, stderr: "", code: 1 } });
+  const h = offerHarness({ check: askVerdict(owed) });
   await h.run("change a", [["edit", "sample.go"]]);
   assert.deepEqual(h.asked, [{ title: `¿Quieres hacer TSP?\n${owed}`, options: ["Sí", "No"] }]);
-});
-
-test("the offer follows the check: a change the repository does not owe a test for ends without a question", async () => {
-  const h = offerHarness({ check: { stdout: "no production source is changed: nothing to check\n", stderr: "", code: 0 } });
-  await h.run("change a", [["edit", "a.go"]]);
-  assert.deepEqual(h.calls, [{ argv: ["check", "--cwd", "/repo", "--paths", "a.go"], cwd: "/repo" }]);
-  assert.deepEqual(h.asked, [], "nothing owed is not an offer");
-  assert.deepEqual(h.sent, []);
 });
 
 test("a check that cannot run asks nothing: no criterion, no question", async () => {
   const h = offerHarness({ check: new Error("spawn tsp ENOENT") });
   await h.run("change a", [["edit", "a.go"]]);
   assert.deepEqual(h.asked, []);
-  assert.deepEqual(h.sent, []);
-});
-
-test("No sends nothing and the same files are not offered again; a new file is", async () => {
-  const h = offerHarness({ answer: "No" });
-  await h.run("change a", [["edit", "a.go"]]);
-  await h.run("change a again", [["edit", "a.go"]]);
-  assert.equal(h.asked.length, 1);
-  await h.run("change b", [["edit", "b.go"]]);
-  assert.equal(h.asked.length, 2);
   assert.deepEqual(h.sent, []);
 });
 
@@ -432,6 +445,7 @@ test("a TSP run ends by recording its witnesses, then shows the review of every 
     await h.run("haz el TSP", [["edit", "b_test.go"]]);
     assert.deepEqual(h.calls, [
       { argv: ["findings", "record", "--cwd", "/repo"], cwd: "/repo" },
+      { argv: ["findings", "next", "--cwd", "/repo", "--json"], cwd: "/repo" },
       { argv: ["findings", "check", "--cwd", "/repo"], cwd: "/repo" },
       { argv: ["feedback", "--template"], cwd: "/repo" },
     ]);
@@ -443,7 +457,7 @@ test("a TSP run ends by recording its witnesses, then shows the review of every 
 test("a TSP run that pinned nothing still shows the review; a record that cannot run stops before check", async () => {
   const none = offerHarness({ findings: { record: { stdout: "no new witness\n", stderr: "", code: 1 }, check: { stdout: "no finding recorded on feat/x\n", stderr: "", code: 0 } } });
   await none.run("haz el TSP", []);
-  assert.deepEqual(none.calls.map((c) => c.argv[1]), ["record", "check", "--template"]);
+  assert.deepEqual(none.calls.map((c) => c.argv[1]), ["record", "next", "check", "--template"]);
   assert.deepEqual(none.notes, [{ message: "no finding recorded on feat/x", type: "info" }]);
   const detached = offerHarness({ findings: { record: { stdout: "", stderr: "tsp findings: detached HEAD\n", code: 2 } } });
   await detached.run("haz el TSP", []);
@@ -468,6 +482,96 @@ test("the findings review runs only after a TSP run the user asked for, with UI,
     assert.equal(h.asked.length, offered ? 1 : 0, `${why}: the offer decides before any review`);
     assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings"), [], why);
     assert.deepEqual(h.notes, [], why);
+  }
+});
+
+test("a TSP loop fix waits for feedback before sending the fix", async () => {
+  const next = { stdout: JSON.stringify({ next: "fix", review: "review line", reason: "one open", message: "settle F1" }), stderr: "", code: 1 };
+  const h = offerHarness({ findings: { next, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+  await h.run("haz el TSP", [["edit", "a.go"]]);
+  assert.deepEqual(h.calls.map(c => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["feedback", "--template"]]);
+  assert.deepEqual(h.notes, [{ message: "review line\none open", type: "info" }]);
+  assert.equal(h.sent.length, 1);
+  const feedback = h.sent[0];
+  assert.ok(feedback.startsWith(FEEDBACK_LEAD));
+  await h.run(feedback, []);
+  assert.deepEqual(h.sent, [feedback, "The TSP loop found defects to settle.\n\nsettle F1"]);
+  assert.deepEqual(h.asked, []);
+});
+
+test("with feedback off the loop message follows the TSP run at once, and a stop sends nothing after the feedback", async () => {
+  const fix = { stdout: JSON.stringify({ next: "fix", review: "review 1", reason: "round 1 of 5 left 1 item unsettled", message: "F1 open a_test.go TestA" }), stderr: "", code: 1 };
+  const off = offerHarness({ findings: { next: fix } });
+  await off.run("haz el TSP", []);
+  assert.deepEqual(off.calls.map((c) => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["feedback", "--template"]]);
+  assert.deepEqual(off.notes, [{ message: "review 1\nround 1 of 5 left 1 item unsettled", type: "info" }]);
+  assert.deepEqual(off.sent, ["The TSP loop found defects to settle.\n\nF1 open a_test.go TestA"]);
+  const stop = { stdout: JSON.stringify({ next: "stop", review: "review 9", reason: "no progress", message: "no progress — the loop needs the user's decision" }), stderr: "", code: 3 };
+  const h = offerHarness({ findings: { next: stop, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+  await h.run("haz el TSP — round 5 of 5", []);
+  assert.deepEqual(h.notes, [{ message: "review 9\nno progress — the loop needs the user's decision", type: "warning" }]);
+  assert.equal(h.sent.length, 1);
+  assert.ok(h.sent[0].startsWith(FEEDBACK_LEAD));
+  await h.run(h.sent[0], []);
+  assert.equal(h.sent.length, 1, "a stopped loop sends nothing once the feedback run ends");
+  assert.deepEqual(h.asked, []);
+});
+
+test("the loop's notes reach the user with a round, so what the loop did not hold against is never hidden", async () => {
+  const tsp = { stdout: JSON.stringify({ next: "tsp", review: "review 4", reason: "round 2 of 5 — the last fix changed 1 source file: a.go", message: "round 2 of 5 of the TSP loop", notes: ["kept failing by the user's wontfix: F3 c_test.go TestC — accepted"] }), stderr: "", code: 1 };
+  const h = offerHarness({ findings: { next: tsp } });
+  await h.run("haz el TSP", []);
+  assert.deepEqual(h.notes, [{ message: "review 4\nround 2 of 5 — the last fix changed 1 source file: a.go\nkept failing by the user's wontfix: F3 c_test.go TestC — accepted", type: "info" }]);
+  assert.deepEqual(h.sent, ["haz el TSP — round 2 of 5 of the TSP loop"]);
+});
+
+test("the notice shows every finding's review line, and for an end the whole message the agent is no longer sent", async () => {
+  const done = { stdout: JSON.stringify({ next: "done", review: "review 5 on feat/x: 0 fixed, 0 open, 0 new, 0 regressed", lines: ["F1 fixed a_test.go TestA — A holds", "F2 rejected b_test.go TestB — not promised"], reason: "converged after 2 rounds: 1 fixed, 1 rejected, 0 wontfix", message: "converged after 2 rounds: 1 fixed, 1 rejected, 0 wontfix\nF2 rejected b_test.go TestB — not promised\nnot measured: probe arch: no rules", notes: ["not measured: probe arch: no rules"] }), stderr: "", code: 0 };
+  const h = offerHarness({ findings: { next: done } });
+  await h.run("haz el TSP", []);
+  assert.deepEqual(h.notes, [{ message: "review 5 on feat/x: 0 fixed, 0 open, 0 new, 0 regressed\nF1 fixed a_test.go TestA — A holds\nF2 rejected b_test.go TestB — not promised\nconverged after 2 rounds: 1 fixed, 1 rejected, 0 wontfix\nF2 rejected b_test.go TestB — not promised\nnot measured: probe arch: no rules", type: "info" }]);
+  assert.deepEqual(h.sent, []);
+  const fix = { stdout: JSON.stringify({ next: "fix", review: "review 2", lines: ["F1 open a_test.go TestA — A holds"], reason: "round 1 of 5 left 1 item unsettled", message: "F1 open a_test.go TestA — A holds\nsettle each item", notes: [] }), stderr: "", code: 1 };
+  const f = offerHarness({ findings: { next: fix } });
+  await f.run("haz el TSP", []);
+  assert.deepEqual(f.notes, [{ message: "review 2\nF1 open a_test.go TestA — A holds\nround 1 of 5 left 1 item unsettled", type: "info" }]);
+});
+
+test("a fix run that changes nothing ends the loop instead of sending the same fix again", async () => {
+  const fix = (tree) => ({ stdout: JSON.stringify({ next: "fix", tree, review: "review 2", reason: "round 1 of 5 left 1 item unsettled", message: "F1 open a_test.go TestA" }), stderr: "", code: 1 });
+  const replies = [fix("t1"), fix("t2"), fix("t2")];
+  const h = offerHarness({ findings: { get next() { return replies.shift(); } } });
+  const sent = "The TSP loop found defects to settle.\n\nF1 open a_test.go TestA";
+  await h.run("haz el TSP", []);
+  await h.run(sent, [["edit", "a.go"]]);
+  await h.run(sent, []);
+  assert.deepEqual(h.calls.map((c) => c.argv[1]), ["record", "next", "--template", "next", "next"]);
+  assert.deepEqual(h.sent, [sent, sent], "the same fix over the same tree is never sent again");
+  assert.deepEqual(h.notes.at(-1), { message: "the fix run changed nothing tsp findings next can see: the TSP loop stops here and needs your decision", type: "warning" });
+  assert.deepEqual(h.asked, []);
+});
+
+test("loop verdicts drive the next turn without an offer", async () => {
+  for (const [next, type, sent, shown] of [["fix", "info", "The TSP loop found defects to settle.\n\nwork", "review\nreason"], ["tsp", "info", "haz el TSP — work", "review\nreason"], ["done", "info", "", "review\nwork"], ["stop", "warning", "", "review\nwork"], ["error", "warning", "", "review\nwork"]]) {
+    const h = offerHarness({ findings: { next: { stdout: JSON.stringify({ next, review: "review", reason: "reason", message: "work" }), stderr: "", code: 1 } } });
+    await h.run("The TSP loop found defects to settle.\n\nfix", [["edit", "a.go"]]);
+    assert.deepEqual(h.calls.map(c => c.argv), [["findings", "next", "--cwd", "/repo", "--json"]]);
+    assert.deepEqual(h.notes, [{ message: shown, type }], `${next}: an end shows its whole message, a fix or a round its reason`);
+    assert.deepEqual(h.sent, sent ? [sent] : []);
+    assert.deepEqual(h.asked, []);
+  }
+});
+
+test("a round prompt records a new round and a user interruption or abort cancels waiting work", async () => {
+  for (const interruption of ["user", "abort"]) {
+    const h = offerHarness({ findings: { next: { stdout: JSON.stringify({ next: "fix", review: "review", reason: "reason", message: "fix" }), stderr: "", code: 1 }, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+    await h.run("haz el TSP — attack", []);
+    const feedback = h.sent[0];
+    await h.run(interruption === "user" ? "stop" : feedback, [], { aborted: interruption === "abort" });
+    assert.deepEqual(h.calls.map(c => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["feedback", "--template"]]);
+    assert.deepEqual(h.notes, [{ message: "review\nreason", type: "info" }]);
+    assert.deepEqual(h.sent, [feedback]);
+    assert.deepEqual(h.asked, []);
   }
 });
 
@@ -541,7 +645,7 @@ test("a TSP run started by any of the skill's trigger phrases is asked for its f
     const h = offerHarness({ findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
     await h.run(prompt, [SKILL_READ]);
     assert.equal(h.sent.length, 1, `${prompt}: a TSP run the user asked for must be asked for its feedback`);
-    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings").map((c) => c.argv[1]), ["record", "check"], `${prompt}: and its findings are reviewed`);
+    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings").map((c) => c.argv[1]), ["record", "next", "check"], `${prompt}: and its findings are reviewed`);
   }
 });
 
@@ -629,4 +733,24 @@ test("a run that only wrote a report never runs the check: no production source,
   assert.deepEqual(h.calls, [], "a report is not an implementation");
   assert.deepEqual(h.asked, []);
   assert.deepEqual(h.sent, []);
+});
+
+test("a tsp too old to answer is reported once, never mistaken for a repository that owes nothing", async () => {
+  // What a tsp that predates `check --json` prints instead of a verdict: Go's own flag parser.
+  const stale = { stdout: "", stderr: "flag provided but not defined: -json\nUsage of check:\n", code: 0 };
+  const h = offerHarness({ check: stale });
+  await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+  await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+  const warnings = h.notes.filter((n) => n.type === "warning");
+  assert.equal(warnings.length, 1, "an install that cannot answer is one sentence per session, not one per turn");
+  assert.match(warnings[0].message, /tsp update/);
+  assert.deepEqual(h.asked, [], "a stale check is not a question");
+  assert.deepEqual(h.sent, [], "and not an authorization to run");
+});
+
+test("a reply that is not a verdict, without the flag parser's words, stays silent", async () => {
+  const h = offerHarness({ check: { stdout: "not json at all\n", stderr: "", code: 0 } });
+  await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+  assert.deepEqual(h.notes, [], "an unreadable reply is no criterion, so it says nothing");
+  assert.deepEqual(h.asked, []);
 });
