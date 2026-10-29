@@ -759,6 +759,14 @@ An unreadable per-test report falls back to a whole-suite result, never a defect
 The registry lives outside the repository, under
 TSP's state directory, separately for each branch; detached HEAD is refused.
 
+A witness is judged against the code the round started from, not the code it ended with: `record`
+runs the test files the range touched on the base commit, so a witness is a test that fails there
+and passes with the change. The registry records fixes, not breakage. A test the range did not
+touch is never collected, so breaking one pins nothing, and a test that does not compile on the
+base aborts the record with `the changed tests could not be run test by test`. The shape it expects
+is a base commit that holds the defect, then a commit that fixes it together with the test that
+pins it.
+
 `record --class <familia>` also remembers, for the repository rather than the branch, which class of
 defect those witnesses belong to. The classes are the bench families: `boundary`, `concurrency`,
 `contract`, `input-domain`, `numeric`, `performance`, `resilience-io`, `security`, `state-logic` and
