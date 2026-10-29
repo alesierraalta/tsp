@@ -465,7 +465,7 @@ duplicates nothing of Gentle's: ODD, Engram memory, and the review lifecycle rem
 | `tsp repair` | Claude-only: re-syncs the managed skills and re-wires Claude's Stop hook; the Pi extension is untouched. |
 
 Load the extension (`pi --extension <path>/tsp.ts`, or let Pi load it from
-`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks the scoped check (`tsp check --json --paths`, one flag per path, `--since` the commit the turn started from, so a work unit committed before the turn ended is still answered for) what that source owes and who decides: `none` ends the turn in silence, `required` sends "haz el TSP" on its own, and only `ask` shows the question "¿Quieres hacer TSP?" in the chat — a plan target open from earlier work, or a run that only wrote a report, asks nothing; "Sí" sends "haz el TSP", which invokes `test-strategy`, and "No" is remembered for those files (details in `assets/hosts/README.md`, policy in [Who decides when TSP runs](#who-decides-when-tsp-runs)). Dependency trees (`node_modules/`, `vendor/`, `.venv/`, `venv/`, `site-packages/`, `dist-packages/`, and `__pypackages__/`) are excluded from production source and tests. Test files never trigger it (`*.test.*`, `*.spec.*`, `x_test.go`, `test_x.py`, `x_test.py`, and anything under `tests/`, `__tests__/`, `testdata/`, `e2e/` or `spec/`), nor does a TSP run or a loop's fix run, an aborted run, a session without UI, a delegated subagent session (`GENTLE_PI_AGENTS_CHILD=1`), or a repository with `.no-testing-gate`. A TSP run is one whose agent loads the installed test-strategy skill, or whose prompt is exactly "haz el TSP"; a message that only mentions tsp, or reading the repository's own copy of the skill, is not one. When a TSP run ends, the extension runs `tsp findings record` and then `tsp findings next --json`, shows the review, the answer and its notes in the chat, and drives the loop: `fix` sends the agent the findings to settle ("The TSP loop found defects to settle.") and asks `next` again when that fix run ends, and a fix run that leaves the same answer over the same tree ends the loop with a warning instead of sending the same fix again; `tsp` sends "haz el TSP — round N …", a round aimed only at what the last fix changed; `done` and `stop` end the loop with a notice (see [Loop until the change converges](#loop-until-the-change-converges)). A `tsp` without `findings next` falls back to `tsp findings check`. Each TSP run is still followed by the template `tsp feedback --template` prints, asking the agent to record its feedback on that run with `tsp feedback --file`, so each TSP run in Pi is asked for a report `tsp feedback --summary` and `--pending` read back; the loop's next message waits until that feedback run ends, an aborted turn or the user's own message drops it, and whether the agent submits the report is not checked. Nothing is sent while feedback is disabled; a `tsp` that cannot print the template is shown as a warning instead, and the feedback run triggers no review, no TSP question and no further request. Edits made through a shell command are not seen. This was watched in a live Pi 1.3.0 session. `/tsp check` keeps a quoted argument whole, so `/tsp check --suite "npm test"` reaches the CLI as one value. The Pi Stop hook is a separate,
+`~/.pi/agent/extensions/`) and Pi gains a native `/tsp` command; `/tpp` remains the compatibility alias. After a run that edited source code, the extension asks the scoped check (`tsp check --json --paths`, one flag per path, `--since` the commit the turn started from, so a work unit committed before the turn ended is still answered for) what that source owes and who decides: `none` ends the turn in silence, `required` sends "haz el TSP" on its own, and only `ask` shows the question "¿Quieres hacer TSP?" in the chat — a plan target open from earlier work, or a run that only wrote a report, asks nothing; "Sí" sends "haz el TSP", which invokes `test-strategy`, and "No" is remembered for those files (details in `assets/hosts/README.md`, policy in [Who decides when TSP runs](#who-decides-when-tsp-runs)). Dependency trees (`node_modules/`, `vendor/`, `.venv/`, `venv/`, `site-packages/`, `dist-packages/`, and `__pypackages__/`) are excluded from production source and tests. Test files never trigger it (`*.test.*`, `*.spec.*`, `x_test.go`, `test_x.py`, `x_test.py`, and anything under `tests/`, `__tests__/`, `testdata/`, `e2e/` or `spec/`), nor does a TSP run or a loop's fix run, an aborted run, a session without UI, a delegated subagent session (`GENTLE_PI_AGENTS_CHILD=1`), or a repository with `.no-testing-gate`. A TSP run is one whose agent loads the installed test-strategy skill, or whose prompt is exactly "haz el TSP"; a message that only mentions tsp, or reading the repository's own copy of the skill, is not one. When a TSP run ends, the extension runs `tsp findings record` and then `tsp findings next --json`, shows the review, the answer and its notes in the chat, and drives the loop: `fix` sends the agent the findings to settle ("The TSP loop found defects to settle.") and asks `next` again when that fix run ends, and a fix run that leaves the same answer over the same tree ends the loop with a warning instead of sending the same fix again; `tsp` sends "haz el TSP — round N …", a round aimed only at what the last fix changed; `done` and `stop` end the loop with a notice (see [Loop until the change converges](#loop-until-the-change-converges)). A `tsp` without `findings next` (its answer is the subcommand's usage text) falls back to `tsp findings check`; a `next` that fails to judge — a diagnostic, or no answer at all — is shown as an error rather than read as that fallback, so a crashed judgment never ends the loop in silence. Each TSP run is still followed by the template `tsp feedback --template` prints, asking the agent to record its feedback on that run with `tsp feedback --file`, so each TSP run in Pi is asked for a report `tsp feedback --summary` and `--pending` read back; the loop's next message waits until that feedback run ends, an aborted turn or the user's own message drops it, and whether the agent submits the report is not checked. Nothing is sent while feedback is disabled; a `tsp` that cannot print the template is shown as a warning instead, and the feedback run triggers no review, no TSP question and no further request. Edits made through a shell command are not seen. This was watched in a live Pi 1.3.0 session. `/tsp check` keeps a quoted argument whole, so `/tsp check --suite "npm test"` reaches the CLI as one value. The Pi Stop hook is a separate,
 **not verified** surface: its payload contract was read from the pi-hooks package and nobody has
 watched it fire here, so merging `assets/hosts/pi/settings.stop-hook.json` into Pi's settings is
 ready to test, not working.
@@ -724,10 +724,21 @@ own tests pin anything. This repository runs it on its own pull requests in
 
 The embedded skills live under `assets/skills/`. `test-strategy` is the entry point ("haz test
 strategy"; aliases: "haz test strategy" and "haz el testing"): it finds the defects the existing green
-suite misses and leaves one test per defect in the repository's own suite, red on today's code and
-green once the defect is fixed. It probes each promise across its input classes, writes family-wide
-promises (order, round trip, never panics) as property tests with generated inputs, and builds inputs
-that must pass a validator with the code's own encoder before perturbing them. It writes no plan file:
+suite misses and leaves one test per defect that is red on today's code and green once the defect
+is fixed; what it leaves behind is the suite it committed, so it names any witness kept local (an
+untracked file, a `testLocales/` directory, a probe that only ran as a command) rather than implying
+a regression net the repository does not have. It works promise by promise, harvested from four sources: the
+contract, every name and comment that asserts a behaviour (a name that lies is a defect), the
+implicit promises of the failure classes, and the evidence the session already has (the diff, the bug
+report, the log line). Each promise is attacked across its input classes, with two classes a green
+suite never reaches: resources must not grow (memory, open files, goroutines, temp files, cache
+entries, measured over N and 2N repetitions, including the failure path), and load must not degrade
+the answer (the same workload at 1× and 10× concurrency). Family-wide promises (order, round trip,
+never panics) become property tests with generated inputs, and inputs that must pass a validator are
+built with the code's own encoder before perturbing them. A probe it cannot falsify proves nothing,
+so every probe names the input that would have made it fail, and the work stops when
+promise × class is covered — not when the suite is green — reporting the cells left unprobed and
+why. It writes no plan file:
 the tests are the deliverable, and `tsp redcheck` says which new tests actually fail on the unmodified
 code (`go test`, `node --test`, pytest, Jest, `vitest run` and `cargo test` are read test by test). This lean version replaced the plan-driven skill
 after the benchmark showed most of that skill's cost was ceremony; `tsp check` without a plan asks for
@@ -1083,6 +1094,27 @@ whether it includes zero ("within noise"). For example, 16/18 vs 15/18 at three 
 noise (-0.295 to +0.187). Since test-strategy 0.7 writes no plan, readings without one show the plan-only
 metrics (reported, recall, no plan, light, micro, false positives, precision) as `-`, and caught is the
 measure to read; the stored history rows keep their numbers.
+
+Every summary also publishes `caught by family:`: each case declares the failure kind its defects
+belong to (`time`, `concurrency`, `contract`, `security`, …), and the line splits caught over defects
+per family so a run says which kinds it missed. Cases written before the field are counted as
+`unclassified` instead of disappearing from the split.
+
+`--families time,concurrency` narrows a reading to the cases that declare those kinds, so the budget
+is spent where the last reading was weak instead of on the whole corpus; the summary header then
+names the selection (`· families: time, concurrency`) and the corpus hash covers only the cases that
+ran, so such a reading is never mistaken for a full one. A family outside the list is refused, and so
+is a selection no case declares, because a misspelling would otherwise publish a green run that
+measured nothing.
+
+Every summary also publishes a single `index: 82/100` with its parts, so two readings can be
+compared without holding five numbers at once: recall (how much of the planted breakage the reading
+proved, weight 0.5), breadth (the share of the corpus's failure kinds it caught anything in, 0.3),
+and precision (1 minus the inventions on clean control code, 0.2). The weights are a stated
+convention rather than a measurement, and when no control case ran the precision weight is dropped
+and the line says `precision not measured` instead of crediting a measurement that never happened.
+Cost is deliberately outside the index: folding dollars in needs a reference price, which is a
+product decision, so cost stays the separate number beside it.
 
 `bench run` scaffolds `<out>/<case>/<run>/ws` (default `bench/results/<timestamp>/`), commits the
 fixture, checks its suite is green (otherwise the case is invalid and skipped), spawns

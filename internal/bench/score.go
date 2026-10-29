@@ -33,8 +33,11 @@ type DefectResult struct {
 
 // Result is the score of one workspace against its key.
 type Result struct {
-	Case           string         `json:"case"`
-	Run            int            `json:"run"`
+	Case string `json:"case"`
+	Run  int    `json:"run"`
+	// Family is the key's declared failure kind, copied here so a reading can group caught over
+	// defects per family without reopening every KEY.json. Empty on a case that predates families.
+	Family         string         `json:"family,omitempty"`
 	Control        bool           `json:"control"`
 	Defects        []DefectResult `json:"defects"`
 	Total          int            `json:"total"`
@@ -243,7 +246,7 @@ func Score(plan string, key Key) Result {
 
 // scoreMechanical applies the lexical and location rules without deciding whether a proposal is true.
 func scoreMechanical(plan string, key Key) Result {
-	r := Result{Case: key.ID, Control: key.IsCleanControl(), Total: len(key.Defects), LightActivated: plancheck.LightActivated(plan), MicroActivated: plancheck.MicroActivated(plan), MetricsVersion: MetricsVersion}
+	r := Result{Case: key.ID, Family: key.Family, Control: key.IsCleanControl(), Total: len(key.Defects), LightActivated: plancheck.LightActivated(plan), MicroActivated: plancheck.MicroActivated(plan), MetricsVersion: MetricsVersion}
 	findings := plancheck.Section(plan, "Findings")
 	findingsHeader, rows := plancheck.Table(plan, "Findings")
 	r.FindingRows = len(rows)

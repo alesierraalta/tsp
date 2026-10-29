@@ -1,4 +1,4 @@
-{"id":"n11-html-escape","language":"node","suite":"node --test","surface":"library",
+{"id":"n11-html-escape","language":"node","suite":"node --test","surface":"library","family":"security",
  "request":"the html-escape behaviour","defects":[
   {"id":"D1","file":"src/escape.js","line":5,"class":"injection","keywords":["single quote","apostrophe","&#39;","attribute","injection"],
    "description":"escapeHtml leaves the single quote untouched, so a value inside a single-quoted attribute such as renderTitle breaks out of the attribute.",

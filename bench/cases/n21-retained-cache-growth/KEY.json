@@ -1,6 +1,6 @@
-{"id":"n21-retained-cache-growth","language":"node","suite":"node --test","surface":"library",
+{"id":"n21-retained-cache-growth","language":"node","suite":"node --test","surface":"library","family":"performance",
  "request":"the summary-cache retention behaviour","defects":[
-  {"id":"D1","file":"src/summary.js","line":25,"class":"memory-retention","keywords":["evict","tenant","retained","cache"],
+  {"id":"D1","file":"src/summary.js","line":34,"class":"memory-retention","keywords":["evict","tenant","retained","cache"],
    "description":"summarize records every summary in the per-tenant map that eviction never trims, so the summary released from the bounded entries stays retained and cacheEntryCount() grows past the limit.",
    "trigger":{"input":"import { SummaryCache } from \"./src/summary.js\"; const cache = new SummaryCache(); for (let i = 1; i <= 65; i++) cache.summarize(\"tenant-\" + i, \"2026-02-01\", [{ amount: i }]); console.log(cache.cacheEntryCount());",
     "expected":"64",

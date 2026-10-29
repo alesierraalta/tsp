@@ -2,7 +2,7 @@
   "id": "n31-dst-schedule",
   "language": "node",
   "suite": "node --test",
-  "surface": "library",
+  "surface": "library","family": "time",
   "request": "the local daily schedule",
   "defects": [
     {

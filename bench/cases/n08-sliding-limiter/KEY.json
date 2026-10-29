@@ -1,4 +1,4 @@
-{"id":"n08-sliding-limiter","language":"node","suite":"node --test","surface":"library",
+{"id":"n08-sliding-limiter","language":"node","suite":"node --test","surface":"library","family":"boundary",
  "request":"the sliding-limiter behaviour","defects":[
   {"id":"D1","file":"src/limiter.js","line":16,"class":"off-by-one","keywords":["off-by-one","limit","boundary","plus one","greater"],
    "description":"The check rejects only when recent requests exceed the limit, so limit + 1 requests are allowed inside one window.",

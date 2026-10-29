@@ -2,7 +2,7 @@
   "id": "n29-memo-object-key",
   "language": "node",
   "suite": "node --test",
-  "surface": "library",
+  "surface": "library","family": "state-logic",
   "request": "the memoized lookup function",
   "defects": [
     {

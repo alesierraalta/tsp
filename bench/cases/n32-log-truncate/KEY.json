@@ -2,7 +2,7 @@
   "id": "n32-log-truncate",
   "language": "node",
   "suite": "node --test",
-  "surface": "library",
+  "surface": "library","family": "input-domain",
   "request": "the log truncation behavior",
   "defects": [
     {

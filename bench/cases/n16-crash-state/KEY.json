@@ -2,7 +2,7 @@
  "id": "n16-crash-state",
  "language": "node",
  "suite": "node --test",
- "surface": "cli",
+ "surface": "cli","family": "resilience-io",
  "request": "the job state file save path and its exit codes",
  "defects": [
   {

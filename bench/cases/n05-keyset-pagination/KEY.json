@@ -1,4 +1,4 @@
-{"id":"n05-keyset-pagination","language":"node","suite":"node --test","surface":"library",
+{"id":"n05-keyset-pagination","language":"node","suite":"node --test","surface":"library","family":"boundary",
  "request":"the keyset-pagination behaviour","defects":[
   {"id":"D1","file":"src/pagination.js","line":10,"class":"pagination-cursor","keywords":["cursor","tie","timestamp","skipped","keyset"],
    "description":"The cursor is created_at alone and the next page filters strictly after it, so rows sharing the boundary timestamp are skipped and never returned.",

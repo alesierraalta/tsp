@@ -1,4 +1,4 @@
-{"id":"n07-tenant-scope","language":"node","suite":"node --test","surface":"library",
+{"id":"n07-tenant-scope","language":"node","suite":"node --test","surface":"library","family":"security",
  "request":"the tenant-scope behaviour","defects":[
   {"id":"D1","file":"src/access.js","line":11,"class":"authorization","keywords":["startswith","prefix","tenant","equality","cross-tenant"],
    "description":"Tenant membership is checked with startsWith, so a user of tenant acme reaches every tenant whose slug begins with acme, such as acme-corp.",

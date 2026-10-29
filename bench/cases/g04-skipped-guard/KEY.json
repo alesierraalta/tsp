@@ -1,4 +1,4 @@
-{"id":"g04-skipped-guard","language":"go","suite":"go test ./...","surface":"library",
+{"id":"g04-skipped-guard","language":"go","suite":"go test ./...","surface":"library","family":"boundary",
  "request":"the session-expiry behaviour","defects":[
   {"id":"D1","file":"session.go","line":7,"class":"inclusive-boundary","keywords":["expired","ttl","boundary","skip","guard"],
    "description":"Expired compares elapsed time with >= instead of >, so a session exactly ttl old is reported expired though the contract says it is still valid for one more instant.",

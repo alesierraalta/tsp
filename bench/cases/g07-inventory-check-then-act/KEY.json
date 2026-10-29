@@ -2,7 +2,7 @@
   "id": "g07-inventory-check-then-act",
   "language": "go",
   "suite": "go test ./...",
-  "surface": "worker",
+  "surface": "worker","family": "concurrency",
   "request": "Test that concurrent purchases never sell more than available capacity.",
   "defects": [
     {

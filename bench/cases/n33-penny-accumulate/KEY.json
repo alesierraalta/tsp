@@ -2,7 +2,7 @@
   "id": "n33-penny-accumulate",
   "language": "node",
   "suite": "node --test",
-  "surface": "etl",
+  "surface": "etl","family": "numeric",
   "request": "the row-total ETL behavior",
   "defects": [
     {

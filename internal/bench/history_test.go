@@ -131,7 +131,8 @@ func TestHistoryAddsTheActivationColumn(t *testing.T) {
 	if !strings.Contains(appended, "| light |") {
 		t.Fatalf("the fresh header must carry the activation column: %s", appended)
 	}
-	for _, want := range []string{"| sha256:c | 1 | 3 |", "| sha256:c | 0 | 1 |"} {
+	// The aim sits between the corpus and the activation count, so it reads "-" on a whole reading.
+	for _, want := range []string{"| sha256:c | - | 1 | 3 |", "| sha256:c | - | 0 | 1 |"} {
 		if !strings.Contains(appended, want) {
 			t.Fatalf("the rows must carry the count and the run multiplicity, including zero: %q missing from %s", want, appended)
 		}
@@ -317,5 +318,84 @@ func TestDirtyScorerIsAnnounced(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("warning missing %q: %s", want, msg)
 		}
+	}
+}
+
+// TestHistoryRecordsTheAimOfAReading pins the row against a reading that aimed at a few families: nine
+// defects caught out of nine is total coverage of nine defects, and without the aim it reads like total
+// coverage of the corpus. A reading of every case keeps saying so, in the same column.
+func TestHistoryRecordsTheAimOfAReading(t *testing.T) {
+	dir := t.TempDir()
+	rows := []HistoryEntry{
+		{TS: "aimed", Kind: KindRun, Out: "o", Model: "m", Cases: 5, Defects: 9, Caught: 9, RecallCaught: 1,
+			SkillVersion: "s", Scorer: "q", Families: []string{"time", "concurrency"}},
+		{TS: "whole", Kind: KindRun, Out: "o", Model: "m", Cases: 165, Defects: 252, Caught: 200, RecallCaught: .79,
+			SkillVersion: "s", Scorer: "q"},
+	}
+	for _, e := range rows {
+		if err := AppendHistory(dir, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "history.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := strings.Split(strings.TrimSpace(historyHeader), "\n")[0]
+	column := strings.Index(header, "| families |")
+	if column < 0 {
+		t.Fatalf("the ledger header names no families column: %s", header)
+	}
+	fields := func(line string) []string {
+		parts := strings.Split(strings.Trim(line, "|"), "|")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		return parts
+	}
+	titles := fields(header)
+	at := -1
+	for i, name := range titles {
+		if name == "families" {
+			at = i
+		}
+	}
+	want := map[string]string{"aimed": "time, concurrency", "whole": "-"}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "| ") {
+			continue
+		}
+		cells := fields(line)
+		if len(cells) != len(titles) {
+			t.Fatalf("row has %d columns against the header's %d: %s", len(cells), len(titles), line)
+		}
+		ts := cells[0]
+		expected, ok := want[ts]
+		if !ok {
+			continue
+		}
+		if cells[at] != expected {
+			t.Fatalf("row %s families = %q, want %q", ts, cells[at], expected)
+		}
+		delete(want, ts)
+	}
+	if len(want) != 0 {
+		t.Fatalf("rows missing from the ledger: %v\n%s", want, data)
+	}
+	// The JSONL row is what a machine reads back: the aim travels there too, and a reading of every
+	// case says nothing rather than claiming an empty aim.
+	jsonl, err := os.ReadFile(filepath.Join(dir, "history.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(jsonl)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("jsonl rows = %d, want 2", len(lines))
+	}
+	if !strings.Contains(lines[0], `"families":["time","concurrency"]`) {
+		t.Fatalf("aimed row lost its aim: %s", lines[0])
+	}
+	if strings.Contains(lines[1], "families") {
+		t.Fatalf("a whole reading claimed an aim: %s", lines[1])
 	}
 }

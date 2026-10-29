@@ -1,4 +1,4 @@
-{"id":"g03-batch-writer","language":"go","suite":"go test ./...","surface":"worker",
+{"id":"g03-batch-writer","language":"go","suite":"go test ./...","surface":"worker","family":"resilience-io",
  "request":"the batchwriter behaviour","defects":[
   {"id":"D1","file":"writer.go","line":25,"class":"data-loss","keywords":["partial","last batch","flush","remainder","modulo"],
    "description":"The loop only sends full batches, so the final partial batch is silently dropped whenever the record count is not a multiple of BatchSize.",

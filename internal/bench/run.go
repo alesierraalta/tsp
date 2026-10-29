@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -101,6 +102,10 @@ type Options struct {
 	// EscalateModel, when set, reruns a case with this model in a fresh workspace whenever the first run left
 	// no new test failing on the unmodified code (RedCheck found no witness). Empty never escalates.
 	EscalateModel string
+	// Families selects the cases whose key declares one of these failure kinds, so a reading can be aimed at the
+	// families earlier readings missed instead of spending its budget on the whole corpus. Empty selects every
+	// case; a name outside Families, or a selection no case declares, is refused rather than run over nothing.
+	Families []string
 	// Rounds, above 1, runs the agent again in the same workspace until it has run this many times. Every later
 	// round is told the tests earlier rounds left failing on the unmodified code, so it looks for other defects.
 	// Below 2 is one pass.
@@ -156,6 +161,7 @@ type Aggregate struct {
 	Out            string   `json:"out"`
 	Model          string   `json:"model"`
 	DryRun         bool     `json:"dry_run"`
+	Families       []string `json:"families,omitempty"` // the families a reading was aimed at; empty means every case
 	Cases          []Result `json:"cases"`
 	Defects        int      `json:"defects"`
 	Found          int      `json:"found"`
@@ -293,6 +299,12 @@ func Run(opts Options) (Aggregate, int) {
 	if !found {
 		return agg, 1
 	}
+	var err error
+	if caseDirs, err = selectCases(caseDirs, opts.Families); err != nil {
+		fmt.Fprintln(opts.Log, "families:", err)
+		return agg, 1
+	}
+	agg.Families = opts.Families
 	warnProvisionalScorer(opts)
 	if !prepareOutput(opts) {
 		return agg, 1
@@ -326,8 +338,8 @@ func normalizeOptions(opts Options) Options {
 	return opts
 }
 
-// resolveCaseDirs turns the case globs into directories. A pattern list that matches nothing is not an empty run:
-// it is said out loud, and the run stops before it writes anything.
+// resolveCaseDirs expands the glob and refuses a run that matches no case. The selection below only narrows what
+// this found, so a reading always reports which cases it actually ran.
 func resolveCaseDirs(opts Options) ([]string, bool) {
 	var patterns []string
 	for _, g := range strings.Split(opts.CasesGlob, ",") {
@@ -370,6 +382,45 @@ func prepareOutput(opts Options) bool {
 		return false
 	}
 	return true
+}
+
+// selectCases keeps the cases whose key declares one of the families a reading is aimed at, so a run spends its
+// budget on the defect kinds earlier readings missed. It refuses a name outside Families and a selection no case
+// declares: a misspelling would otherwise publish a green run that measured nothing. A case whose key will not load
+// is kept, so the run still reports it as invalid instead of hiding a broken case.
+func selectCases(caseDirs []string, families []string) ([]string, error) {
+	if len(families) == 0 {
+		return caseDirs, nil
+	}
+	want := make(map[string]bool, len(families))
+	for _, name := range families {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if !slices.Contains(Families, name) {
+			return nil, fmt.Errorf("family %q is not one of %s", name, strings.Join(Families, ", "))
+		}
+		want[name] = true
+	}
+	if len(want) == 0 {
+		return nil, fmt.Errorf("no family named; each case declares one of %s", strings.Join(Families, ", "))
+	}
+	kept := make([]string, 0, len(caseDirs))
+	for _, dir := range caseDirs {
+		key, err := LoadKey(dir)
+		if err != nil {
+			kept = append(kept, dir)
+			continue
+		}
+		if want[key.Family] {
+			kept = append(kept, dir)
+		}
+	}
+	if len(kept) == 0 {
+		return nil, fmt.Errorf("no case declares family %s", strings.Join(families, ", "))
+	}
+	return kept, nil
 }
 
 // buildUnits expands the cases into one unit per case and run. A case whose key will not load is one invalid unit
@@ -613,7 +664,7 @@ func historyEntry(agg Aggregate, caseDirs []string, opts Options) HistoryEntry {
 		Found: agg.Found, Recall: agg.Recall, Caught: agg.Caught, RecallCaught: agg.RecallCaught,
 		FalsePositives: agg.FalsePositives, CostUSD: agg.CostUSD,
 		Failed: agg.Failed, Invalid: agg.Invalid, NoPlan: agg.NoPlan, Kind: KindRun,
-		SkillVersion: SkillVersion(opts.SkillFile), Corpus: agg.Corpus,
+		SkillVersion: SkillVersion(opts.SkillFile), Corpus: agg.Corpus, Families: agg.Families,
 		LightActivated: agg.LightActivated, MicroActivated: agg.MicroActivated, Runs: opts.Runs,
 		MetricsVersion: agg.MetricsVersion, UniqueDefects: agg.UniqueDefects, UniqueFound: agg.UniqueFound,
 		UniqueConfirmed: agg.UniqueConfirmed, UniqueCaught: agg.UniqueCaught, DefectRuns: agg.DefectRuns,
@@ -640,7 +691,7 @@ func unwritten(agg Aggregate, opts Options, artifact string, err error) (Aggrega
 func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	name := filepath.Base(caseDir)
 	ws := filepath.Join(opts.Out, name, fmt.Sprint(run), "ws")
-	res := Result{Case: name, Run: run, Total: len(key.Defects), Workspace: ws}
+	res := Result{Case: name, Run: run, Family: key.Family, Total: len(key.Defects), Workspace: ws}
 	suite, err := Scaffold(caseDir, ws, key, opts.SuiteTimeout)
 	res.Suite = suite
 	if err != nil {
@@ -854,7 +905,15 @@ func merge(res, scored Result) Result {
 	scored.Suite, scored.Invalid, scored.InvalidReason = res.Suite, res.Invalid, res.InvalidReason
 	scored.Failed, scored.FailReason = res.Failed, res.FailReason
 	scored.FinalMessage = res.FinalMessage
-	scored.Notes = append(res.Notes, scored.Notes...)
+	// A rescore re-reads the plan and the tests, so the notes it produces are the ones the run already
+	// holds. Keeping a note once makes the reading independent of how often it was re-scored.
+	notes := append([]string(nil), res.Notes...)
+	for _, note := range scored.Notes {
+		if !slices.Contains(notes, note) {
+			notes = append(notes, note)
+		}
+	}
+	scored.Notes = notes
 	return scored
 }
 
@@ -913,6 +972,43 @@ func invalidTag(r Result) string {
 	return ""
 }
 
+// noteText is the note column of one case: the tags that name a run's state, then the notes the run
+// and its catch check recorded, with any note a tag already states dropped. A cell that says the same
+// fact twice reads like two problems where there is one.
+func noteText(r Result) string {
+	notes := make([]string, 0, len(r.Notes)+len(r.Catch.Notes))
+	add := func(note string) {
+		note = strings.TrimSpace(note)
+		if note == "" || statedByTag(r, note) || slices.Contains(notes, note) {
+			return
+		}
+		notes = append(notes, note)
+	}
+	for _, note := range r.Notes {
+		add(note)
+	}
+	if r.Catch.Checked {
+		for _, note := range r.Catch.Notes {
+			add(note)
+		}
+	}
+	tag := strings.TrimSpace(invalidTag(r) + noPlanTag(r))
+	return strings.TrimSpace(tag + " " + strings.Join(notes, "; "))
+}
+
+// statedByTag says whether a tag already names what the note says, so the note is not repeated.
+func statedByTag(r Result, note string) bool {
+	switch {
+	case !r.Invalid && !r.Failed && !r.PlanFound && (strings.EqualFold(note, "no plan") || strings.EqualFold(note, "no_plan")):
+		return true
+	case r.Invalid && r.InvalidReason != "" && strings.EqualFold(note, r.InvalidReason):
+		return true
+	case r.Failed && r.FailReason != "" && strings.EqualFold(note, r.FailReason):
+		return true
+	}
+	return false
+}
+
 // A pattern without a path separator names cases under <benchDir>/cases, so `n0*` works from
 // anywhere; a pattern with a separator is used as given.
 func resolveCasesGlob(benchDir, glob string) string {
@@ -960,7 +1056,7 @@ func Summary(agg Aggregate) string {
 		return withFixLoop(planlessSummary(agg), agg)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s%s", agg.TS, agg.Model, len(agg.Cases), aggregateTotals(agg), roundsTotals(agg)+sessionsTotals(agg), fixLoopTotals(agg))
+	fmt.Fprintf(&b, "# Bench %s\n\nModel: %s · case-runs: %d · %s%s%s%s", agg.TS, agg.Model, len(agg.Cases), aggregateTotals(agg), roundsTotals(agg)+sessionsTotals(agg), familiesTotals(agg), fixLoopTotals(agg))
 	if agg.Corpus != "" {
 		fmt.Fprintf(&b, " · corpus: %s", agg.Corpus)
 	}
@@ -972,23 +1068,20 @@ func Summary(agg Aggregate) string {
 	}
 	b.WriteString("\n\n| case | reported | pinned | caught | light | micro | false positives | cost USD | turns | minutes | note | precision (pending) |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, c := range agg.Cases {
-		note := strings.TrimSpace(invalidTag(c) + noPlanTag(c))
-		if len(c.Notes) > 0 {
-			note = strings.TrimSpace(note + " " + strings.Join(c.Notes, "; "))
-		}
-		if c.Catch.Checked && len(c.Catch.Notes) > 0 {
-			note = strings.TrimSpace(note + " " + strings.Join(c.Catch.Notes, "; "))
-		}
-		reported := fmt.Sprintf("%d/%d", c.Found, c.Total)
-		pinned := fmt.Sprintf("%d/%d", c.ClaimedPinned, c.Total)
-		caught := fmt.Sprintf("%d/%d", c.Caught, c.Total)
-		precision := casePrecision(c)
+		note := noteText(c)
+		var reported, pinned, caught, precision string
+		reported = fmt.Sprintf("%d/%d", c.Found, c.Total)
+		pinned = fmt.Sprintf("%d/%d", c.ClaimedPinned, c.Total)
+		caught = fmt.Sprintf("%d/%d", c.Caught, c.Total)
+		precision = casePrecision(c)
 		if c.Control {
 			reported, pinned, caught = controlCell(c.ControlInventions, c.PlanFound), "clean", "clean"
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %d | %.3f | %d | %.1f | %s | %s |\n",
 			c.Case, reported, pinned, caught, lightTag(c), microTag(c), c.FalsePositives, c.CostUSD, c.Turns, c.Seconds/60, note, precision)
 	}
+	b.WriteString(familySection(agg))
+	b.WriteString(indexSection(agg))
 	b.WriteString(missSection(agg))
 	return b.String()
 }

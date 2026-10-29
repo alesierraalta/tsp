@@ -1,6 +1,6 @@
-{"id":"g01-inventory-reserve","language":"go","suite":"go test -race ./...","surface":"library",
+{"id":"g01-inventory-reserve","language":"go","suite":"go test -race ./...","surface":"library","family":"concurrency",
  "request":"the inventory behaviour","defects":[
-  {"id":"D1","file":"inventory.go","line":37,"class":"data-race","keywords":["race","mutex","concurrent","lost update","synchronization"],
+  {"id":"D1","file":"inventory.go","line":33,"class":"data-race","keywords":["race","mutex","concurrent","lost update","synchronization"],
    "description":"Reserve reads and writes the shared stock map without synchronization, so concurrent reservations race: the runtime aborts on concurrent map writes and, when it does not, updates are lost and stock oversells.",
    "trigger":{"input":"go run -race of a main that calls inv.Add(\"b\", 100000) then 2000 goroutines each inv.Reserve(\"b\", 1) and prints inv.Available(\"b\")","expected":"98000, no race report","actual":"WARNING: DATA RACE (and without -race: fatal error: concurrent map writes at inventory.go:37)"},
    "why_missed":"The suite is single-goroutine, and coverage cannot see the absence of a lock; the contract's promise about concurrent orders is only checkable with real concurrency or the race detector."},

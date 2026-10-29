@@ -1,4 +1,4 @@
-{"id":"n09-json-ids","language":"node","suite":"node --test","surface":"etl",
+{"id":"n09-json-ids","language":"node","suite":"node --test","surface":"etl","family":"numeric",
  "request":"the json-ids behaviour","defects":[
   {"id":"D1","file":"src/records.js","line":3,"class":"integer-precision","keywords":["precision","2^53","bigint","integer","collapse"],
    "description":"JSON.parse turns 64-bit ids into doubles, so ids above 2^53 lose their low bits and two consecutive upstream ids become equal, making dedupeById merge different records.",
