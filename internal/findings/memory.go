@@ -36,6 +36,15 @@ type classMemory struct {
 // Classes answers the defect classes the tool recognizes. They are the bench families: a second list would drift.
 func Classes() []string { return append([]string(nil), bench.Families...) }
 
+// classList writes the classes as next names them: the class, then how many witnesses it has produced here.
+func classList(classes []ClassUse) string {
+	parts := make([]string, 0, len(classes))
+	for _, c := range classes {
+		parts = append(parts, fmt.Sprintf("%s %d", c.Name, c.Count))
+	}
+	return strings.Join(parts, ", ")
+}
+
 func knownClass(name string) bool {
 	for _, family := range bench.Families {
 		if family == name {

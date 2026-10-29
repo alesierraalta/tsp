@@ -140,3 +140,21 @@ func TestClassesAreTheBenchFamilies(t *testing.T) {
 		t.Fatal("Classes() handed out the caller a slice the package still uses")
 	}
 }
+
+// next names the classes this repository has been bitten by before, so the loop can say that a defect already bit
+// here: memory of the repository, never evidence about this branch.
+func TestNextNamesTheClassesThatAlreadyBitThisRepository(t *testing.T) {
+	d := repo(t)
+	put(t, d, "value_test.go", redTest)
+	commitPending(t, d)
+	if out, code := findings.RecordClass(d, "", "", "contract", wait); code != 0 {
+		t.Fatalf("record: exit %d: %s", code, out)
+	}
+	a := next(t, d, 1)
+	if len(a.Classes) != 1 || a.Classes[0].Name != "contract" || a.Classes[0].Count != 1 {
+		t.Fatalf("classes: %+v", a.Classes)
+	}
+	if !strings.Contains(a.Text(), "already bitten here: contract 1\n") {
+		t.Fatalf("text %q must name the class that already bit here", a.Text())
+	}
+}
