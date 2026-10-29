@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func oracleReading(t *testing.T) (string, Options) {
@@ -213,5 +214,15 @@ func TestOracleRefusesWithoutWriting(t *testing.T) {
 				t.Fatal("wrote on refusal")
 			}
 		})
+	}
+}
+
+// A fixture that ships no go.mod is not a package the module-aware toolchain builds, so a toolchain that
+// refuses to document it must leave the contract without Go documentation instead of failing the reading.
+func TestOracleContractWithoutModule(t *testing.T) {
+	caseDir := t.TempDir()
+	writeFile(t, filepath.Join(caseDir, FixtureDir), "api.go", "package demo\n\n// Answer returns forty-two.\nfunc Answer() int { return 42 }\n")
+	if _, err := oracleContract(caseDir, 30*time.Second); err != nil {
+		t.Fatalf("a fixture without go.mod must not fail the contract: %v", err)
 	}
 }
