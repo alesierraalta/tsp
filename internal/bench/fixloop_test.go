@@ -362,3 +362,39 @@ func armOf2(t *testing.T, totals *FixLoopTotals, arm string) FixArmTotals {
 	t.Fatalf("no %s arm in %+v", arm, totals.Arms)
 	return FixArmTotals{}
 }
+
+// A workspace that is not the root of its own repository is never committed: git would otherwise find the
+// repository around it and commit the round there.
+func TestCommitWorkspaceNeverCommitsAnEnclosingRepository(t *testing.T) {
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	outer := t.TempDir()
+	git(outer, "init", "-q", "-b", "main")
+	git(outer, "config", "user.email", "test@example.invalid")
+	git(outer, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(outer, "README"), []byte("outer\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git(outer, "add", ".")
+	git(outer, "commit", "-qm", "outer")
+	ws := filepath.Join(outer, "ws")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "round_test.go"), []byte("package ws\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := commitWorkspace(ws)
+	if got := git(outer, "rev-list", "--count", "HEAD"); got != "1" {
+		t.Fatalf("the enclosing repository gained commits: %s", got)
+	}
+	if err == nil || !strings.Contains(err.Error(), "is not the root of its own repository") {
+		t.Fatalf("the refusal is not reported: %v", err)
+	}
+}
