@@ -71,6 +71,12 @@ func TestARejectionSettlesOnItsOwnFileNotItsName(t *testing.T) {
 	if out, code := recordSuite(t, d, "go test -count=1 ./..."); code != 0 {
 		t.Fatalf("record the fixed round: %d %q", code, out)
 	}
+	if a := next(t, d, 1); a.Next != "tsp" {
+		t.Fatalf("the fix is owed its own round: %+v", a)
+	}
+	if out, code := recordSuite(t, d, "go test -count=1 ./..."); code != 1 {
+		t.Fatalf("the round over the fix finds nothing new: %d %q", code, out)
+	}
 	b := next(t, d, 0)
 	if b.Next != "done" {
 		t.Fatalf("the loop converges once the homonym passes: %+v", b)
@@ -86,13 +92,15 @@ func TestARejectionSettlesOnItsOwnFileNotItsName(t *testing.T) {
 func TestAConvergedAnswerCarriesAnEmptyList(t *testing.T) {
 	d := openRoundOne(t)
 	put(t, d, "value.go", fixedValue)
-	commitPending(t, d)
-	if out, code := recordSuite(t, d, "go test -count=1 ."); code != 0 {
-		t.Fatalf("record the fixed round: %d %q", code, out)
+	if a := next(t, d, 1); a.Next != "tsp" {
+		t.Fatalf("the fix is owed its own round: %+v", a)
+	}
+	if out, code := recordSuite(t, d, "go test -count=1 ."); code != 1 {
+		t.Fatalf("the round over the fix finds nothing new: %d %q", code, out)
 	}
 	a := next(t, d, 0)
 	if a.Next != "done" {
-		t.Fatalf("round one converges: %+v", a)
+		t.Fatalf("the loop converges: %+v", a)
 	}
 	raw, err := json.Marshal(a)
 	if err != nil {
@@ -114,7 +122,7 @@ func TestAWitnessLeavingTheSuiteIsNotASecondRegression(t *testing.T) {
 	put(t, d, "value.go", fixedValue)
 	commitPending(t, d)
 	recordSuite(t, d, "go test -count=1 .")
-	next(t, d, 0)
+	next(t, d, 1)
 	put(t, d, "value.go", brokenValue)
 	commitPending(t, d)
 	recordSuite(t, d, "go test -count=1 .")

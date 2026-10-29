@@ -41,8 +41,8 @@ type Loop struct {
 	Rounds []Round `json:"rounds"`
 	// Next is the last answer next gave.
 	Next string `json:"next,omitempty"`
-	// Pending is the tree the next round's tests are judged against, set when next answers tsp: a round after a
-	// fix attacks the code that fix left, which no commit holds.
+	// Pending is the commit the next round's tests are judged against, set when next answers tsp: a round after a
+	// fix attacks the code that fix left.
 	Pending string `json:"pending,omitempty"`
 	// FixTree is the working tree when the last fix answer was given, Unsettled what that answer listed, and
 	// NoProgress how many fixes in a row since then left exactly the same items unsettled.
@@ -65,8 +65,9 @@ type Round struct {
 	N int `json:"n"`
 	// Base is the code the round's tests were judged against: HEAD's commit for round 1, the pending tree later.
 	Base string `json:"base"`
-	// End is the working tree when the round was first recorded. A later record never moves it, because the code
-	// the round attacked is what next compares the current source with.
+	// End is the code the round attacked: the commit round one was first recorded on, the pending commit for a later
+	// round. A later record never moves it, because next compares the current source with it: source committed
+	// after it, a later round's own commit included, is source no round has attacked yet.
 	End string   `json:"end"`
 	New []string `json:"new"`
 	// Suites are every suite a record of this round ran: next reruns all of them.
@@ -185,7 +186,7 @@ func advance(l *Loop, base, end, suite string, created, uncollected []string) *L
 		return &Loop{Rounds: []Round{{N: 1, Base: base, End: end, New: created, Suites: withSuite(nil, suite), Uncollected: uncollected, At: now}}}
 	}
 	if l.Pending != "" {
-		l.Rounds = append(l.Rounds, Round{N: len(l.Rounds) + 1, Base: l.Pending, End: end, New: created, Suites: withSuite(nil, suite), Uncollected: uncollected, At: now})
+		l.Rounds = append(l.Rounds, Round{N: len(l.Rounds) + 1, Base: l.Pending, End: l.Pending, New: created, Suites: withSuite(nil, suite), Uncollected: uncollected, At: now})
 		l.Pending = ""
 		return l
 	}
@@ -193,11 +194,6 @@ func advance(l *Loop, base, end, suite string, created, uncollected []string) *L
 	last.New = append(last.New, created...)
 	last.Suites = withSuite(last.Suites, suite)
 	last.Uncollected = uncollected
-	if end != "" {
-		// The round's verdict moves its end: the next attack starts from the commit that was just judged,
-		// or the loop would keep attacking the same change forever.
-		last.End = end
-	}
 	return l
 }
 
@@ -288,7 +284,7 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 	if e != nil {
 		return failed(e)
 	}
-	diffGit := "git diff"
+	diffGit := "git --literal-pathspecs diff"
 	changed, e := changedSource(top, r.Loop.Rounds[len(r.Loop.Rounds)-1].End, snap)
 	if e != nil {
 		return failed(e)
@@ -424,8 +420,19 @@ func failingTests(run suiteRun, witnesses map[string]bool) []string {
 }
 
 // ranClean reports a run that exited cleanly with no failing test, a suite with no test at all included: nothing
-// in it is broken, even when it gave no per-test report.
+// in it is broken, even when it gave no per-test report. A run with no test proves nothing passes either, so settle
+// names it as not measured.
 func ranClean(run suiteRun) bool { return run.code == 0 && len(failingTests(run, nil)) == 0 }
+
+// ranNoTest reports a run that gave no outcome for any test of its own: its only entry, if any, is the whole suite's.
+func ranNoTest(run suiteRun) bool {
+	for name := range run.tests {
+		if name != "suite" {
+			return false
+		}
+	}
+	return true
+}
 
 // settle lists what a fix still owes: the findings not yet fixed or closed by a verdict, every suite that did not run
 // test by test, and every test in the suites the loop ran that fails and is not a finding of that suite. A failure
@@ -448,7 +455,7 @@ func settle(r *registry, runs map[string]suiteRun, top string) ([]Item, []string
 			// Its explicit removal item already holds the loop; do not also call it an unrelated failure.
 			witnesses[key][f.Test] = true
 		}
-		if passed, ran := runs[suiteKey(f.Suite)].tests[f.Test]; f.Status == "wontfix" && ran && !passed && f.Verdict != nil {
+		if passed, ran := runs[f.Suite].tests[f.Test]; f.Status == "wontfix" && ran && !passed && f.Verdict != nil {
 			notes = append(notes, fmt.Sprintf("kept failing by the user's wontfix: %s %s %s — %s", f.ID, f.File, f.Test, f.Verdict.Reason))
 		}
 	}
@@ -471,6 +478,9 @@ func settle(r *registry, runs map[string]suiteRun, top string) ([]Item, []string
 				l.Recovered[key] = true
 			}
 		}
+		if ranNoTest(run) {
+			notes = append(notes, fmt.Sprintf("not measured: `%s` ran no test", run.suite))
+		}
 		for _, name := range failingTests(run, witnesses[suiteKey(run.suite)]) {
 			items = append(items, Item{Status: "failing", Suite: run.suite, Test: name, Detail: "fails now and is not one of the loop's findings"})
 		}
@@ -480,6 +490,14 @@ func settle(r *registry, runs map[string]suiteRun, top string) ([]Item, []string
 
 // witnessUnrecorded reports a failing test that lives in a file changed after the commit the round was recorded on:
 // that is the round's own witness, written but not recorded yet, so a fix is not asked for it. A test whose file the
+
+// rejectedDetail says what a rejected finding whose test is still in the suite owes: its removal.
+func rejectedDetail(f Finding) string {
+	if f.Verdict == nil || f.Verdict.Reason == "" {
+		return "rejected by the user: remove this test"
+	}
+	return "rejected by the user (" + f.Verdict.Reason + "): remove this test"
+}
 
 // verdictBody is the body a rejected witness must still have to be suppressed as the loop's own finding.
 func verdictBody(f Finding) string {
@@ -498,7 +516,11 @@ func unsettled(fs []Finding, top string) []Item {
 		case "fixed", "wontfix":
 			continue
 		case "rejected":
-			// The user's verdict settles the finding; where its test lives is a note, not a debt.
+			// Rejecting an invented witness ends with removing its test: while it is still in the suite, the removal is
+			// owed; once it is gone, the user's verdict settles the finding.
+			if file, _, _ := relocate(top, f, verdictBody(f)); file != "" {
+				items = append(items, Item{ID: f.ID, Status: f.Status, File: file, Test: f.Test, Detail: rejectedDetail(f)})
+			}
 			continue
 		case "":
 			f.Status = "open"
@@ -653,9 +675,11 @@ func settleOrStop(r *registry, a Answer, snap string) Answer {
 
 // fixInstruction says how to settle the items listed, naming only the kinds of item the list holds.
 func fixInstruction(items []Item) string {
-	var failing, suite, gated bool
+	var failing, suite, gated, rejected bool
 	for _, it := range items {
 		switch it.Status {
+		case "rejected":
+			rejected = true
 		case "failing":
 			failing = true
 		case "suite":
@@ -668,6 +692,9 @@ func fixInstruction(items []Item) string {
 	b.WriteString("settle each item: when the contract promises what its test asserts, fix the source; when it does not, record `tsp findings verdict F<n> rejected --reason \"<why>\"` and remove that test.")
 	if suite {
 		b.WriteString(" A suite that did not run test by test is fixed first: nothing it holds can be judged until it does.")
+	}
+	if rejected {
+		b.WriteString(" A rejected item is settled by removing its test: the user already decided the contract does not promise it.")
 	}
 	if failing {
 		b.WriteString(" A failing test is not a finding, and the loop does not converge while it fails: fix the source that makes it fail. Never edit or remove that test; when it cannot pass otherwise, stop and say so, because that decision is the user's.")

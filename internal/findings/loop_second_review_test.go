@@ -41,9 +41,9 @@ func TestARejectedWitnessMovedElsewhereIsReportedThere(t *testing.T) {
 	}
 	command(t, d, "git", "mv", "value_test.go", "witness_test.go")
 	commitPending(t, d)
-	a := next(t, d, 0)
-	if a.Next != "done" {
-		t.Fatalf("the verdict settles the finding: %+v", a)
+	a := next(t, d, 1)
+	if a.Next != "fix" || len(a.Items) != 1 || a.Items[0].Status != "rejected" || a.Items[0].File != "witness_test.go" {
+		t.Fatalf("the moved rejected test is owed where it lives now: %+v", a)
 	}
 	if got := storedFindings(t)[0]; got.Status != "rejected" || got.File != "witness_test.go" {
 		t.Fatalf("the rejection names its new file: %+v", got)

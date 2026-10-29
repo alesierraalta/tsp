@@ -795,13 +795,14 @@ on the model's judgement. Run it after `tsp findings record`:
   witness test to make it pass; `wontfix`, a check waiver and `.no-testing-gate` are the user's
   decisions, not the agent's.
 - `tsp` (exit 1): everything is settled, but the last fix changed source no round has attacked. The
-  next round attacks only that change and what it affects (the answer supplies an environment-prefixed
-  `git --literal-pathspecs diff <since> <base> -- <paths>` command to read the private trees, with every
-  argument quoted so filenames are neither shell programs nor Git pathspecs); every
+  next round attacks only that change and what it affects (the answer supplies a
+  `git --literal-pathspecs diff <since> <base> -- <paths>` command with every argument quoted, so a
+  filename is neither a shell program nor Git pathspec magic); every
   earlier finding is reviewed again anyway, so a regression anywhere still shows.
 - `done` (exit 0): the last round ran on exactly the current code, everything it and earlier rounds
   found is settled, every test in the suites the loop ran passes (a witness the user kept as
-  `wontfix` is named in the notes instead), and the gates over the change since
+  `wontfix` is named in the notes instead, and so is a recorded suite that now runs no test), and the
+  gates over the change since
   the commit the loop started from are clean: what `tsp check` owes for the source it changed (a
   repository that declares `gate never` or carries `.no-testing-gate` is not held to it),
   `tsp probe quality` on non-test files, and `tsp probe arch`. A gate that cannot measure is listed
@@ -823,11 +824,13 @@ drives the loop from it, and `lines` carries the review's line for every finding
 lives in the branch's registry. The loop judges commits, never a working tree: `tsp findings record`
 refuses a dirty tree, so the round it books is the commit it judged, and `next` refuses to judge a
 tree that changed or a commit that moved while it ran. Round one records `HEAD` against its parent;
-`tsp findings record --since <rev>` names another base when a round starts elsewhere. Every later
-round is judged against the commit it was asked to attack, so a fix that was committed is the round,
-and a source change committed after that round owes another focused round. The suggested diff
-command is a plain `git diff <since> <base> -- <paths>` with every argument quoted, so a filename is
-neither a shell program nor a Git pathspec. The loop makes no commit, moves no ref and leaves the
+`tsp findings record --since <rev>` names another base when a round starts elsewhere: that commit
+itself, stored as its id. Every later round is judged against the commit it was asked to attack, so a
+fix that was committed is the round, and a source change committed after that round owes another
+focused round. Recording again never moves a round: a fix recorded before `next` was asked still owes
+its focused round, and source committed together with a later round's own tests is source that round
+never attacked. The suggested diff command is `git --literal-pathspecs diff <since> <base> -- <paths>`
+with every argument quoted, so a filename is neither a shell program nor a Git pathspec. The loop makes no commit, moves no ref and leaves the
 index alone: committing the round is the caller's step, and a repository holding a submodule is
 judged like any other. A commit a round recorded and the repository no longer holds (amended,
 rebased or pruned) ends the loop honestly, and the next record starts a new one.

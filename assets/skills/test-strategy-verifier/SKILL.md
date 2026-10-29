@@ -98,11 +98,12 @@ answers `done` or `stop`:
   remove that test. Never edit a witness test to make it pass, never change code to satisfy an
   invented test, and never record `wontfix`, a check waiver or `.no-testing-gate`: those decisions
   are the human's. A `failing` item is a test that is not a finding: fix the source that makes it
-  fail and never edit or remove that test. A `suite` item is fixed first, and a `check`, `quality`
+  fail and never edit or remove that test. A `rejected` item is the human's rejection: remove its
+  test. A `suite` item is fixed first, and a `check`, `quality`
   or `arch` item is fixed in the code or the tests it names. When an item cannot be settled under
   these rules, stop and report it as one decision for the human. Then run `tsp findings next` again.
 - **`tsp`** — run the test-strategy flow again, aimed at the change it names
-  (use the exact `git diff <since> <base> -- <paths>` command in the answer) and everything that
+  (use the exact `git --literal-pathspecs diff <since> <base> -- <paths>` command in the answer) and everything that
   change affects. Do not re-attack code
   it did not touch: a pass over unchanged code makes tests that fail on correct code, not defects.
   `tsp findings record` refuses a dirty tree: commit the round's tests before recording, then run
