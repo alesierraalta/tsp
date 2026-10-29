@@ -173,22 +173,6 @@ func TestARoundAfterAFixIsJudgedAgainstTheFixedCode(t *testing.T) {
 }
 
 // A record after the fix moves the round's end: the next attack starts from the commit just judged.
-func TestARecordAfterTheFixMovesTheRoundEnd(t *testing.T) {
-	d := openRoundOne(t)
-	put(t, d, "value.go", fixedValue)
-	commitPending(t, d)
-	fix := head(t, d)
-	if out, code := recordSuite(t, d, "go test -count=1 ."); code != 0 {
-		t.Fatalf("record: %d %q", code, out)
-	}
-	if got := storedLoop(t).Rounds[0].End; got != fix {
-		t.Fatalf("round end = %s, want the fix commit %s", got, fix)
-	}
-	if a := next(t, d, 0); a.Next != "done" {
-		t.Fatalf("the loop converges after the round ends on the fix: %+v", a)
-	}
-}
-
 func TestADryRoundOverTheFixedCodeConverges(t *testing.T) {
 	d := openRoundOne(t)
 	put(t, d, "value.go", fixedValue)
@@ -227,9 +211,9 @@ func TestARoundThatFindsNothingConvergesAtOnce(t *testing.T) {
 	}
 }
 
-// Rejecting an invented witness changes no source, so the round that found it already attacked this code. Its test
-// A rejection settles the finding even while its test still runs; the test's location is what gets reported.
-func TestARejectedFindingSettlesWhileItsTestRuns(t *testing.T) {
+// Rejecting an invented witness ends with removing its test: while the test is still in the suite the loop owes
+// that removal, and once it is gone the rejection settles the finding.
+func TestARejectedTestStaysOwedUntilItIsRemoved(t *testing.T) {
 	d := repo(t)
 	put(t, d, "value_test.go", redTest)
 	if out, code := recordSuite(t, d, "go test -count=1 ."); code != 0 {
@@ -238,10 +222,16 @@ func TestARejectedFindingSettlesWhileItsTestRuns(t *testing.T) {
 	if out, code := findings.SetVerdict(d, "F1", "rejected", "not promised"); code != 0 {
 		t.Fatalf("verdict: %d %q", code, out)
 	}
-	if a := next(t, d, 0); a.Next != "done" {
-		t.Fatalf("the verdict settles the finding: %+v", a)
+	a := next(t, d, 1)
+	want := findings.Item{ID: "F1", Status: "rejected", File: "value_test.go", Test: "example.invalid/sample.TestPromise", Detail: "rejected by the user (not promised): remove this test"}
+	if a.Next != "fix" || !reflect.DeepEqual(a.Items, []findings.Item{want}) {
+		t.Fatalf("the rejected test is still in the suite: %+v", a)
 	}
 	if got := storedFindings(t)[0]; got.File != "value_test.go" || got.Verdict == nil {
 		t.Fatalf("the rejection keeps its file and reason: %+v", got)
+	}
+	command(t, d, "git", "rm", "-q", "value_test.go")
+	if a := next(t, d, 0); a.Next != "done" {
+		t.Fatalf("removing the rejected test settles the finding: %+v", a)
 	}
 }

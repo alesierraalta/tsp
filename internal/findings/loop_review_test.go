@@ -63,11 +63,7 @@ func TestTheRoundCommandQuotesEveryPath(t *testing.T) {
 	if a.Next != "tsp" || a.Scope == nil || !reflect.DeepEqual(a.Scope.Paths, []string{odd, "value.go"}) {
 		t.Fatalf("answer: %+v", a)
 	}
-	start := strings.Index(a.Message, "`git diff")
-	if start < 0 {
-		t.Fatalf("no command in %q", a.Message)
-	}
-	cmd, _, _ := strings.Cut(a.Message[start+1:], "`")
+	cmd := roundCommand(t, a)
 	if !strings.HasSuffix(cmd, " -- 'odd name $(touch PWNED).js' 'value.go'") {
 		t.Fatalf("command: %s", cmd)
 	}

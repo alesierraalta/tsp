@@ -219,21 +219,20 @@ func Record(dir, suite, since string, timeout time.Duration) (string, int) {
 	}
 	base := roundBase(r.Loop, start)
 	if since != "" {
-		if _, e := git(top, "rev-parse", "--verify", since+"^{commit}"); e != nil {
+		// The base is the commit --since names, as an id: the round stored is compared with it again on every record.
+		commit, e := git(top, "rev-parse", "--verify", since+"^{commit}")
+		if e != nil {
 			return failure(fmt.Errorf("--since %s is not a commit: %v", since, e))
 		}
-		base = since
-	}
-	// The round is the change its commit made: a new loop judges that commit against its parent, and a later round
-	// judges the commits after the one it ended on. Several commits at once would hide all but one from the loop.
-	if r.Loop == nil || len(r.Loop.Rounds) == 0 {
+		base = commit
+		if count, e := git(top, "rev-list", "--count", base+".."+start); e == nil && count != "0" && count != "1" {
+			return failure(fmt.Errorf("--since %s covers %s commits: judge one round at a time", since, count))
+		}
+	} else if r.Loop == nil || len(r.Loop.Rounds) == 0 {
+		// The round is the change its commit made: a new loop judges that commit against its parent, and a later
+		// round judges the commits after the one it ended on. Several commits at once would hide all but one.
 		if parent, e := git(top, "rev-parse", "--verify", base+"^"); e == nil && parent != base {
 			base = parent
-		}
-	}
-	if since != "" {
-		if count, e := git(top, "rev-list", "--count", since+".."+start); e == nil && count != "0" && count != "1" {
-			return failure(fmt.Errorf("--since %s covers %s commits: judge one round at a time", since, count))
 		}
 	}
 	rep, e := bench.RedCheckAt(top, suite, base, timeout)
@@ -426,8 +425,10 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 	runs := map[string]suiteRun{}
 	runExtra := func() {
 		for _, suite := range extra {
-			if _, done := runs[suiteKey(suite)]; !done && suite != "" {
-				runs[suiteKey(suite)] = runSuite(top, suite, timeout)
+			// Runs are keyed by the command as recorded: two commands one finding shares, say -count=1 and
+			// -count=3, are still two runs, so a failure only a later iteration shows is never skipped.
+			if _, done := runs[suite]; !done && suite != "" {
+				runs[suite] = runSuite(top, suite, timeout)
 			}
 		}
 	}
@@ -484,10 +485,10 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 			f.Verdict = nil
 			suffix = " (verdict dropped: test changed)"
 		}
-		result, ok := runs[suiteKey(f.Suite)]
+		result, ok := runs[f.Suite]
 		if !ok {
 			result = runSuite(top, f.Suite, timeout)
-			runs[suiteKey(f.Suite)] = result
+			runs[f.Suite] = result
 		}
 		previous := f.Status
 		passed, ran := result.tests[f.Test]

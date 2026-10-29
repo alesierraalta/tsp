@@ -206,7 +206,10 @@ const SKILL_FILE = /(^|[\/\\])test-strategy[\/\\]SKILL\.md$/;
 const SKILL_BLOCK = /^<skill name="test-strategy" /;
 const FILE_READER = /^\s*(cat|head|tail|less|more|bat|sed)\s/;
 const isTspRequest = (prompt: string | undefined): boolean =>
-  SKILL_BLOCK.test(prompt ?? "") || (prompt ?? "").startsWith(ROUND_LEAD) || (prompt ?? "").trim().toLowerCase() === TSP_PROMPT.toLowerCase();
+  SKILL_BLOCK.test(prompt ?? "") || (prompt ?? "").trim().toLowerCase() === TSP_PROMPT.toLowerCase();
+/** Which of its own messages the extension last sent: only that exact text is a feedback run, a fix run or a round. */
+type OwnMessage = { prompt: string; kind: "feedback" | "fix" | "round" };
+const loopKind = (message: string): OwnMessage["kind"] => (message.startsWith(FIX_LEAD) ? "fix" : "round");
 function isLoadedSkill(path: string, cwd: string): boolean {
   if (!SKILL_FILE.test(path)) return false;
   const p = path.replace(/\\/g, "/");
@@ -424,13 +427,22 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   let fixRun = false;
   let pending = "";
   let lastFix = ""; // the fix answer the agent was last sent: the same one again after its fix run means it changed nothing
+  // A user's message that merely starts like one of the extension's own is the user's: it never runs the loop.
+  let own: OwnMessage | undefined;
+  const send = (prompt: string, kind: OwnMessage["kind"]) => {
+    own = { prompt, kind };
+    pi.sendUserMessage(prompt);
+  };
   pi.on("before_agent_start", (event, ctx) => {
     edited.clear();
     turnHead = head(ctx.cwd);
-    feedbackRun = event.messageType === "user" && (event.prompt ?? "").startsWith(FEEDBACK_LEAD);
-    if (event.messageType === "user" && !feedbackRun) pending = "";
-    fixRun = event.messageType === "user" && (event.prompt ?? "").startsWith(FIX_LEAD);
-    tspRun = !feedbackRun && !fixRun && event.messageType === "user" && isTspRequest(event.prompt);
+    const user = event.messageType === "user";
+    const mine = user && own !== undefined && (event.prompt ?? "").trim() === own.prompt.trim() ? own.kind : undefined;
+    if (user) own = undefined;
+    feedbackRun = mine === "feedback";
+    if (user && !feedbackRun) pending = "";
+    fixRun = mine === "fix";
+    tspRun = !feedbackRun && !fixRun && user && (mine === "round" || isTspRequest(event.prompt));
   });
   pi.on("tool_result", (event, ctx) => {
     if (!feedbackRun && !fixRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) tspRun = true;
@@ -444,7 +456,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     edited.clear();
     if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd)) { pending = ""; return; }
     if (feedbackRun) {
-      if (pending !== "") pi.sendUserMessage(pending);
+      if (pending !== "") send(pending, loopKind(pending));
       pending = "";
       return;
     }
@@ -459,8 +471,8 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
       }
       lastFix = step.fix;
       const request = tspRun ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
-      if (request !== "") { pending = step.message; pi.sendUserMessage(request); }
-      else if (step.message !== "") pi.sendUserMessage(step.message);
+      if (request !== "") { pending = step.message; send(request, "feedback"); }
+      else if (step.message !== "") send(step.message, loopKind(step.message));
       return;
     }
     if (fresh.length === 0) return;

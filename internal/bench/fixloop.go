@@ -135,7 +135,10 @@ func runFixLoop(caseDir, ws string, key Key, runOpts, opts Options) *FixLoop {
 	loop.Witnesses = append([]string(nil), rep.Red...)
 	// D2: the registry is written before the fix, so it holds the witnesses of the code round 1 measured.
 	home := filepath.Join(filepath.Dir(ws), FindingsDir)
-	commitWorkspace(ws)
+	if err := commitWorkspace(ws); err != nil {
+		loop.Reason = "round 1 could not be committed for tsp findings record: " + err.Error()
+		return loop
+	}
 	record, code, err := runTsp(ws, findingsEnv(home), opts, "findings", "record", "--cwd", ws, "--suite", key.Suite,
 		"--timeout", opts.SuiteTimeout.String())
 	if err != nil || code != 0 {
@@ -453,12 +456,43 @@ func findingsEnv(home string) []string {
 }
 
 // commitWorkspace commits what the round left in dir, because `tsp findings record` judges a commit and refuses a
-// dirty tree. A directory that is not a repository is left alone.
-func commitWorkspace(dir string) {
-	for _, args := range [][]string{{"add", "-A", "--", "."}, {"commit", "-qm", "bench round"}} {
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		_ = cmd.Run()
+// dirty tree. Only a directory that is the root of its own repository is committed: inside another repository git
+// would find that one and commit the round there.
+func commitWorkspace(dir string) error {
+	top, err := gitRun(dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("%s is not a git repository: %s", dir, strings.TrimSpace(top))
 	}
+	want, err := resolvedPath(dir)
+	if err != nil {
+		return err
+	}
+	got, err := resolvedPath(strings.TrimSpace(top))
+	if err != nil {
+		return err
+	}
+	if got != want {
+		return fmt.Errorf("%s is not the root of its own repository: git would commit to %s", dir, got)
+	}
+	if out, err := gitRun(dir, "add", "-A", "--", "."); err != nil {
+		return fmt.Errorf("the round could not be staged: %v: %s", err, strings.TrimSpace(out))
+	}
+	if exec.Command("git", "-C", dir, "diff", "--cached", "--quiet").Run() == nil {
+		return nil
+	}
+	if out, err := gitRun(dir, "commit", "-qm", "bench round"); err != nil {
+		return fmt.Errorf("the round could not be committed: %v: %s", err, strings.TrimSpace(out))
+	}
+	return nil
+}
+
+// resolvedPath is path made absolute with its symlinks resolved, so two spellings of one directory compare equal.
+func resolvedPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(abs)
 }
 
 // runTsp runs the bench's own binary as tsp in dir and returns its output and exit code. A binary that could not
