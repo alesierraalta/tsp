@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func oracleReading(t *testing.T) (string, Options) {
@@ -213,5 +215,29 @@ func TestOracleRefusesWithoutWriting(t *testing.T) {
 				t.Fatal("wrote on refusal")
 			}
 		})
+	}
+}
+
+// A toolchain that refuses to document a fixture without go.mod must leave the contract with the
+// documents it has instead of failing the reading: a fixture no module owns has no package to document.
+func TestOracleContractWithoutModule(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake go uses a POSIX shell")
+	}
+	caseDir := t.TempDir()
+	writeFile(t, filepath.Join(caseDir, FixtureDir), "api.go", "package demo\n\n// Answer returns forty-two.\nfunc Answer() int { return 42 }\n")
+	writeFile(t, filepath.Join(caseDir, FixtureDir), "README.md", "readme body\n")
+	bin := t.TempDir()
+	script := "#!/bin/sh\nprintf 'go: go.mod file not found in current directory or any parent directory\\n' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	contract, err := oracleContract(caseDir, 30*time.Second)
+	if err != nil {
+		t.Fatalf("a fixture without go.mod must not fail the contract: %v", err)
+	}
+	if !strings.Contains(contract, "readme body") {
+		t.Fatalf("contract lost the documents the fixture has: %q", contract)
 	}
 }

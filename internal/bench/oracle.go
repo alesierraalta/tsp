@@ -546,7 +546,7 @@ func oracleContract(caseDir string, timeout time.Duration) (string, error) {
 		}
 		dirs = walked
 	}
-	documented := 0
+	documented, moduleless := 0, 0
 	for _, dir := range dirs {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		cmd := exec.CommandContext(ctx, "go", "doc", "-all", ".")
@@ -559,12 +559,19 @@ func oracleContract(caseDir string, timeout time.Duration) (string, error) {
 			if !timedOut && (strings.Contains(string(data), "doc: no buildable Go source files in ") || strings.Contains(string(data), "build constraints exclude all Go files in ") || strings.Contains(string(data), "doc: no source-code package in ")) {
 				continue
 			}
+			// A fixture without a module holds no package this toolchain builds, so refusing to document it
+			// is nothing to document rather than a broken contract: the boundary keeps the README and docs
+			// it already has. Older toolchains documented such a directory anyway; newer ones refuse.
+			if !timedOut && strings.Contains(string(data), "go.mod file not found") {
+				moduleless++
+				continue
+			}
 			return "", fmt.Errorf("go doc contract: %w: %s", e, data)
 		}
 		documented++
 		fmt.Fprintf(&b, "\n## Go package documentation\n%s\n", data)
 	}
-	if len(dirs) > 0 && documented == 0 {
+	if len(dirs) > 0 && documented == 0 && moduleless < len(dirs) {
 		return "", errors.New("go doc contract: no package documentation for any of the fixture's Go packages")
 	}
 	return b.String(), nil
