@@ -194,6 +194,16 @@ func sameSuite(a, b string) bool { return suiteKey(a) == suiteKey(b) }
 
 // Record records or refreshes precisely the witnesses RedCheck found.
 func Record(dir, suite, since string, timeout time.Duration) (string, int) {
+	return RecordClass(dir, suite, since, "", timeout)
+}
+
+// RecordClass is Record with the defect class the caller declares for the witnesses this round pins. The class is
+// remembered for the repository, never stored on a finding: it is knowledge about the repository, not evidence about
+// a branch. An empty class declares nothing and writes no memory.
+func RecordClass(dir, suite, since, class string, timeout time.Duration) (string, int) {
+	if class != "" && !knownClass(class) {
+		return failure(unknownClass(class))
+	}
 	r, path, top, e := load(dir)
 	if e != nil {
 		return failure(e)
@@ -288,6 +298,7 @@ func Record(dir, suite, since string, timeout time.Duration) (string, int) {
 	}
 	var out, skipped strings.Builder
 	created := []string{}
+	witnesses := []classWitness{}
 	for _, name := range rep.Red {
 		file, fingerprint, promise := locate(top, name, rep.TestFiles)
 		if ignored(top, file) {
@@ -306,6 +317,7 @@ func Record(dir, suite, since string, timeout time.Duration) (string, int) {
 			r.NextID++
 			index = len(r.Findings) - 1
 			created = append(created, r.Findings[index].ID)
+			witnesses = append(witnesses, classWitness{test: name, file: file})
 		}
 		f := &r.Findings[index]
 		// The newest command is the one the loop runs: re-recording a suite with other iterations refreshes it.
@@ -319,6 +331,11 @@ func Record(dir, suite, since string, timeout time.Duration) (string, int) {
 	r.Loop = advance(r.Loop, base, start, rep.Suite, created, uncollectedLines(rep.Uncollected))
 	if e = save(r, path); e != nil {
 		return failure(e)
+	}
+	if class != "" && len(witnesses) > 0 {
+		if e := rememberClass(top, class, witnesses); e != nil {
+			return failure(fmt.Errorf("the round is recorded but its defect class could not be remembered: %w", e))
+		}
 	}
 	if len(rep.Red) == 0 {
 		return diagnostics.String() + "no defect witnesses recorded\n", 1
