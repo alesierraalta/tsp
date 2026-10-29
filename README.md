@@ -1105,9 +1105,17 @@ tsp bench gate --baseline bench/baseline --max-regression 0.05 <run>   # refuse 
 directory, compares it against the operator's floors (`--min-recall`, `--max-cost-usd`,
 `--max-regression` against a recorded baseline) and names every floor it missed, exit 1. A run whose
 aggregate records zero defects exits 2: a run that caught nothing out of nothing is not a zero score,
-it is no measurement. `.github/workflows/bench-nightly.yml` spends the money, needs a model
-credential, and says so when the secret is absent instead of reporting a green run that measured
-nothing.
+it is no measurement. The bench runs on the operator's machine, never in CI: it spends money and needs
+a model credential, so no scheduled job owns it and no green check can pass for a run that measured
+nothing. Run it where the credential lives, then gate what it produced:
+
+```sh
+make build
+./bin/tsp bench run -cases 'bench/cases/h*' -runs 1 -runner pi -model "$MODEL" \
+  -agent-config bench -max-cost-usd 1.50 -bench-dir bench-results
+./bin/tsp bench gate --baseline bench/baseline --min-recall 0.60 --max-regression 0.05 \
+  bench-results/results/<run>
+```
 
 `bench compare` ends with a verdict on the caught difference: a 95% Wilson/Newcombe interval, and
 whether it includes zero ("within noise"). For example, 16/18 vs 15/18 at three runs per case is within
