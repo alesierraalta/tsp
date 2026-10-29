@@ -144,8 +144,16 @@ func familyTotals(a Aggregate) []familyTotal {
 	return totals
 }
 
+// Prior is what the target repository has already been bitten by, handed in by the caller. The bench holds no path
+// and reads no file: what the corpus covers is the bench's, what the target pays for is the target's.
+type Prior struct {
+	Name  string
+	Count int
+}
+
 // familySection publishes which failure kinds a reading caught and which it missed, so the next run can
-// be aimed at the weakest family instead of the whole corpus.
+// be aimed at the weakest family instead of the whole corpus. When the caller passed the target's own memory, it
+// also says how often each family already bit this repository, so coverage and cost are read together.
 func familySection(a Aggregate) string {
 	totals := familyTotals(a)
 	if len(totals) == 0 {
@@ -155,7 +163,15 @@ func familySection(a Aggregate) string {
 	for _, t := range totals {
 		parts = append(parts, fmt.Sprintf("%s %d/%d", t.Name, t.Caught, t.Defects))
 	}
-	return "\ncaught by family: " + strings.Join(parts, " · ") + "\n"
+	section := "\ncaught by family: " + strings.Join(parts, " · ") + "\n"
+	if len(a.Prior) > 0 {
+		bitten := make([]string, 0, len(a.Prior))
+		for _, p := range a.Prior {
+			bitten = append(bitten, fmt.Sprintf("%s %d", p.Name, p.Count))
+		}
+		section += "already bitten here: " + strings.Join(bitten, " · ") + "\n"
+	}
+	return section
 }
 
 // familiesTotals names the failure kinds a reading was aimed at, so a summary of a family-scoped run is never

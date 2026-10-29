@@ -2067,9 +2067,18 @@ func runBenchRun(args []string) int {
 	if cfgDir != "" && skillFile != "" && *runner != bench.RunnerAgy {
 		skillFile = filepath.Join(cfgDir, "skills", "test-strategy", "SKILL.md")
 	}
+	// What this repository has already been bitten by travels with the reading: the corpus says what the bench covers,
+	// the memory says what the target pays for. A memory that cannot be read never stops a reading.
+	var prior []bench.Prior
+	if classes, err := findings.ClassMemory(""); err == nil {
+		for _, c := range classes {
+			prior = append(prior, bench.Prior{Name: c.Name, Count: c.Count})
+		}
+	}
 	_, code := bench.Run(bench.Options{
 		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, FixLoop: *fixLoop, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
 		Families:     commaList(*families),
+		Prior:        prior,
 		Timeout:      *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,
