@@ -759,6 +759,14 @@ An unreadable per-test report falls back to a whole-suite result, never a defect
 The registry lives outside the repository, under
 TSP's state directory, separately for each branch; detached HEAD is refused.
 
+`record --class <familia>` also remembers, for the repository rather than the branch, which class of
+defect those witnesses belong to. The classes are the bench families: `boundary`, `concurrency`,
+`contract`, `input-domain`, `numeric`, `performance`, `resilience-io`, `security`, `state-logic` and
+`time`. A name outside them is refused, and a record without `--class` remembers nothing: a class is
+declared, never guessed. The memory lives in `~/.config/tsp/memory/<repo>.json`, one file per
+repository (worktrees of one clone share it). It is knowledge about this repository, never evidence
+about a branch: `tsp findings next` and `tsp bench` read it, and the registry never contains it.
+
 Close a finding with `tsp findings verdict F1 rejected --reason "<why>"` or
 `tsp findings verdict F1 wontfix --reason "<why>"`. `tsp findings verdict F1 clear` removes
 the decision. A finding with a verdict schedules no suite run and its outcome never affects
@@ -819,7 +827,8 @@ on the model's judgement. Run it after `tsp findings record`:
   revision is not a commit or covers several, or a registry cannot be read.
 
 `--json` prints the same answer as one object (`next`, `round`, `max_rounds`, `reason`, `review`,
-`items`, `scope`, `rounds`, `message`, `notes`, `tree`, `lines`) for a host; the Pi extension
+`items`, `scope`, `rounds`, `message`, `notes`, `tree`, `lines`, and `classes` when a record declared
+one) for a host; the Pi extension
 drives the loop from it, and `lines` carries the review's line for every finding. The loop's state
 lives in the branch's registry. The loop judges commits, never a working tree: `tsp findings record`
 refuses a dirty tree, so the round it books is the commit it judged, and `next` refuses to judge a
@@ -1101,7 +1110,10 @@ measure to read; the stored history rows keep their numbers.
 Every summary also publishes `caught by family:`: each case declares the failure kind its defects
 belong to (`time`, `concurrency`, `contract`, `security`, …), and the line splits caught over defects
 per family so a run says which kinds it missed. Cases written before the field are counted as
-`unclassified` instead of disappearing from the split.
+`unclassified` instead of disappearing from the split. When the target repository has a declared
+memory (`tsp findings record --class`), a second line, `already bitten here:`, counts how often each
+class already bit it, so coverage of the corpus and the cost the target already paid are read
+together. A memory that cannot be read leaves that line out instead of stopping the run.
 
 `--families time,concurrency` narrows a reading to the cases that declare those kinds, so the budget
 is spent where the last reading was weak instead of on the whole corpus; the summary header then

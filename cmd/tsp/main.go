@@ -1202,7 +1202,7 @@ func firstLine(text string) string {
 
 // runRedcheck tells a testing agent which of its new tests pin nothing: they pass on the code HEAD holds.
 func runFindings(args []string) int {
-	const help = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--since <rev>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings next [--cwd <dir>] [--timeout <duration>] [--json]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\nSupported suites: go test, pytest, node --test, jest, vitest run (also npx), cargo test.\nCargo witnesses must be in recognized test files (e.g. tests/), not inline unit tests.\nnext answers what the TSP loop owes now: fix, tsp, done or stop (exit 1, 1, 0, 3; 2 cannot judge).\n"
+	const help = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--since <rev>] [--class <familia>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings next [--cwd <dir>] [--timeout <duration>] [--json]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\nSupported suites: go test, pytest, node --test, jest, vitest run (also npx), cargo test.\nCargo witnesses must be in recognized test files (e.g. tests/), not inline unit tests.\n--class remembers the class of the witnesses this round pins for this repository; a record without it remembers nothing.\nnext answers what the TSP loop owes now: fix, tsp, done or stop (exit 1, 1, 0, 3; 2 cannot judge).\n"
 	if len(args) == 0 || (args[0] != "record" && args[0] != "check" && args[0] != "next" && args[0] != "verdict") {
 		fmt.Fprint(os.Stderr, help)
 		if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
@@ -1213,7 +1213,7 @@ func runFindings(args []string) int {
 	fs := flag.NewFlagSet("findings "+args[0], flag.ContinueOnError)
 	cwd := fs.String("cwd", ".", "directory inside the repository")
 	timeout := fs.Duration("timeout", 5*time.Minute, "cap for each suite run")
-	var suite, since, reason, id, decision string
+	var suite, since, class, reason, id, decision string
 	flags := args[1:]
 	if args[0] == "verdict" {
 		fs.StringVar(&reason, "reason", "", "why the finding is closed")
@@ -1228,6 +1228,7 @@ func runFindings(args []string) int {
 	if args[0] == "record" {
 		fs.StringVar(&suite, "suite", "", "test command: go test, pytest, node --test, jest, vitest run (also npx), cargo test (tests/ witnesses, not inline unit tests); default: inferred")
 		fs.StringVar(&since, "since", "", "commit the round starts from; default: the parent of HEAD for a new loop")
+		fs.StringVar(&class, "class", "", "defect class of the witnesses this round pins: boundary, concurrency, contract, input-domain, numeric, performance, resilience-io, security, state-logic, time")
 	}
 	if code, ok := parseFlags(fs, flags); !ok {
 		return code
@@ -1253,7 +1254,7 @@ func runFindings(args []string) int {
 	var code int
 	switch args[0] {
 	case "record":
-		out, code = findings.Record(*cwd, suite, since, *timeout)
+		out, code = findings.RecordClass(*cwd, suite, since, class, *timeout)
 	case "next":
 		answer, next := findings.Next(*cwd, *timeout)
 		if !asJSON {
@@ -2066,9 +2067,18 @@ func runBenchRun(args []string) int {
 	if cfgDir != "" && skillFile != "" && *runner != bench.RunnerAgy {
 		skillFile = filepath.Join(cfgDir, "skills", "test-strategy", "SKILL.md")
 	}
+	// What this repository has already been bitten by travels with the reading: the corpus says what the bench covers,
+	// the memory says what the target pays for. A memory that cannot be read never stops a reading.
+	var prior []bench.Prior
+	if classes, err := findings.ClassMemory(""); err == nil {
+		for _, c := range classes {
+			prior = append(prior, bench.Prior{Name: c.Name, Count: c.Count})
+		}
+	}
 	_, code := bench.Run(bench.Options{
 		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, FixLoop: *fixLoop, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
 		Families:     commaList(*families),
+		Prior:        prior,
 		Timeout:      *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,

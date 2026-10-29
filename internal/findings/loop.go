@@ -96,6 +96,9 @@ type Answer struct {
 	Tree string `json:"tree"`
 	// Lines are the review's line for every finding, so a host can show the whole review beside the verdict.
 	Lines []string `json:"lines"`
+	// Classes are the defect classes this repository has been bitten by before, so the loop can say that this one
+	// already bit here. It is knowledge about the repository, never evidence about this branch.
+	Classes []ClassUse `json:"classes,omitempty"`
 }
 
 // Item is one thing a fix has to settle.
@@ -354,6 +357,9 @@ func Next(dir string, timeout time.Duration) (Answer, int) {
 		if e != nil {
 			return failed(e)
 		}
+	}
+	if classes, e := ClassMemory(dir); e == nil {
+		a.Classes = classes
 	}
 	return a, exitOf(a.Next)
 }
@@ -830,6 +836,9 @@ func (a Answer) Text() string {
 	fmt.Fprintf(&b, "%s: %s\n", a.Next, head)
 	if a.Review != "" {
 		b.WriteString(a.Review + "\n")
+	}
+	if len(a.Classes) > 0 {
+		b.WriteString("already bitten here: " + classList(a.Classes) + "\n")
 	}
 	if body != "" {
 		b.WriteString(strings.TrimSuffix(body, "\n") + "\n")

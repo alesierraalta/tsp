@@ -106,6 +106,9 @@ type Options struct {
 	// families earlier readings missed instead of spending its budget on the whole corpus. Empty selects every
 	// case; a name outside Families, or a selection no case declares, is refused rather than run over nothing.
 	Families []string
+	// Prior is what the target repository has already been bitten by, read by the caller. A reading names it beside
+	// its own family split, so coverage and cost are read together. Empty holds nothing and changes no output.
+	Prior []Prior
 	// Rounds, above 1, runs the agent again in the same workspace until it has run this many times. Every later
 	// round is told the tests earlier rounds left failing on the unmodified code, so it looks for other defects.
 	// Below 2 is one pass.
@@ -157,11 +160,14 @@ type Agent func(ctx context.Context, ws string, key Key, opts Options) (AgentRes
 // repeated runs contribute repeated denominator entries; the Unique* and RecallUnique fields are
 // the distinct-defect view.
 type Aggregate struct {
-	TS             string   `json:"ts"`
-	Out            string   `json:"out"`
-	Model          string   `json:"model"`
-	DryRun         bool     `json:"dry_run"`
-	Families       []string `json:"families,omitempty"` // the families a reading was aimed at; empty means every case
+	TS       string   `json:"ts"`
+	Out      string   `json:"out"`
+	Model    string   `json:"model"`
+	DryRun   bool     `json:"dry_run"`
+	Families []string `json:"families,omitempty"` // the families a reading was aimed at; empty means every case
+	// Prior is the target repository's own defect-class memory, passed in through Options and never serialized: it
+	// says what the target has already paid for, not what this reading measured.
+	Prior          []Prior  `json:"-"`
 	Cases          []Result `json:"cases"`
 	Defects        int      `json:"defects"`
 	Found          int      `json:"found"`
@@ -294,7 +300,7 @@ type unit struct {
 // the report does not depend on which unit happened to finish first.
 func Run(opts Options) (Aggregate, int) {
 	opts = normalizeOptions(opts)
-	agg := Aggregate{TS: time.Now().UTC().Format(time.RFC3339), Out: opts.Out, Model: opts.Model, DryRun: opts.DryRun, Runs: opts.Runs}
+	agg := Aggregate{TS: time.Now().UTC().Format(time.RFC3339), Out: opts.Out, Model: opts.Model, DryRun: opts.DryRun, Runs: opts.Runs, Prior: opts.Prior}
 	caseDirs, found := resolveCaseDirs(opts)
 	if !found {
 		return agg, 1

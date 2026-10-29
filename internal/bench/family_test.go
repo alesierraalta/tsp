@@ -108,3 +108,20 @@ func TestPerFamilyCaughtPublishesAFamilyOutsideTheList(t *testing.T) {
 		}
 	}
 }
+
+// A reading names the families that already bit this repository beside the ones it covered, so coverage and cost are
+// read together; a reading with no memory is byte-for-byte what it was.
+func TestFamilySectionNamesTheTargetsOwnMemory(t *testing.T) {
+	agg := Aggregate{Cases: []Result{{Case: "a", Family: "contract", Total: 2, Caught: 1}}}
+	if got := familySection(agg); strings.Contains(got, "already bitten here") {
+		t.Fatalf("a reading with no memory named one: %q", got)
+	}
+	agg.Prior = []Prior{{Name: "contract", Count: 5}, {Name: "concurrency", Count: 1}}
+	got := familySection(agg)
+	if !strings.Contains(got, "caught by family: contract 1/2") {
+		t.Fatalf("the split changed: %q", got)
+	}
+	if !strings.Contains(got, "already bitten here: contract 5 · concurrency 1") {
+		t.Fatalf("the memory is missing: %q", got)
+	}
+}
