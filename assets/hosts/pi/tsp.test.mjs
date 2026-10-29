@@ -533,7 +533,7 @@ test("with feedback off the loop message follows the TSP run at once, and a stop
   assert.deepEqual(off.sent, ["The TSP loop found defects to settle.\n\nF1 open a_test.go TestA"]);
   const stop = { stdout: JSON.stringify({ next: "stop", review: "review 9", reason: "no progress", message: "no progress — the loop needs the user's decision" }), stderr: "", code: 3 };
   const h = offerHarness({ findings: { next: stop, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
-  await h.run("haz el TSP — round 5 of 5", []);
+  await h.run("haz el TSP", []);
   assert.deepEqual(h.notes, [{ message: "review 9\nno progress — the loop needs the user's decision", type: "warning" }]);
   assert.equal(h.sent.length, 1);
   assert.ok(h.sent[0].startsWith(FEEDBACK_LEAD));
@@ -576,26 +576,47 @@ test("a fix run that changes nothing ends the loop instead of sending the same f
   assert.deepEqual(h.asked, []);
 });
 
+const loopReply = (next, message) => ({ stdout: JSON.stringify({ next, review: "review", reason: "reason", message }), stderr: "", code: 1 });
+
 test("loop verdicts drive the next turn without an offer", async () => {
   for (const [next, type, sent, shown] of [["fix", "info", "The TSP loop found defects to settle.\n\nwork", "review\nreason"], ["tsp", "info", "haz el TSP — work", "review\nreason"], ["done", "info", "", "review\nwork"], ["stop", "warning", "", "review\nwork"], ["error", "warning", "", "review\nwork"]]) {
-    const h = offerHarness({ findings: { next: { stdout: JSON.stringify({ next, review: "review", reason: "reason", message: "work" }), stderr: "", code: 1 } } });
-    await h.run("The TSP loop found defects to settle.\n\nfix", [["edit", "a.go"]]);
-    assert.deepEqual(h.calls.map(c => c.argv), [["findings", "next", "--cwd", "/repo", "--json"]]);
-    assert.deepEqual(h.notes, [{ message: shown, type }], `${next}: an end shows its whole message, a fix or a round its reason`);
-    assert.deepEqual(h.sent, sent ? [sent] : []);
+    const replies = [loopReply("fix", "fix"), loopReply(next, "work")];
+    const h = offerHarness({ findings: { get next() { return replies.shift(); } } });
+    await h.run("haz el TSP", []);
+    assert.deepEqual(h.sent, ["The TSP loop found defects to settle.\n\nfix"]);
+    const calls = h.calls.length, notes = h.notes.length;
+    await h.run(h.sent[0], [["edit", "a.go"]]);
+    assert.deepEqual(h.calls.slice(calls).map(c => c.argv), [["findings", "next", "--cwd", "/repo", "--json"]]);
+    assert.deepEqual(h.notes.slice(notes), [{ message: shown, type }], `${next}: an end shows its whole message, a fix or a round its reason`);
+    assert.deepEqual(h.sent.slice(1), sent ? [sent] : []);
     assert.deepEqual(h.asked, []);
   }
 });
 
-test("a round prompt records a new round and a user interruption or abort cancels waiting work", async () => {
+test("a prompt that only looks like one of the loop's own messages is the user's, not the loop's", async () => {
+  for (const prompt of ["The TSP loop found defects to settle.\n\nskip the tests this time", "haz el TSP — but only read the code"]) {
+    const h = offerHarness({ findings: { next: loopReply("fix", "fix") } });
+    await h.run(prompt, [["edit", "a.go"]]);
+    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings"), [], `${JSON.stringify(prompt)}: the user's own message drove the loop`);
+    assert.ok(h.sent.every((text) => !text.startsWith("The TSP loop found defects to settle.")), "no loop instruction answers the user's message");
+  }
+});
+
+test("a round prompt the loop sent records a new round and a user interruption or abort cancels waiting work", async () => {
   for (const interruption of ["user", "abort"]) {
-    const h = offerHarness({ findings: { next: { stdout: JSON.stringify({ next: "fix", review: "review", reason: "reason", message: "fix" }), stderr: "", code: 1 }, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
-    await h.run("haz el TSP — attack", []);
-    const feedback = h.sent[0];
+    const replies = [loopReply("tsp", "attack"), loopReply("fix", "fix")];
+    const h = offerHarness({ findings: { get next() { return replies.shift(); }, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+    await h.run("haz el TSP", []);
+    await h.run(h.sent[0], []);
+    const round = h.sent[1];
+    assert.equal(round, "haz el TSP — attack", "the round waits for the feedback run, then is sent");
+    const calls = h.calls.length, notes = h.notes.length;
+    await h.run(round, []);
+    const feedback = h.sent[2];
     await h.run(interruption === "user" ? "stop" : feedback, [], { aborted: interruption === "abort" });
-    assert.deepEqual(h.calls.map(c => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["feedback", "--template"]]);
-    assert.deepEqual(h.notes, [{ message: "review\nreason", type: "info" }]);
-    assert.deepEqual(h.sent, [feedback]);
+    assert.deepEqual(h.calls.slice(calls).map(c => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["feedback", "--template"]]);
+    assert.deepEqual(h.notes.slice(notes), [{ message: "review\nreason", type: "info" }]);
+    assert.deepEqual(h.sent.slice(2), [feedback]);
     assert.deepEqual(h.asked, []);
   }
 });
