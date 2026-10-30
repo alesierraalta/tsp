@@ -16,6 +16,9 @@ type Gate struct {
 	MaxRegression float64 // 0 disables the baseline comparison
 	MaxCostUSD    float64 // 0 disables the spend ceiling
 	BaselineDir   string  // a previous results directory; empty skips the comparison
+	// SkillVersions accepts a baseline measured with a different skill version. Every other provenance field,
+	// and the corpus, still has to match, exactly as compare asks.
+	SkillVersions bool
 }
 
 // GateVerdict is what the gate measured and why it decided the way it did.
@@ -51,6 +54,12 @@ func Judge(resultsDir string, gate Gate) (GateVerdict, error) {
 		baseline, err := readAggregate(gate.BaselineDir)
 		if err != nil {
 			return verdict, err
+		}
+		// A baseline is this instrument measured earlier. Subtracting a reading from another model, runner or
+		// corpus produces a delta that says nothing about the change, so the gate refuses the pair instead of
+		// reporting a pass or a regression it cannot attribute.
+		if err := refuseLikeForLike(baseline, aggregate, gate.SkillVersions); err != nil {
+			return verdict, fmt.Errorf("%w: the baseline in %s is not a reading of this instrument: %v", ErrGateUnusable, gate.BaselineDir, err)
 		}
 		verdict.Baseline = baseline.RecallCaught
 		if gate.MaxRegression > 0 && baseline.RecallCaught-aggregate.RecallCaught > gate.MaxRegression {

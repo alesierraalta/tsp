@@ -59,6 +59,64 @@ func TestGateRefusesAMissingAggregate(t *testing.T) {
 	}
 }
 
+// A baseline is the same instrument measured earlier. Anything else is a second experiment whose number is
+// not this reading's past, so the gate refuses it the way compare refuses it rather than subtracting them.
+func TestGateRefusesABaselineFromAnotherModel(t *testing.T) {
+	baseline := gateRun(t, t.TempDir(), Aggregate{Defects: 10, RecallCaught: 0.727, Model: "openai-codex/gpt-6-luna"})
+	current := gateRun(t, t.TempDir(), Aggregate{Defects: 10, RecallCaught: 0.913, Model: "gemini-3.8-flash-low"})
+
+	_, err := Judge(current, Gate{MaxRegression: 0.05, BaselineDir: baseline})
+	if !errors.Is(err, ErrGateUnusable) {
+		t.Fatalf("err = %v, want ErrGateUnusable: another model's reading is not this reading's baseline", err)
+	}
+	if !strings.Contains(err.Error(), "different model: before openai-codex/gpt-6-luna, after gemini-3.8-flash-low") {
+		t.Fatalf("err = %v, want the model named", err)
+	}
+}
+
+func TestGateRefusesABaselineFromAnotherRunner(t *testing.T) {
+	baseline := gateRun(t, t.TempDir(), Aggregate{Defects: 10, RecallCaught: 0.8, Provenance: Provenance{Runner: "pi"}})
+	current := gateRun(t, t.TempDir(), Aggregate{Defects: 10, RecallCaught: 0.8, Provenance: Provenance{Runner: "agy"}})
+
+	_, err := Judge(current, Gate{MaxRegression: 0.05, BaselineDir: baseline})
+	if !errors.Is(err, ErrGateUnusable) {
+		t.Fatalf("err = %v, want ErrGateUnusable", err)
+	}
+	if !strings.Contains(err.Error(), "different runner: before pi, after agy") {
+		t.Fatalf("err = %v, want the runner named", err)
+	}
+}
+
+func TestGateRefusesABaselineFromAnotherCorpus(t *testing.T) {
+	baseline := gateRun(t, t.TempDir(), Aggregate{Defects: 10, RecallCaught: 0.8, Corpus: "sha256:aaa"})
+	current := gateRun(t, t.TempDir(), Aggregate{Defects: 10, RecallCaught: 0.8, Corpus: "sha256:bbb"})
+
+	_, err := Judge(current, Gate{MaxRegression: 0.05, BaselineDir: baseline})
+	if !errors.Is(err, ErrGateUnusable) {
+		t.Fatalf("err = %v, want ErrGateUnusable", err)
+	}
+	if !strings.Contains(err.Error(), "different corpora: before sha256:aaa, after sha256:bbb") {
+		t.Fatalf("err = %v, want both corpora named", err)
+	}
+}
+
+// The one provenance field the operator may wave through deliberately, in the shape compare already offers.
+func TestGateWavesASkillVersionThroughOnlyWhenAsked(t *testing.T) {
+	baseline := gateRun(t, t.TempDir(), Aggregate{Defects: 10, RecallCaught: 0.8, SkillVersion: "0.7.11"})
+	current := gateRun(t, t.TempDir(), Aggregate{Defects: 10, RecallCaught: 0.85, SkillVersion: "0.7.12"})
+
+	if _, err := Judge(current, Gate{MaxRegression: 0.05, BaselineDir: baseline}); err == nil {
+		t.Fatal("a different skill version was compared without being asked for")
+	}
+	verdict, err := Judge(current, Gate{MaxRegression: 0.05, BaselineDir: baseline, SkillVersions: true})
+	if err != nil {
+		t.Fatalf("Judge with SkillVersions: %v", err)
+	}
+	if !verdict.Passed || verdict.Baseline != 0.8 {
+		t.Fatalf("verdict = %+v, want a pass against the 0.8 baseline", verdict)
+	}
+}
+
 func TestGateRefusesARegressionAgainstTheBaseline(t *testing.T) {
 	baseline := gateRun(t, t.TempDir(), Aggregate{Defects: 10, RecallCaught: 0.9})
 	current := gateRun(t, t.TempDir(), Aggregate{Defects: 10, RecallCaught: 0.6})
