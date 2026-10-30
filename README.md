@@ -442,7 +442,9 @@ receive skills but their transports are documented rather than wired. Claude's s
 `~/.claude/settings.json`: every existing hook and setting is preserved, the gate is added once,
 and running it again changes nothing. A file modified after tsp installed it is not replaced
 by default; pass `--force` to replace it after tsp snapshots the edited file in the central
-backup store described below. A path under the skills directory that sync cannot read, or a symlink
+backup store described below. Edit skills in `assets/skills` in the repository, never in an installed copy: an edit made on
+disk is skipped by sync and replaced by `--force`, so nothing else holds it. `tsp doctor` counts
+the skills that no longer match the build and names the remedy. A path under the skills directory that sync cannot read, or a symlink
 back to an enclosing folder, is reported once as a user path and left alone; an unreadable skills
 directory itself still aborts the run. An unparseable `settings.json` aborts the run before anything is
 written. Use `--config-dir` to target another Claude directory, `--hosts` to narrow installation,
