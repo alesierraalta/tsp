@@ -37,14 +37,24 @@ func TestHistoryRecordsSessionsLast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(md), old) || !strings.Contains(string(md), "predate the rounds column") || !strings.Contains(string(md), "| micro | rounds | sessions |\n") {
+	if !strings.HasPrefix(string(md), old) || !strings.Contains(string(md), "predate the rounds column") || !strings.Contains(string(md), "| micro | rounds | sessions | index |\n") {
 		t.Fatalf("history lost old rows or rounds migration: %s", md)
+	}
+	headerCells := strings.Split(strings.Trim(strings.Split(strings.TrimSpace(historyHeader), "\n")[0], "|"), "|")
+	sessions := -1
+	for i := range headerCells {
+		if strings.TrimSpace(headerCells[i]) == "sessions" {
+			sessions = i
+		}
+	}
+	if sessions < 0 {
+		t.Fatalf("no sessions column in %q", historyHeader)
 	}
 	var tails []string
 	for _, line := range strings.Split(string(md)[len(old):], "\n") {
 		if strings.HasPrefix(line, "|  |") {
-			cells := strings.Split(line, "|")
-			tails = append(tails, strings.TrimSpace(cells[len(cells)-2]))
+			cells := strings.Split(strings.Trim(line, "|"), "|")
+			tails = append(tails, strings.TrimSpace(cells[sessions]))
 		}
 	}
 	if strings.Join(tails, ",") != "1,1,3" {
@@ -188,8 +198,8 @@ func TestHistoryAppendsAdjudicatedMetricsInDeclaredOrder(t *testing.T) {
 	if len(h) != len(r) {
 		t.Fatalf("header columns = %d, row columns = %d:\nheader %s\nrow %s", len(h), len(r), header, row)
 	}
-	wantHeaders := []string{"metrics version", "unique defects", "unique found", "unique confirmed", "unique caught", "defect runs", "controls", "precision", "pending", "out of scope", "inconclusive", "unstable", "agent config", "environment", "micro", "rounds", "sessions"}
-	wantValues := []string{"2", "1", "1", "0", "1", "2", "1", "-", "3", "4", "5", "-", "bench", "linux/amd64", "6", "1", "1"}
+	wantHeaders := []string{"metrics version", "unique defects", "unique found", "unique confirmed", "unique caught", "defect runs", "controls", "precision", "pending", "out of scope", "inconclusive", "unstable", "agent config", "environment", "micro", "rounds", "sessions", "index"}
+	wantValues := []string{"2", "1", "1", "0", "1", "2", "1", "-", "3", "4", "5", "-", "bench", "linux/amd64", "6", "1", "1", "-"}
 	start := len(h) - len(wantHeaders)
 	for i := range wantHeaders {
 		if h[start+i] != wantHeaders[i] || r[start+i] != wantValues[i] {
@@ -397,5 +407,49 @@ func TestHistoryRecordsTheAimOfAReading(t *testing.T) {
 	}
 	if strings.Contains(lines[1], "families") {
 		t.Fatalf("a whole reading claimed an aim: %s", lines[1])
+	}
+}
+
+// TestHistoryCarriesTheIndex: a row for a reading that could be scored writes its index, and a row for
+// one that could not writes no index at all. A zero written for an unscored reading would be read back
+// as a measured score of zero, which is the opposite of "nothing was measured".
+func TestHistoryCarriesTheIndex(t *testing.T) {
+	dir := t.TempDir()
+	scored := historyEntry(Aggregate{Cases: []Result{
+		{Case: "a", Family: "time", Total: 2, Caught: 2},
+	}}, nil, Options{})
+	if err := AppendHistory(dir, scored); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendHistory(dir, historyEntry(Aggregate{}, nil, Options{})); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "history.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want two rows, got %d: %s", len(lines), raw)
+	}
+	var first, second map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+		t.Fatal(err)
+	}
+	if first["index"] != float64(100) {
+		t.Fatalf("a scored row recorded index = %v, want 100", first["index"])
+	}
+	if _, ok := second["index"]; ok {
+		t.Fatalf("an unscored row recorded index = %v, want no index key", second["index"])
+	}
+	md, err := os.ReadFile(filepath.Join(dir, "history.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(md), "| index |") || !strings.Contains(string(md), "| 100 |") {
+		t.Fatalf("history.md lost the index column: %s", md)
 	}
 }

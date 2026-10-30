@@ -2529,6 +2529,7 @@ func runBenchRescore(args []string) int {
 		Corpus: agg.Corpus, Families: agg.Families, LightActivated: agg.LightActivated,
 		MicroActivated: agg.MicroActivated, Runs: agg.Runs,
 		Rounds: max(1, agg.Provenance.Rounds), Sessions: max(1, agg.Provenance.Sessions),
+		Index: bench.HistoryIndex(agg),
 	})
 	fmt.Print(bench.Summary(agg))
 	return 0
