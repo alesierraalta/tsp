@@ -501,6 +501,11 @@ toward 100 for reasons that have nothing to do with the product. The `h*` corpus
 so a new case should come from a collision the inspected models missed, not another instance of a
 class they already handle.
 
+A case also needs `fix/all/`. A witness is judged by running it against the defect and against the
+corrected file, so a case without that file scores every witness zero: it cannot tell a missed
+defect from an unmeasurable one, and it will look unsaturated for a reason that has nothing to do
+with the model.
+
 ## Cases
 
 | id | language | surface | defects | classes |
