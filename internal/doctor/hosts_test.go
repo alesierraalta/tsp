@@ -1,12 +1,85 @@
 package doctor
 
 import (
+	"github.com/alesierraalta/tsp/internal/assets"
 	"github.com/alesierraalta/tsp/internal/sync"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// S3: a skill edited on disk after install is reported, so doctor never calls a drifting host
+// healthy while sync would silently skip the edit.
+func TestHostInventoryReportsSkillsModifiedSinceInstall(t *testing.T) {
+	home := t.TempDir()
+	skillsDir := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := assets.SkillNames()[0]
+	installSkill(t, skillsDir, name)
+
+	if got := driftedOf(t, home); got.SkillsDrifted != 0 {
+		t.Fatalf("a fresh install drifted = %d, want 0", got.SkillsDrifted)
+	}
+
+	edit := filepath.Join(skillsDir, name, "SKILL.md")
+	shipped, err := os.ReadFile(edit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(edit, append(shipped, []byte("\n## Local edit\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := driftedOf(t, home)
+	if got.SkillsDrifted != 1 {
+		t.Fatalf("claude drifted = %d, want the one edited skill", got.SkillsDrifted)
+	}
+	if len(got.DriftedPaths) != 1 || got.DriftedPaths[0] != name {
+		t.Fatalf("drifted paths = %v, want [%s]", got.DriftedPaths, name)
+	}
+}
+
+// installSkill copies one shipped skill to disk, which is what a sync leaves behind.
+func installSkill(t *testing.T, skillsDir, name string) {
+	t.Helper()
+	err := fs.WalkDir(assets.Skills(), name, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel := strings.TrimPrefix(path, name)
+		dest := filepath.Join(skillsDir, name, filepath.FromSlash(strings.TrimPrefix(rel, "/")))
+		if d.IsDir() {
+			return os.MkdirAll(dest, 0o755)
+		}
+		data, err := fs.ReadFile(assets.Skills(), path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(dest, data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// driftedOf reports the Claude host of a fixture home.
+func driftedOf(t *testing.T, home string) HostStatus {
+	t.Helper()
+	for _, h := range HostInventory(home, filepath.Join(home, ".claude")) {
+		if h.Name == "claude" {
+			return h
+		}
+	}
+	t.Fatalf("inventory has no claude host")
+	return HostStatus{}
+}
 
 // S2: doctor reports each host's real state, and no host claims a transport it does not have.
 func TestHostInventoryReportsEachTransportAsItIs(t *testing.T) {
