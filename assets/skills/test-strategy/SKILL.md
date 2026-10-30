@@ -4,7 +4,7 @@ description: "Trigger: haz el TSP, haz TSP, TSP, haz test stragety, haz test str
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.7.14"
+  version: "0.7.15"
   requires_tsp: "0.7.5"
   requires_tpp: "0.5.1"
   scope: [common]
@@ -18,6 +18,15 @@ untracked file, a probe that only exists as a command someone ran) is not in the
 so the run names the ones that stayed local instead of implying a wider net than it cast. Do not
 change source code. Spend turns on probes and tests, not on prose: the one document a run writes is
 the plan, because it is the record a later reader audits.
+
+## Core Invariants
+
+1. **No claim without execution**: every finding and every "works" carries an evidence record; a
+   reasoned item stays an unverified hypothesis until it is executed.
+2. **Regression gate**: a diff is validated only when the existing suite stays green and the
+   blast-radius checks are verified.
+3. **Layer sweep**: surfaces are probed across each architecture layer, not only where the change
+   happens to live.
 
 Work promise by promise. A pass over the code is not the unit of work: coverage of
 promise × class is, and step 6 says when it is complete.
