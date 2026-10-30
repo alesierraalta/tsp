@@ -46,16 +46,10 @@ func CompareWith(beforeDir, afterDir string, opts CompareOptions) (Comparison, e
 	if cmp.After, err = readAggregate(afterDir); err != nil {
 		return cmp, err
 	}
-	if err := refuseProvenanceMismatch(cmp.Before, cmp.After, opts); err != nil {
-		return cmp, err
-	}
-	if err := refuseCorpusMismatch(cmp.Before, cmp.After); err != nil {
+	if err := refuseLikeForLike(cmp.Before, cmp.After, opts.SkillVersions); err != nil {
 		return cmp, err
 	}
 	before, after := caseResults(cmp.Before), caseResults(cmp.After)
-	if err := refuseCaseSetMismatch(before, after); err != nil {
-		return cmp, err
-	}
 	names := make([]string, 0, len(before))
 	for name := range before {
 		names = append(names, name)
@@ -70,6 +64,20 @@ func CompareWith(beforeDir, afterDir string, opts CompareOptions) (Comparison, e
 		cmp.Rows = append(cmp.Rows, row)
 	}
 	return cmp, nil
+}
+
+// refuseLikeForLike refuses two readings that did not measure the same thing on the same instrument: the
+// provenance both runs recorded, the corpus they drew from, and the cases they scored. compare uses it to set
+// two runs side by side; gate uses it so the number it subtracts is this reading's own past and not a second
+// experiment wearing a baseline's name.
+func refuseLikeForLike(before, after Aggregate, skillVersions bool) error {
+	if err := refuseProvenanceMismatch(before, after, CompareOptions{SkillVersions: skillVersions}); err != nil {
+		return err
+	}
+	if err := refuseCorpusMismatch(before, after); err != nil {
+		return err
+	}
+	return refuseCaseSetMismatch(caseResults(before), caseResults(after))
 }
 
 func refuseProvenanceMismatch(before, after Aggregate, opts CompareOptions) error {

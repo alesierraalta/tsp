@@ -18,7 +18,9 @@ mutants:
 	go run ./tools/mutants
 
 vet:
-	test -z "$$(gofmt -l .)" && go vet ./...
+	@# gofmt over the module's packages, not the whole tree: a bench run leaves Go workspaces under
+	@# bench/results (gitignored) whose formatting is the corpus's business, and "gofmt -l ." fails on them.
+	test -z "$$(gofmt -l $$(go list -f '{{.Dir}}' ./...))" && go vet ./...
 
 # The measure-change skill ships a shell runner whose contract is its exit codes (0 identical,
 # 1 differ, 2 setup failure, 3 both sides failed the same way). Nothing else executes it, so it is

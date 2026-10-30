@@ -2,6 +2,11 @@
 
 `tsp bench gate --baseline bench/baseline` compares a fresh run against the aggregate recorded here.
 
+The gate refuses the pair when the run and this baseline recorded a different model, runner, corpus or case
+set, because subtracting one instrument's number from another's produces a delta nobody can attribute. The
+refusal names the field that differs. `--skill-versions` is the one deliberate exception, for reading two
+skill versions on the same instrument.
+
 A baseline is only honest when it measured the same corpus with the same instrument as the run being
 compared. This one does, and the instrument is written down:
 

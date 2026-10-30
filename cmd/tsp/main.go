@@ -158,9 +158,11 @@ bench verify-oracle --run <reading> [--runner pi|claude|codex|agy] [--model <m>]
                    [--concurrency N] [--timeout d] [--dry-run]
   Blind post-hoc contract judge; requires kept workspaces. Writes only <reading>/oracle/.
 bench rescore [--bench-dir <dir>] <results>
-bench gate [--baseline <dir>] [--min-recall <f>] [--max-regression <f>] [--max-cost-usd <f>] <results>
+bench gate [--baseline <dir>] [--min-recall <f>] [--max-regression <f>] [--max-cost-usd <f>] [--skill-versions] <results>
            (refuses a run below a floor, above a ceiling, regressed against a baseline, or one that
-            recorded no defect at all: a run that measured nothing is not a zero score)
+            recorded no defect at all: a run that measured nothing is not a zero score. A baseline is
+            only a baseline when it measured the same model, runner, corpus and cases; --skill-versions
+            waves that one field through, deliberately)
 bench adjudicate --run <results>/<case>/<run> [--plan <path>] --row <n> --verdict <defect|false_positive|out_of_scope>
           [--defect <id>] --by <who> --reason <why> [--replace] [--ts <RFC3339>]
 bench adjudicate --run <results>/<case>/<run> [--plan <path>] (--show | --pending)
@@ -2741,6 +2743,10 @@ func parseGateArgs(args []string) (bench.Gate, string, error) {
 	var results string
 	for i := 0; i < len(args); i++ {
 		flag := args[i]
+		if flag == "--skill-versions" {
+			gate.SkillVersions = true
+			continue
+		}
 		if flag != "--baseline" && flag != "--min-recall" && flag != "--max-regression" && flag != "--max-cost-usd" {
 			if results != "" {
 				return gate, "", fmt.Errorf("takes one results directory, got %q and %q", results, flag)
@@ -2771,7 +2777,7 @@ func parseGateArgs(args []string) (bench.Gate, string, error) {
 		}
 	}
 	if results == "" {
-		return gate, "", errors.New("needs a results directory: [--baseline <dir>] [--min-recall <f>] [--max-regression <f>] [--max-cost-usd <f>] <results>")
+		return gate, "", errors.New("needs a results directory: [--baseline <dir>] [--min-recall <f>] [--max-regression <f>] [--max-cost-usd <f>] [--skill-versions] <results>")
 	}
 	return gate, results, nil
 }
