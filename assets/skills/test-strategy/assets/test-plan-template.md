@@ -133,6 +133,11 @@ The first edit that breaks its declaration refuses the row and is named by its p
 admitted survey reports its tally (`2 killed, 1 equivalent`). An edit whose own text contains ` ;; ` cannot be
 written in a cell.
 
+`Mutate` sees production code only. A test that asserts against a double reimplementing the rule under test
+survives every edit, because the edit lands in code the test never runs, so the matrix reports it green and the
+test proves the double. Read what a test is asserting before trusting its row: a reversion that cannot reach the
+assertion is not evidence that the assertion holds.
+
 `Expect` says which way the command must exit: empty or `pass` for zero, `fail` for a FAIL_TO_PASS test
 observed red. With `fail` only an exit from 1 to 125 qualifies (126, 127 and signals mean the command never
 ran as a test, a timeout or a sandbox refusal keeps its own reason, and a zero exit is refused as
@@ -141,7 +146,10 @@ command's is, so it should show the failing test's name: a compile error must no
 test. Prefer it over `! cmd`, which also passes on a compile failure. `Expect` beside `Mutate` is refused, because
 a mutation already defines its own red and green runs.
 
-Every row carries exactly one cell per header column (14 here); an empty cell stays as `| |`. A literal
+Every row carries exactly one cell per header column (14 here); an empty cell stays as `| |`. An observation that is a `None`, a refusal, or a "cannot be measured" is a pass
+nowhere: before it counts, `Observed` names the real input that reaches that branch, one real file per common
+source rather than a stub built for the probe. A rejection no real input produces is a gap in the claim, not
+evidence for it, so it goes under Hypotheses until an input is named. A literal
 `|` inside a cell is written `\|`, or it splits the cell and `plan check` refuses the row. `tsp plan add-evidence`
 writes a ledger row from flags, escaping `|` and leaving `Digest` and `Mode` empty. Add the ledger
 row before `tsp plan add-finding` names it: that command writes the Findings row only and refuses
