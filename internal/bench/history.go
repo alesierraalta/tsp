@@ -71,6 +71,27 @@ type HistoryEntry struct {
 	// It is written in the JSONL row only: the markdown table's column set is what its readers parse, and a fix-loop
 	// row is already told apart by its verdict on this field.
 	FixLoop bool `json:"fix_loop,omitempty"`
+	// Index is the score the reading published, out of 100. It is a pointer because an unscored reading and a
+	// reading that scored zero are different facts: the first measured nothing to score, and the second measured
+	// defects and caught none of them. A row without the key predates the column.
+	Index *int `json:"index,omitempty"`
+}
+
+// HistoryIndex is the score a reading published, or nil when the reading had nothing to score.
+func HistoryIndex(agg Aggregate) *int {
+	if index := indexOf(agg); index.Scored {
+		score := int(index.Score)
+		return &score
+	}
+	return nil
+}
+
+// historyIndexText renders the index cell without turning an unscored reading into a zero.
+func historyIndexText(index *int) string {
+	if index == nil {
+		return "-"
+	}
+	return fmt.Sprint(*index)
 }
 
 // A row is either a run that spawned agents or a rescore that re-read one with newer rules.
@@ -79,7 +100,7 @@ const (
 	KindRescore = "rescore"
 )
 
-const historyHeader = "| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus | families | light | runs | metrics version | unique defects | unique found | unique confirmed | unique caught | defect runs | controls | precision | pending | out of scope | inconclusive | unstable | agent config | environment | micro | rounds | sessions |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+const historyHeader = "| ts | kind | out | model | cases | defects | reported | recall | caught | recall caught | false positives | failed | invalid | no plan | cost USD | skill version | scorer | corpus | families | light | runs | metrics version | unique defects | unique found | unique confirmed | unique caught | defect runs | controls | precision | pending | out of scope | inconclusive | unstable | agent config | environment | micro | rounds | sessions | index |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
 
 // reported and caught count different things, so neither bounds the other.
 const historyIntro = "# Benchmark history\n\nOne row per `tpp bench run`; never rewritten. A `rescore` row re-reads an earlier\nrun with newer scoring rules: it spends nothing, so summing the cost column over rescore\nrows would count the same money twice. `reported and caught are independent`: reported\ncounts defects written in the plan, caught counts defects some test distinguishes, and\neither can exceed the other.\n\nEvery row names the `scorer` build that produced its numbers. When the scoring rules change,\na later rescore of one source run supersedes an earlier one, and the scorer column is what\ntells the two apart; rows are never rewritten.\n\nA row written before the adjudicated metrics carries no `metrics version` column and is read as version 1, which is why `bench compare` refuses to compare it with a version 2 row.\n\nA row written before the agent-config column carries no agent-config mode and cannot be compared with one that does.\n\n"
@@ -170,6 +191,9 @@ func ensureHistoryHeader(md, header string) error {
 	if !strings.Contains(string(existing), "| sessions |") {
 		notes = append(notes, "Rows above this header predate the sessions column and record no sessions-per-run count.")
 	}
+	if !strings.Contains(string(existing), "| index |") {
+		notes = append(notes, "Rows above this header predate the index column and record no score: they measured a run, never a scored reading.")
+	}
 	note := "\n"
 	if len(notes) > 0 {
 		note += strings.Join(notes, "\n") + "\n"
@@ -182,9 +206,9 @@ func historyRow(e HistoryEntry, ts, kind string) string {
 	if unstable == "" {
 		unstable = "-"
 	}
-	return fmt.Sprintf("| %s | %s | %s | %s | %d | %d | %d | %.2f | %d | %.2f | %d | %d | %d | %d | %.3f | %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s | %s | %d | %d | %d |\n",
+	return fmt.Sprintf("| %s | %s | %s | %s | %d | %d | %d | %.2f | %d | %.2f | %d | %d | %d | %d | %.3f | %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s | %s | %d | %d | %d | %s |\n",
 		ts, kind, e.Out, e.Model, e.Cases, e.Defects, e.Found, e.Recall, e.Caught, e.RecallCaught, e.FalsePositives, e.Failed, e.Invalid, e.NoPlan, e.CostUSD, e.SkillVersion, e.Scorer, e.Corpus, aimText(e.Families), e.LightActivated, e.Runs,
-		e.MetricsVersion, e.UniqueDefects, e.UniqueFound, e.UniqueConfirmed, e.UniqueCaught, e.DefectRuns, e.Controls, historyPrecision(e.Precision), e.PendingAdjudication, e.OutOfScope, e.Inconclusive, unstable, e.AgentConfig, e.Environment, e.MicroActivated, e.Rounds, e.Sessions)
+		e.MetricsVersion, e.UniqueDefects, e.UniqueFound, e.UniqueConfirmed, e.UniqueCaught, e.DefectRuns, e.Controls, historyPrecision(e.Precision), e.PendingAdjudication, e.OutOfScope, e.Inconclusive, unstable, e.AgentConfig, e.Environment, e.MicroActivated, e.Rounds, e.Sessions, historyIndexText(e.Index))
 }
 
 // aimText names the families a reading was aimed at, or "-" for a reading of every case.

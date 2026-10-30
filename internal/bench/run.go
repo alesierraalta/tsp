@@ -678,6 +678,7 @@ func historyEntry(agg Aggregate, caseDirs []string, opts Options) HistoryEntry {
 		OutOfScope: agg.OutOfScope, Inconclusive: agg.Inconclusive, UnstableCases: agg.UnstableCases,
 		AgentConfig: agg.Provenance.AgentConfig, Environment: agg.Provenance.Environment,
 		Rounds: passes(opts.Rounds), Sessions: passes(opts.Sessions), FixLoop: opts.FixLoop,
+		Index: HistoryIndex(agg),
 	}
 }
 

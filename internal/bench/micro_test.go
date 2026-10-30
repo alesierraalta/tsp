@@ -131,10 +131,10 @@ func TestHistoryAddsTheMicroColumnLast(t *testing.T) {
 	if strings.Contains(appended, "predate the activation column") || strings.Contains(appended, "predate the agent-config column") {
 		t.Fatalf("only the missing column earns a note: %s", appended)
 	}
-	if !strings.Contains(appended, "| agent config | environment | micro | rounds | sessions |\n") {
+	if !strings.Contains(appended, "| agent config | environment | micro | rounds | sessions | index |\n") {
 		t.Fatalf("micro must follow environment, with rounds last: %s", appended)
 	}
-	for _, want := range []string{"| bench | linux/amd64 | 2 | 1 | 1 |\n", "| bench | linux/amd64 | 0 | 1 | 1 |\n"} {
+	for _, want := range []string{"| bench | linux/amd64 | 2 | 1 | 1 | - |\n", "| bench | linux/amd64 | 0 | 1 | 1 | - |\n"} {
 		if !strings.Contains(appended, want) {
 			t.Fatalf("the row must retain the micro count, including zero, before rounds: %q missing from %s", want, appended)
 		}

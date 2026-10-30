@@ -315,6 +315,18 @@ control scores zero; a control whose row says `clean, 2 invented` claimed two de
 corpus calls correct. Recall alone cannot tell those two flows apart, which is why a run is not
 reported without both sides.
 
+A reading measures precision only when it selects the controls. `-cases` takes comma-separated
+patterns, so a reading aimed at `h*` still includes them:
+
+```sh
+./bin/tsp bench run -cases 'bench/cases/h*,bench/cases/c*,bench/cases/g05*' -runs 1 \
+  -runner pi -model "$MODEL" -agent-config bench -bench-dir bench-results
+```
+
+A reading that leaves them out is not wrong, only partial: its index renormalizes over recall and
+breadth, prints `precision not measured: no control case ran`, and its history row records
+`controls: 0`, so the omission stays legible long after the run.
+
 That is the **reported** measure. The **caught** measure asks whether the agent's tests distinguish
 the defective code from the correct one, plan or no plan: the test files the agent added or changed
 are carried onto `fixture/` + `fix/all/` (they must be green there) and onto `fixture/` +
@@ -482,6 +494,12 @@ compare` refuses when the two digests differ.
 4. Write the suite a busy developer would write; run it; it must pass.
 5. Execute every trigger; paste the observed output verbatim into the key.
 6. Record the exact line of each defective statement.
+
+A case is worth adding only while it can still fail. Before committing one, run it against at least
+two models with the current binary: a case every model catches measures nothing and pushes the index
+toward 100 for reasons that have nothing to do with the product. The `h*` corpus reached that point,
+so a new case should come from a collision the inspected models missed, not another instance of a
+class they already handle.
 
 ## Cases
 
