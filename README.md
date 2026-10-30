@@ -874,6 +874,7 @@ tests are not re-run by it.
 
 ```sh
 go test ./...           # unit, integration (real git repositories), and differential tests
+make test               # the same suite, plus the measure-change skill's shell selftest
 go run ./tools/mutants  # 23 literal mutants on the gate; every one must be killed
 make build              # bin/tsp
 node --test assets/hosts/pi/tsp.test.mjs  # the Pi extension's pure surface
@@ -886,8 +887,9 @@ it is skipped otherwise.
 
 CI runs that suite on every pull request and on every push to `main`, with `node` installed so the
 benchmark's JavaScript cases run instead of skipping, and it runs
-`node --test assets/hosts/pi/tsp.test.mjs` for the Pi extension. It checks `gofmt`, `go vet`, the build and
-`go test ./... -count=1` — the same commands `make vet`, `make build` and `make test` run locally.
+`node --test assets/hosts/pi/tsp.test.mjs` for the Pi extension. It checks `gofmt`, `go vet`, the build,
+`go test ./... -count=1` and `make skill-selftest` — the same commands `make vet`, `make build` and
+`make test` run locally.
 
 ## Pending
 

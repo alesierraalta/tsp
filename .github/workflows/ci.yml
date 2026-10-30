@@ -38,6 +38,10 @@ jobs:
         run: make build
       - name: test
         run: go test ./... -count=1
+      # The measure-change skill's shell runner is unreachable from go test. It skips on a branch
+      # that does not carry the skill, so this step never turns an unrelated branch red.
+      - name: skill selftest
+        run: make skill-selftest
       # The Pi extension's pure surface (dispatch, detection, observation, UI guarding) is a .mjs
       # suite over a .ts module; go test never reaches it, so a silent skip here would be a green
       # run that verified less than it claims.

@@ -34,7 +34,8 @@ behaviours, and is no reading. `-n` takes a `sed -E` expression and may repeat. 
 instrument says about itself — elapsed time, temp paths, ports — never the assertion text: a
 normalizer that hides the payload turns a real difference into a green. Editing `paired.sh` owes
 `assets/selftest.sh`, which asserts those four exit codes, that the base side really runs at the ref, and
-that `-n` still hides instrument noise but not assertions.
+that `-n` still hides instrument noise but not assertions; `make test` and CI run it, and skip it on a
+branch that does not carry the skill.
 
 ## Recipe: a skill reading
 

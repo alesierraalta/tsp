@@ -1,4 +1,4 @@
-.PHONY: build test mutants vet
+.PHONY: build test mutants vet skill-selftest
 
 # The commit git reports for this tree, stamped into the binary because Go's own stamp misses a
 # linked worktree and, nested in another repository, names that repository's commit (#157).
@@ -11,7 +11,7 @@ endif
 build:
 	go build -ldflags "-X github.com/alesierraalta/tsp/internal/buildinfo.Commit=$(COMMIT)" -o bin/tsp ./cmd/tsp
 
-test:
+test: skill-selftest
 	go test ./... -count=1
 
 mutants:
@@ -19,3 +19,11 @@ mutants:
 
 vet:
 	test -z "$$(gofmt -l .)" && go vet ./...
+
+# The measure-change skill ships a shell runner whose contract is its exit codes (0 identical,
+# 1 differ, 2 setup failure, 3 both sides failed the same way). Nothing else executes it, so it is
+# asserted here, before the long suite: an edit that breaks the runner fails in a second. A branch
+# that does not carry the skill yet skips instead of failing.
+skill-selftest:
+	@script=.claude/skills/measure-change/assets/selftest.sh; \
+	if [ -x "$$script" ]; then "$$script"; else echo "skill-selftest: skipped, no $$script"; fi
