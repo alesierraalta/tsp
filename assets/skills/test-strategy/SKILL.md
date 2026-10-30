@@ -4,7 +4,7 @@ description: "Trigger: haz el TSP, haz TSP, TSP, haz test stragety, haz test str
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.7.12"
+  version: "0.7.13"
   requires_tsp: "0.7.4"
   requires_tpp: "0.5.1"
   scope: [common]
@@ -16,7 +16,8 @@ suite that is RED on today's code and would be GREEN once the defect is fixed. W
 behind is the suite it committed, not a regression net: a witness that stays local (a `testLocales/` directory, an
 untracked file, a probe that only exists as a command someone ran) is not in the repository's suite,
 so the run names the ones that stayed local instead of implying a wider net than it cast. Do not
-change source code. Spend turns on probes and tests, not on documents.
+change source code. Spend turns on probes and tests, not on prose: the one document a run writes is
+the plan, because it is the record a later reader audits.
 
 Work promise by promise. A pass over the code is not the unit of work: coverage of
 promise × class is, and step 6 says when it is complete.
@@ -45,7 +46,8 @@ promise × class is, and step 6 says when it is complete.
    - The evidence this session already has: the diff, the bug report, the log line that started
      the work. A change is a promise list: everything the changed code touches inherits its
      promises, including the callers nobody named.
-   Keep the list in your head as `path:line — promise`; never write a document.
+   Keep the list as `path:line — promise` while you work; the plan records what you concluded,
+   not the narration of how you got there.
 
 2. **Attack every promise by every class it can break in**, not just the documented examples:
    empty and zero, boundaries (exact limit, one past it), non-ASCII and Unicode equivalence
@@ -121,6 +123,11 @@ promise × class is, and step 6 says when it is complete.
    input, the operation has no state). A green suite is not evidence of coverage: it only says the
    tests you wrote pass. When a class is left unprobed, say so instead of calling the work done.
 
-7. **Finish** with a short list: each defect as `path:line` plus the test that pins it, the cells
-   that stayed unprobed with their reason, and which witnesses stayed local instead of landing in
-   the suite.
+7. **Finish by writing the plan, then the short list.** The plan is the record a later reviewer and
+   `tsp plan gaps` read, so it is written before the chat summary: `tsp plan init` when the
+   repository has none (`--micro` for a single function), one `tsp plan add-finding` row per
+   defect — `--id`, `--location path:line`, `--severity`, `--data-safe`, `--evidence`, `--status`,
+   `--verdict-by`, `--reason`, plus `--test` for a settled status — and `tsp plan check` then
+   `tsp plan gaps` until nothing is owed. Then report in the chat: each defect as `path:line` plus
+   the test that pins it, the cells that stayed unprobed with their reason, and which witnesses
+   stayed local instead of landing in the suite. A run that leaves no plan leaves nothing to audit.
