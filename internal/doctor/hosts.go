@@ -1,7 +1,9 @@
 package doctor
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,8 +34,12 @@ type HostStatus struct {
 	ConfigDir     string `json:"config_dir"`
 	SkillsDir     string `json:"skills_dir"`
 	SkillsPresent int    `json:"skills_present"`
-	Transport     string `json:"transport"`
-	TransportNote string `json:"transport_note,omitempty"`
+	// SkillsDrifted counts skills whose installed files no longer match what this build ships:
+	// the copy a sync would refuse to overwrite, and the one a --force would silently replace.
+	SkillsDrifted int      `json:"skills_drifted"`
+	DriftedPaths  []string `json:"drifted_paths,omitempty"`
+	Transport     string   `json:"transport"`
+	TransportNote string   `json:"transport_note,omitempty"`
 }
 
 // hostTransports is what TSP knows how to put in front of each host, and the sentence a reader
@@ -77,6 +83,7 @@ func HostInventory(home, claudeConfigDir string) []HostStatus {
 			SkillsPresent: skillsPresent(host.SkillsDir),
 		}
 		status.Transport, status.TransportNote = transportFor(host)
+		status.SkillsDrifted, status.DriftedPaths = skillsDrifted(host.SkillsDir)
 		statuses = append(statuses, status)
 	}
 	return statuses
@@ -124,6 +131,39 @@ func piHostStatus(home string) (HostStatus, bool) {
 
 // skillsPresent counts this build's skills that are actually readable in a host's directory, so
 // a host with none is visible as a host with none instead of as a host that merely exists.
+// skillsDrifted names the skills whose files on disk differ from the manifest this build embeds.
+// A file missing on disk is not drift: skillsPresent already reports that, and a sync installs it.
+func skillsDrifted(skillsDir string) (int, []string) {
+	count := 0
+	paths := make([]string, 0, 2)
+	for _, name := range assets.SkillNames() {
+		drifted := false
+		err := fs.WalkDir(assets.Skills(), name, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+			shipped, err := fs.ReadFile(assets.Skills(), path)
+			if err != nil {
+				return nil
+			}
+			installed, err := os.ReadFile(filepath.Join(skillsDir, filepath.FromSlash(path)))
+			if err != nil {
+				return nil
+			}
+			if sha256.Sum256(installed) != sha256.Sum256(shipped) {
+				drifted = true
+				return fs.SkipAll
+			}
+			return nil
+		})
+		if err == nil && drifted {
+			count++
+			paths = append(paths, name)
+		}
+	}
+	return count, paths
+}
+
 func skillsPresent(skillsDir string) int {
 	present := 0
 	for _, name := range assets.SkillNames() {
@@ -146,6 +186,9 @@ func (r Report) writeHosts(b *strings.Builder) {
 		fmt.Fprintf(b, "  %-12s %d/%d skills · %s", h.Name, h.SkillsPresent, total, h.Transport)
 		if h.TransportNote != "" {
 			fmt.Fprintf(b, ": %s", h.TransportNote)
+		}
+		if h.SkillsDrifted > 0 {
+			fmt.Fprintf(b, " · %d modified since install: run tsp sync --dry-run to list them", h.SkillsDrifted)
 		}
 		b.WriteString("\n")
 	}
