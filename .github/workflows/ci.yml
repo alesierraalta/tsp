@@ -38,6 +38,11 @@ jobs:
         run: make build
       - name: test
         run: go test ./... -count=1
+      # The testing gate does not read the plan for a commit range, so two branches cut from the same main that
+      # each record the next free id would merge into one plan holding that id twice. On a pull request this runs
+      # on the merge with main; on main it runs on what was merged.
+      - name: plan check
+        run: ./bin/tsp plan check --path docs/testing/test-plan.md
       # The measure-change skill's shell runner is unreachable from go test. It skips on a branch
       # that does not carry the skill, so this step never turns an unrelated branch red.
       - name: skill selftest
