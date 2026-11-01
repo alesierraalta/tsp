@@ -45,6 +45,21 @@ func TestInferPackageTestRunner(t *testing.T) {
 	}
 }
 
+// A Go repository can carry a JavaScript suite with no package.json (tsp's own Pi extension test is one). Node
+// runs .js, .mjs and .cjs test files as they are, so those are judged with node --test; a TypeScript test still
+// needs a package.json to say how it runs.
+func TestInferNodeTestsWithoutAPackageJSON(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "go.mod", "module example.com/x\n\ngo 1.21\n")
+	got, err := inferRedCheckSuite(dir, []string{"assets/hosts/pi/tsp.test.mjs", "web/a.test.js", "web/b.test.cjs"})
+	if want := "node --test assets/hosts/pi/tsp.test.mjs web/a.test.js web/b.test.cjs"; err != nil || got != want {
+		t.Fatalf("got %q %v, want %q", got, err, want)
+	}
+	if got, err := inferRedCheckSuite(dir, []string{"web/a.test.ts"}); err == nil {
+		t.Fatalf("a TypeScript test without a package.json = %q, want the pass --suite refusal", got)
+	}
+}
+
 // redCheckRepo is a git repository whose HEAD holds a Go module with one defect: Order returns "cab"
 // where its contract promises "abc". It also carries an existing table test the agent can extend.
 func redCheckRepo(t *testing.T) string {

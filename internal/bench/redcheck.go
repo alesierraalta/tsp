@@ -312,6 +312,17 @@ func parentTest(name string) string {
 	return name[:start+j]
 }
 
+func allPlainJavaScript(files []string) bool {
+	for _, f := range files {
+		switch path.Ext(f) {
+		case ".js", ".mjs", ".cjs":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // inferRedCheckSuite picks the command that runs the changed tests: their Go packages, the Python files under
 // pytest, or the Node files.
 func inferRedCheckSuite(root string, files []string) (string, error) {
@@ -363,6 +374,11 @@ func inferRedCheckSuite(root string, files []string) (string, error) {
 				}
 			}
 		}
+		return "node --test " + strings.Join(files, " "), nil
+	}
+	// Node runs plain JavaScript test files as they are, so a repository without a package.json (a Go project
+	// carrying a small JS suite) is still judged; TypeScript needs a package.json to say how it runs.
+	if len(files) > 0 && allPlainJavaScript(files) {
 		return "node --test " + strings.Join(files, " "), nil
 	}
 	return "", errors.New("cannot infer how to run the changed tests: pass --suite")
