@@ -222,9 +222,10 @@ function offerHarness(opts = {}) {
   } };
   const run = async (prompt, edits, { aborted = false } = {}) => {
     await handlers.before_agent_start?.({ type: "before_agent_start", messageType: "user", prompt }, ctx);
-    for (const [toolName, path, isError = false] of edits) {
+    for (const [toolName, path, isError = false, output = ""] of edits) {
       const input = toolName === "bash" ? { command: path } : { path };
-      await handlers.tool_result({ type: "tool_result", toolName, input, isError, content: [] }, ctx);
+      const content = output === "" ? [] : [{ type: "text", text: output }];
+      await handlers.tool_result({ type: "tool_result", toolName, input, isError, content }, ctx);
     }
     await handlers.agent_settled({ type: "agent_settled", aborted }, ctx);
   };
@@ -802,4 +803,25 @@ test("a reply that is not a verdict, without the flag parser's words, stays sile
   await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
   assert.deepEqual(h.notes, [], "an unreadable reply is no criterion, so it says nothing");
   assert.deepEqual(h.asked, []);
+});
+
+test("a TSP run whose agent already submitted its feedback is not asked for it again", async () => {
+  const fix = { stdout: JSON.stringify({ next: "fix", review: "review 1", reason: "round 1 of 5 left 1 item unsettled", message: "F1 open a_test.go TestA" }), stderr: "", code: 1 };
+  const findings = { next: fix, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } };
+  const done = offerHarness({ findings });
+  await done.run("haz el TSP", [["bash", "./bin/tsp feedback --file /tmp/tsp-fb.txt", false, "recorded paid feedback for /repo\n"]]);
+  assert.ok(!done.calls.some((c) => c.argv[0] === "feedback"), "no template is fetched for a run that already recorded one");
+  assert.deepEqual(done.sent, ["The TSP loop found defects to settle.\n\nF1 open a_test.go TestA"]);
+  const failed = offerHarness({ findings });
+  await failed.run("haz el TSP", [["bash", "tsp feedback --file /tmp/tsp-fb.txt", true]]);
+  assert.equal(failed.sent.length, 1);
+  assert.ok(failed.sent[0].startsWith(FEEDBACK_LEAD), "a submission that failed recorded nothing, so the request still goes out");
+});
+
+test("a feedback submission whose failure a pipe hid is not taken as recorded", async () => {
+  const fix = { stdout: JSON.stringify({ next: "fix", review: "review 1", reason: "round 1 of 5 left 1 item unsettled", message: "F1 open a_test.go TestA" }), stderr: "", code: 1 };
+  const h = offerHarness({ findings: { next: fix, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+  await h.run("haz el TSP", [["bash", "tsp feedback --file /tmp/tsp-fb.txt 2>&1 | tail -1", false, "feedback: verdict is empty\n"]]);
+  assert.equal(h.sent.length, 1);
+  assert.ok(h.sent[0].startsWith(FEEDBACK_LEAD), "tail exited 0 but tsp recorded nothing, so the request still goes out");
 });
