@@ -4,8 +4,8 @@ description: "Trigger: haz el TSP, haz TSP, TSP, haz test stragety, haz test str
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.7.15"
-  requires_tsp: "0.7.5"
+  version: "0.7.16"
+  requires_tsp: "0.7.6"
   requires_tpp: "0.5.1"
   scope: [common]
   auto_invoke: "Any request to test something: find the defects the green suite misses and pin each one with a failing test"
