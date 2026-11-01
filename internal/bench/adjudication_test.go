@@ -251,3 +251,19 @@ func TestDecideValidatesTheRecordItWrites(t *testing.T) {
 		t.Fatalf("refused decision was recorded anyway: %+v", record.Decisions)
 	}
 }
+
+// Dropping a cache suffix must not let a record decide another case: the name left over is still compared.
+func TestApplyAdjudicationRefusesAnotherCaseBehindACacheSuffix(t *testing.T) {
+	planText := plan("| F1 | src/render.js:12 escape double quote | M | yes | | open | me | - | - |\n", "")
+	fingerprint, err := FindingRowFingerprint(planText, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &Adjudication{Case: "other-0123456789ab", Run: 1, Decisions: []Decision{{
+		Row: 1, RowFingerprint: fingerprint, Verdict: VerdictFalsePositive, By: "reviewer", TS: "2025-01-01T00:00:00Z", Reason: "not a defect",
+	}}}
+	_, err = ApplyAdjudication(planText, renderKey, Result{}, record)
+	if err == nil || !strings.Contains(err.Error(), "does not match key id") {
+		t.Fatalf("error = %v, want the case mismatch refusal", err)
+	}
+}

@@ -31,6 +31,17 @@ type Source struct {
 
 var fullCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+// cacheSuffixLen is how many hex characters of the source digest MaterializeCase appends to a case name.
+const cacheSuffixLen = 12
+
+var cacheSuffix = regexp.MustCompile(fmt.Sprintf(`-[0-9a-f]{%d}$`, cacheSuffixLen))
+
+// CaseID returns the case a result name belongs to. A case shipped by reference runs from its cache copy, so
+// its results are named <id>-<digest>; any other name is already the case id.
+func CaseID(name string) string {
+	return cacheSuffix.ReplaceAllString(name, "")
+}
+
 // DefaultCaseCache is where materialized cases and fetched sources live between runs.
 func DefaultCaseCache() string {
 	if dir, err := os.UserCacheDir(); err == nil {
@@ -66,7 +77,7 @@ func MaterializeCase(caseDir, cache string) (string, error) {
 		return "", err
 	}
 	sum := sha256.Sum256(append(append([]byte("source-layout-v2\x00"), append(raw, 0)...), patch...))
-	dir := filepath.Join(cache, filepath.Base(caseDir)+"-"+hex.EncodeToString(sum[:])[:12])
+	dir := filepath.Join(cache, filepath.Base(caseDir)+"-"+hex.EncodeToString(sum[:])[:cacheSuffixLen])
 	if _, err := os.Stat(filepath.Join(dir, FixDir, "all")); err != nil {
 		if err := buildSourceCase(src, patch, cache, dir); err != nil {
 			return "", fmt.Errorf("%s: %w", filepath.Base(caseDir), err)
