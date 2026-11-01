@@ -986,8 +986,11 @@ by one, check fails instead of guessing.
 touched owe a test? Pass one `--paths` per path (`tsp check --paths a.go --paths b.go`); the value
 is never split on commas, and a name that is neither a file nor a changed path is refused (exit 2)
 naming the path, so a legacy comma-joined list fails loudly instead of answering "nothing to
-check". It reads the tree instead of running the suite, so a test file changed beside the
-source settles the debt, and a path that is not production source — a report, a document, a note —
+check". It reads the tree instead of running the suite: a source change with no test owes one, and a
+test file changed beside the source settles that test but not the TSP run itself, because the agent
+that wrote the code wrote that test too. Until a TSP round is on record for the branch (`tsp findings
+record` books one, even a round that pins nothing), a tested change still owes "no TSP run is on record
+for this branch", so a host asks once per branch rather than never. A path that is not production source — a report, a document, a note —
 owes nothing. A plan's remaining targets stay out of that answer: how much of a run's agenda is still
 open is progress, not this change's debt.
 

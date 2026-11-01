@@ -445,3 +445,27 @@ func TestD12AZeroWitnessRunKeepsTheBaselineExit(t *testing.T) {
 		t.Fatalf("a run with no witness wrote a registry entry: exit=%d: %q", code, out)
 	}
 }
+
+// HasRound is what tsp check reads to tell a tested change from a reviewed one: a branch with no record has no
+// round, a recorded round counts even when it pinned nothing, and another branch's round is not this one's.
+func TestHasRoundReadsTheBranchRecord(t *testing.T) {
+	d := repo(t)
+	if ran, e := findings.HasRound(d); e != nil || ran {
+		t.Fatalf("no record yet: ran=%v e=%v", ran, e)
+	}
+	put(t, d, "value_test.go", "package sample\nimport \"testing\"\nfunc TestNothing(t *testing.T) {}\n")
+	if out, code := recordSuite(t, d, ""); code != 1 {
+		t.Fatalf("a round that pins nothing exits 1: %d %s", code, out)
+	}
+	if ran, e := findings.HasRound(d); e != nil || !ran {
+		t.Fatalf("after a round: ran=%v e=%v", ran, e)
+	}
+	command(t, d, "git", "switch", "-c", "other/branch")
+	if ran, e := findings.HasRound(d); e != nil || ran {
+		t.Fatalf("another branch: ran=%v e=%v", ran, e)
+	}
+	command(t, d, "git", "switch", "--detach")
+	if _, e := findings.HasRound(d); e == nil {
+		t.Fatal("a detached HEAD has no branch record to read")
+	}
+}

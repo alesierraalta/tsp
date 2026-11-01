@@ -57,6 +57,10 @@ type Deps struct {
 	// is testable without a host; Run defaults it to mode.VerifiedGentleSignal, which is the only
 	// signal it accepts.
 	Gentle func() bool
+	// TSPRun reports whether a TSP run is on record for the branch at root. A test changed with the source
+	// was written by the same agent as the source, so it never stands for that run: with this set, a tested
+	// change still owes one run per branch. Nil, or a record that cannot be read, keeps the tree's answer.
+	TSPRun func(root string) (bool, error)
 }
 
 // WaiverName is the file a no-test-needed waiver is recorded in, at the repository root.
@@ -382,6 +386,9 @@ func splitNUL(out string) []string {
 // model as an instruction and the human as the reason nothing was verified.
 const noWitnessDebt = "no test was added or changed with it: run the testing discipline (\"haz el TSP\"), record tsp check --no-test-needed \"<reason>\" when this change warrants no test, or add " + optOutName + " when this repository does not warrant it"
 
+// noRunDebt is what a tested change owes while no TSP run is on record for its branch.
+const noRunDebt = "no TSP run is on record for this branch: run the testing discipline (\"haz el TSP\"), record tsp check --no-test-needed \"<reason>\" when this change warrants no run, or add " + optOutName + " when this repository does not warrant it"
+
 // scopedVerdict answers for the named paths only: what they owe a test. It reads the tree, so a test
 // file changed with the source settles the debt without re-running anything, and the plan is never
 // consulted: how much of a run's agenda is still open is progress, not this change's debt. A caller
@@ -455,6 +462,11 @@ func scopedVerdict(cwd, root string, changed, all, deleted []string, d Deps) Res
 		return Result{Exit: 1, Files: in, Text: line + "\n" + noWitnessDebt}
 	}
 	sort.Strings(tests)
+	if d.TSPRun != nil {
+		if ran, err := d.TSPRun(root); err == nil && !ran {
+			return Result{Exit: 1, Files: in, Text: line + "\n" + "a test came with it (" + capNames(tests) + "), but " + noRunDebt}
+		}
+	}
 	return Result{Files: in, Text: line + "\n" + "a test was added or changed with it: " + capNames(tests)}
 }
 
