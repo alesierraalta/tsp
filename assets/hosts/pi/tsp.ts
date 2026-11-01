@@ -170,7 +170,8 @@ export async function runTppCommand(rawArgs: string, deps: TppDeps): Promise<voi
 // When a TSP run ends, the tests it left failing are recorded as findings and `tsp findings next` decides the loop:
 // fix sends the agent what to settle, tsp sends the next round, done and stop end it; the user sees the review and
 // the answer every time. After a fix run only `next` is asked. The agent is also asked to record its feedback on the
-// template `tsp feedback --template` prints, so each run leaves a report later runs can be tuned on; the loop's
+// template `tsp feedback --template` prints, so each run leaves a report later runs can be tuned on, unless the run
+// already recorded one (a `tsp feedback --file` whose output says it was recorded), which would count it twice; the loop's
 // message waits until that feedback run ends, and an aborted turn or the user's own message drops it. The feedback
 // request is a run of its own: it reviews no findings, asks no TSP question and requests no more feedback.
 // A delegated child session (GENTLE_PI_AGENTS_CHILD=1) has nobody to answer, so it gets none of them.
@@ -222,6 +223,19 @@ function loadsTspSkill(toolName: string, input: unknown, cwd: string): boolean {
   if (toolName === "read") return typeof path === "string" && isLoadedSkill(path, cwd);
   if (toolName !== "bash" || typeof command !== "string" || !FILE_READER.test(command)) return false;
   return command.split(/\s+/).map((t) => t.replace(/^['"]|['"]$/g, "")).some((t) => isLoadedSkill(t, cwd));
+}
+
+// A shell command that submits a feedback report: `tsp feedback --file <path>`, through any path to the binary.
+const FEEDBACK_SUBMIT = /(?:^|[\s/;&|(])tsp\s+feedback\b[^;&|\n]*\s--file(?:[\s=]|$)/;
+// What `tsp feedback --file` prints once the report is stored. A pipe can hide tsp's exit status, so the command
+// counts only when its output carries this line.
+const FEEDBACK_RECORDED = /^recorded (?:paid|partly|ceremony|blocked) feedback for /m;
+
+function submitsFeedback(toolName: string, input: unknown, content: unknown): boolean {
+  const { command } = (input ?? {}) as { command?: unknown };
+  if (toolName !== "bash" || typeof command !== "string" || !FEEDBACK_SUBMIT.test(command)) return false;
+  const text = Array.isArray(content) ? content.map((c) => (c && typeof c.text === "string" ? c.text : "")).join("\n") : "";
+  return FEEDBACK_RECORDED.test(text);
 }
 
 /**
@@ -423,6 +437,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   let staleNotified = false; // a tsp too old to answer is reported once, not once per turn
   let errorNotified = false; // a policy that could not be read is reported once, without becoming debt
   let tspRun = false;
+  let feedbackGiven = false; // the agent already submitted this run's feedback itself, so asking again counts it twice
   let feedbackRun = false;
   let fixRun = false;
   let pending = "";
@@ -438,7 +453,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     turnHead = head(ctx.cwd);
     const user = event.messageType === "user";
     const mine = user && own !== undefined && (event.prompt ?? "").trim() === own.prompt.trim() ? own.kind : undefined;
-    if (user) own = undefined;
+    if (user) { own = undefined; feedbackGiven = false; }
     feedbackRun = mine === "feedback";
     if (user && !feedbackRun) pending = "";
     fixRun = mine === "fix";
@@ -446,6 +461,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   });
   pi.on("tool_result", (event, ctx) => {
     if (!feedbackRun && !fixRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) tspRun = true;
+    if (!event.isError && submitsFeedback(event.toolName, event.input, event.content)) feedbackGiven = true;
     const path = (event.input as { path?: unknown }).path;
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string" && isSourcePath(path)) edited.add(path);
   });
@@ -470,7 +486,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
         return;
       }
       lastFix = step.fix;
-      const request = tspRun ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
+      const request = tspRun && !feedbackGiven ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
       if (request !== "") { pending = step.message; send(request, "feedback"); }
       else if (step.message !== "") send(step.message, loopKind(step.message));
       return;
