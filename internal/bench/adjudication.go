@@ -230,7 +230,7 @@ func ApplyAdjudication(plan string, key Key, r Result, adj *Adjudication) (Resul
 	if err := adj.Validate(); err != nil {
 		return r, err
 	}
-	if CaseID(adj.Case) != key.ID {
+	if adj.Case != key.ID && CaseID(adj.Case) != key.ID {
 		return r, fmt.Errorf("adjudication case %q does not match key id %q", adj.Case, key.ID)
 	}
 	if err := validateDecisionFingerprints(plan, adj.Decisions); err != nil {

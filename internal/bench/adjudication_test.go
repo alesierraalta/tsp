@@ -267,3 +267,25 @@ func TestApplyAdjudicationRefusesAnotherCaseBehindACacheSuffix(t *testing.T) {
 		t.Fatalf("error = %v, want the case mismatch refusal", err)
 	}
 }
+
+// A vendored case keeps its own name, and that name may end in what looks like a cache suffix: its
+// record names it exactly and must still decide it.
+func TestApplyAdjudicationAcceptsAVendoredCaseWhoseNameLooksLikeACacheSuffix(t *testing.T) {
+	key := renderKey
+	key.ID = "audit-decaf0000000"
+	planText := plan("| F1 | src/render.js:12 escape double quote | M | yes | | open | me | - | - |\n", "")
+	fingerprint, err := FindingRowFingerprint(planText, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &Adjudication{Case: key.ID, Run: 1, Decisions: []Decision{{
+		Row: 1, RowFingerprint: fingerprint, Verdict: VerdictFalsePositive, By: "reviewer", TS: "2025-01-01T00:00:00Z", Reason: "not a defect",
+	}}}
+	got, err := ApplyAdjudication(planText, key, scoreMechanical(planText, key), record)
+	if err != nil {
+		t.Fatalf("ApplyAdjudication: %v", err)
+	}
+	if got.FalsePositives != 1 {
+		t.Fatalf("false positives = %d, want the recorded 1", got.FalsePositives)
+	}
+}

@@ -36,8 +36,9 @@ const cacheSuffixLen = 12
 
 var cacheSuffix = regexp.MustCompile(fmt.Sprintf(`-[0-9a-f]{%d}$`, cacheSuffixLen))
 
-// CaseID returns the case a result name belongs to. A case shipped by reference runs from its cache copy, so
-// its results are named <id>-<digest>; any other name is already the case id.
+// CaseID returns the name with the cache suffix MaterializeCase appends removed. A case shipped by reference
+// runs from its cache copy, so its results are named <id>-<digest>. A vendored case may end in something that
+// looks like a suffix, so a caller tries the exact name first and this one only when that does not match.
 func CaseID(name string) string {
 	return cacheSuffix.ReplaceAllString(name, "")
 }

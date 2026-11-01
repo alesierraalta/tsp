@@ -3331,10 +3331,20 @@ func TestCheckRefusesANoTestNeededWaiverWithoutAReason(t *testing.T) {
 // case under bench/cases/<id> and records one history row.
 func TestBenchRescoreFindsASourceCaseByItsID(t *testing.T) {
 	bin := buildCLI(t)
+	for _, tc := range []struct{ caseID, resultName string }{
+		{"fake", "fake-0123456789ab"},
+		// A vendored case keeps its name even when it ends in what looks like a cache suffix.
+		{"audit-decaf0000000", "audit-decaf0000000"},
+	} {
+		t.Run(tc.resultName, func(t *testing.T) { rescoreOneCase(t, bin, tc.caseID, tc.resultName) })
+	}
+}
+
+func rescoreOneCase(t *testing.T, bin, caseID, resultName string) {
 	benchDir := t.TempDir()
-	caseDir := filepath.Join(benchDir, "cases", "fake")
+	caseDir := filepath.Join(benchDir, "cases", caseID)
 	for p, c := range map[string]string{
-		"KEY.json":             `{"id":"fake","language":"node","suite":"sh run-tests.sh","defects":[{"id":"D1","file":"src.txt","line":1,"keywords":["unused"]}]}`,
+		"KEY.json":             `{"id":"` + caseID + `","language":"node","suite":"sh run-tests.sh","defects":[{"id":"D1","file":"src.txt","line":1,"keywords":["unused"]}]}`,
 		"fixture/src.txt":      "D1=bug\n",
 		"fixture/run-tests.sh": "exit 0\n",
 		"fix/all/src.txt":      "D1=ok\n",
@@ -3349,14 +3359,14 @@ func TestBenchRescoreFindsASourceCaseByItsID(t *testing.T) {
 		}
 	}
 	results := t.TempDir()
-	runDir := filepath.Join(results, "fake-0123456789ab", "1")
+	runDir := filepath.Join(results, resultName, "1")
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(runDir, "test-plan.md"), []byte("# Test plan\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	agg, err := json.Marshal(bench.Aggregate{TS: "t0", Model: "m", Runs: 1, Cases: []bench.Result{{Case: "fake-0123456789ab", Run: 1, Total: 1}}})
+	agg, err := json.Marshal(bench.Aggregate{TS: "t0", Model: "m", Runs: 1, Cases: []bench.Result{{Case: resultName, Run: 1, Total: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
