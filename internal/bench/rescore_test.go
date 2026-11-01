@@ -330,3 +330,47 @@ func TestRescoreRefusesARecordFromAnotherRun(t *testing.T) {
 		t.Fatalf("error = %v, want a refusal naming both run numbers", err)
 	}
 }
+
+// A case shipped by reference runs from its cache copy, named <id>-<hash>, so its result directory
+// and the record written beside it carry that name. The record still decides that case.
+func TestRescoreAppliesTheAdjudicationOfASourceCase(t *testing.T) {
+	caseDir, key := shellCase(t)
+	key.Language = "node"
+	key.Defects[0].Keywords = []string{"unused"}
+	key.Defects[1].Keywords = []string{"unused"}
+	if err := writeJSON(filepath.Join(caseDir, KeyFile), key); err != nil {
+		t.Fatal(err)
+	}
+	cached := key.ID + "-0123456789ab"
+	results := t.TempDir()
+	runDir := filepath.Join(results, cached, "1")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planText := plan("| F1 | src/elsewhere.txt:9 a claim about nothing in the key | M | yes | | open | me | - | - |\n", "")
+	if err := os.WriteFile(filepath.Join(runDir, "test-plan.md"), []byte(planText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := FindingRowFingerprint(planText, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := Adjudication{Case: cached, Run: 1, Decisions: []Decision{{
+		Row: 1, RowFingerprint: fingerprint, Verdict: VerdictFalsePositive, By: "reviewer", TS: "2025-01-01T00:00:00Z", Reason: "not a defect",
+	}}}
+	if err := writeJSON(filepath.Join(runDir, AdjudicationFile), record); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(results, "aggregate.json"), Aggregate{TS: "t0", Model: "m", Runs: 1,
+		Cases: []Result{{Case: cached, Run: 1, Total: len(key.Defects), FindingRows: 1, PendingAdjudication: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Rescore(results, func(name string) (string, error) { return caseDir, nil }, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FalsePositives != 1 || got.PendingAdjudication != 0 || !got.AdjudicationComplete {
+		t.Fatalf("rescored aggregate = %+v, want the recorded false positive and nothing pending", got)
+	}
+}

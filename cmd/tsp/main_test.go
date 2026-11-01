@@ -3326,3 +3326,63 @@ func TestCheckRefusesANoTestNeededWaiverWithoutAReason(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q", code, out)
 	}
 }
+
+// A run of a case shipped by reference names it <id>-<hash>, after its cache copy; rescore still finds the
+// case under bench/cases/<id> and records one history row.
+func TestBenchRescoreFindsASourceCaseByItsID(t *testing.T) {
+	bin := buildCLI(t)
+	for _, tc := range []struct{ caseID, resultName string }{
+		{"fake", "fake-0123456789ab"},
+		// A vendored case keeps its name even when it ends in what looks like a cache suffix.
+		{"audit-decaf0000000", "audit-decaf0000000"},
+	} {
+		t.Run(tc.resultName, func(t *testing.T) { rescoreOneCase(t, bin, tc.caseID, tc.resultName) })
+	}
+}
+
+func rescoreOneCase(t *testing.T, bin, caseID, resultName string) {
+	benchDir := t.TempDir()
+	caseDir := filepath.Join(benchDir, "cases", caseID)
+	for p, c := range map[string]string{
+		"KEY.json":             `{"id":"` + caseID + `","language":"node","suite":"sh run-tests.sh","defects":[{"id":"D1","file":"src.txt","line":1,"keywords":["unused"]}]}`,
+		"fixture/src.txt":      "D1=bug\n",
+		"fixture/run-tests.sh": "exit 0\n",
+		"fix/all/src.txt":      "D1=ok\n",
+		"fix/keep-D1/src.txt":  "D1=bug\n",
+	} {
+		full := filepath.Join(caseDir, p)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	results := t.TempDir()
+	runDir := filepath.Join(results, resultName, "1")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "test-plan.md"), []byte("# Test plan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agg, err := json.Marshal(bench.Aggregate{TS: "t0", Model: "m", Runs: 1, Cases: []bench.Result{{Case: resultName, Run: 1, Total: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(results, "aggregate.json"), agg, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runCLI(t, bin, "bench", "rescore", "-bench-dir", benchDir, results)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0:\n%s", code, out)
+	}
+	history, err := os.ReadFile(filepath.Join(benchDir, "history.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Count(string(history), "\n"); lines != 1 || !strings.Contains(string(history), `"kind":"rescore"`) {
+		t.Fatalf("history = %q, want one rescore row", history)
+	}
+}

@@ -2514,6 +2514,9 @@ func runBenchRescore(args []string) int {
 	lookup := func(name string) (string, error) {
 		dir := filepath.Join(*benchDir, "cases", name)
 		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+			dir = filepath.Join(*benchDir, "cases", bench.CaseID(name))
+		}
+		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 			return "", fmt.Errorf("no case directory %s", dir)
 		}
 		return bench.MaterializeCase(dir, bench.DefaultCaseCache())
