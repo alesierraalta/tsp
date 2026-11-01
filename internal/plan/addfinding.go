@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -50,10 +51,17 @@ type Finding struct {
 // has to reach the same lock and the same bytes. Writing through the spelling instead replaced the link with a
 // regular file and left the real plan untouched.
 func AddFinding(path string, f Finding) (int, error) {
+	line, _, err := AddFindingID(path, f)
+	return line, err
+}
+
+// AddFindingID is AddFinding that also returns the row's id: the one given, or, when f.ID is empty, the next free
+// F number, taken under the same lock that refuses a duplicate so two writers cannot take the same one.
+func AddFindingID(path string, f Finding) (int, string, error) {
 	target := canonicalPath(path)
 	lock, err := LockPlanWithin(target, lockWait)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	defer UnlockPlan(lock)
 	return addFinding(target, f)
@@ -77,31 +85,35 @@ func canonicalPath(path string) string {
 // addFinding is the transaction AddFinding holds the plan's lock across. The read, the candidate and the write
 // are one critical section: a candidate built from a document another writer has already replaced is a row that
 // never lands, whatever the checker later says about the file.
-func addFinding(path string, f Finding) (int, error) {
+func addFinding(path string, f Finding) (int, string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	lines := strings.Split(string(raw), "\n")
 
 	table, err := findingsTable(lines)
 	if err != nil {
-		return 0, err
+		return 0, "", err
+	}
+	if strings.TrimSpace(f.ID) == "" {
+		f.ID = nextID(table, "F")
 	}
 	row, err := rowFor(f, table.header)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if err := refuseDuplicate(table, f.ID); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if !pathCiteRe.MatchString(f.Location) {
-		return 0, usagef("--location %s is not path:line, so nothing can be located", quote(f.Location))
+		return 0, "", usagef("--location %s is not path:line, so nothing can be located", quote(f.Location))
 	}
 	if err := checkEvidence(lines, f.Evidence); err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	return insertRow(path, lines, table, row)
+	line, err := insertRow(path, lines, table, row)
+	return line, f.ID, err
 }
 
 // findingsTable locates the table a finding row lands in, and refuses the three shapes that leave it nowhere to
@@ -144,6 +156,22 @@ func rowFor(f Finding, header []string) (string, error) {
 		return "", usagef("--fingerprint %s is not %s", quote(f.Fingerprint), FindingFingerprintForms)
 	}
 	return f.row(header, status)
+}
+
+// nextID is the id after the highest <prefix><n> already in the table. Ids in any other shape are left alone,
+// and an empty table starts at 1.
+func nextID(table tableScan, prefix string) string {
+	highest := 0
+	for _, r := range table.rows {
+		id := strings.TrimSpace(cell(r.cells, 0))
+		if len(id) <= len(prefix) || !strings.EqualFold(id[:len(prefix)], prefix) {
+			continue
+		}
+		if n, err := strconv.Atoi(id[len(prefix):]); err == nil && n > highest {
+			highest = n
+		}
+	}
+	return prefix + strconv.Itoa(highest+1)
 }
 
 // refuseDuplicate keeps the writer what the checker assumes: an id names one row, so a row already carrying the

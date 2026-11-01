@@ -28,53 +28,63 @@ type Evidence struct {
 // It is add-finding's counterpart for the ledger: the same lock, the same checker held to the candidate before a
 // byte moves, and a refusal that leaves the file byte-identical.
 func AddEvidence(path string, e Evidence) (int, error) {
+	line, _, err := AddEvidenceID(path, e)
+	return line, err
+}
+
+// AddEvidenceID is AddEvidence that also returns the row's id: the one given, or, when e.ID is empty, the next free
+// E number, taken under the plan's lock.
+func AddEvidenceID(path string, e Evidence) (int, string, error) {
 	if err := e.checkValues(); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	target := canonicalPath(path)
 	lock, err := LockPlanWithin(target, lockWait)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	defer UnlockPlan(lock)
 	return addEvidence(target, e)
 }
 
-func addEvidence(path string, e Evidence) (int, error) {
+func addEvidence(path string, e Evidence) (int, string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	lines := strings.Split(string(raw), "\n")
 	heading, end := sectionRegion(lines, "Evidence ledger")
 	if heading < 0 {
-		return 0, fmt.Errorf("the plan has no ## Evidence ledger section, so there is nowhere to record the row")
+		return 0, "", fmt.Errorf("the plan has no ## Evidence ledger section, so there is nowhere to record the row")
 	}
 	table := scanTable(lines, heading+1, end)
 	if table.header == nil {
-		return 0, fmt.Errorf("the Evidence ledger section has no table, so the row has no columns to land in")
+		return 0, "", fmt.Errorf("the Evidence ledger section has no table, so the row has no columns to land in")
 	}
 	if _, message := interruptedTable("Evidence ledger", table); message != "" {
-		return 0, fmt.Errorf("%s; writing into a cut table is how rows get lost", message)
+		return 0, "", fmt.Errorf("%s; writing into a cut table is how rows get lost", message)
+	}
+	if strings.TrimSpace(e.ID) == "" {
+		e.ID = nextID(table, "E")
 	}
 	for _, r := range table.rows {
 		if strings.EqualFold(strings.TrimSpace(cell(r.cells, 0)), strings.TrimSpace(e.ID)) {
-			return 0, fmt.Errorf("evidence %s is already row %d: this command never overwrites an observation", quote(e.ID), r.line)
+			return 0, "", fmt.Errorf("evidence %s is already row %d: this command never overwrites an observation", quote(e.ID), r.line)
 		}
 	}
 	row, err := e.row(table.header)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	after := findingsEnd(table)
 	candidate := strings.Join(insertLine(lines, after, row), "\n")
 	if problems := CheckDocument(candidate); len(problems) > 0 {
-		return 0, fmt.Errorf("the row would not pass plan check: %s; the plan is unchanged", strings.Join(problems, "; "))
+		return 0, "", fmt.Errorf("the row would not pass plan check: %s; the plan is unchanged", strings.Join(problems, "; "))
 	}
 	if err := writePlan(path, candidate); err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	return after + 1, nil
+	return after + 1, e.ID, nil
 }
 
 // evidenceColumns maps each value to the ledger column it fills, by the same substring names Ledger reads them
@@ -104,12 +114,12 @@ func (e Evidence) checkValues() error {
 			return usagef("--%s carries a newline: a ledger row is one line", v.flag)
 		}
 	}
-	for _, v := range []struct{ flag, value string }{{"id", e.ID}, {"claim", e.Claim}, {"executed", e.Executed}, {"observed", e.Observed}, {"label", e.Label}} {
+	for _, v := range []struct{ flag, value string }{{"claim", e.Claim}, {"executed", e.Executed}, {"observed", e.Observed}, {"label", e.Label}} {
 		if strings.TrimSpace(v.value) == "" {
 			return usagef("--%s is empty and the row needs it", v.flag)
 		}
 	}
-	if placeholder.MatchString(strings.TrimSpace(e.ID)) {
+	if strings.TrimSpace(e.ID) != "" && placeholder.MatchString(strings.TrimSpace(e.ID)) {
 		return usagef("--id %s is a placeholder: the checker skips a row whose Id cell is one, so the row would never be read", quote(e.ID))
 	}
 	if strings.TrimSpace(e.Label) != observadoLabel {

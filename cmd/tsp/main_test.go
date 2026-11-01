@@ -1574,8 +1574,8 @@ func TestPlanAddFindingCLI(t *testing.T) {
 func TestPlanAddFindingUsageRefusalExits2(t *testing.T) {
 	bin := buildCLI(t)
 	path := filepath.Join(t.TempDir(), "not-created.md")
-	out, code := runCLI(t, bin, cliFindingArgs(path, "", "E1")...)
-	if code != 2 || !strings.Contains(out, "--id") {
+	out, code := runCLI(t, bin, cliFindingArgs(path, "F1", "")...)
+	if code != 2 || !strings.Contains(out, "--evidence") {
 		t.Fatalf("missing required value = %d %q", code, out)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -1760,7 +1760,7 @@ func TestPlanAddFindingExitCodes(t *testing.T) {
 		wantOut  string
 	}{
 		// Exit 2: the invocation's own data is wrong.
-		{name: "an empty required flag", plan: valid, over: map[string]string{"id": ""}, wantExit: 2, wantOut: "--id"},
+		{name: "an empty required flag", plan: valid, over: map[string]string{"location": ""}, wantExit: 2, wantOut: "--location"},
 		{name: "an empty severity", plan: valid, over: map[string]string{"severity": ""}, wantExit: 2, wantOut: "--severity"},
 		{name: "a status outside the vocabulary", plan: valid, over: map[string]string{"status": "resolved"}, wantExit: 2, wantOut: "open, confirmed, fixed, gap-closed, rejected, wontfix"},
 		{name: "an empty status", plan: valid, over: map[string]string{"status": ""}, wantExit: 2, wantOut: "--status"},
@@ -3384,5 +3384,37 @@ func rescoreOneCase(t *testing.T, bin, caseID, resultName string) {
 	}
 	if lines := strings.Count(string(history), "\n"); lines != 1 || !strings.Contains(string(history), `"kind":"rescore"`) {
 		t.Fatalf("history = %q, want one rescore row", history)
+	}
+}
+
+// An operator recording a row should not have to compute the next free id by hand: without --id, add-finding
+// and add-evidence take the number after the highest one already in their table and say which one they took.
+func TestPlanAddRowsAssignTheNextFreeID(t *testing.T) {
+	bin := buildCLI(t)
+	path := filepath.Join(t.TempDir(), "plan.md")
+	evidence := func(id string) []string {
+		return []string{"plan", "add-evidence", "--path", path, "--id", id, "--claim", "c", "--executed", "e", "--observed", "o"}
+	}
+	for _, args := range [][]string{{"plan", "init", "--path", path}, evidence("E7"), cliFindingArgs(path, "F3", "E7")} {
+		if out, code := runCLI(t, bin, args...); code != 0 {
+			t.Fatalf("%v = %d %q", args, code, out)
+		}
+	}
+	out, code := runCLI(t, bin, cliFindingArgs(path, "", "E7")...)
+	if code != 0 || !strings.Contains(out, "added F4 to") {
+		t.Fatalf("add-finding without --id = %d %q, want F4 taken", code, out)
+	}
+	out, code = runCLI(t, bin, evidence("")...)
+	if code != 0 || !strings.Contains(out, "added E8 to") {
+		t.Fatalf("add-evidence without --id = %d %q, want E8 taken", code, out)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []string{"| F4 | src/a.go:1 |", "| E8 | c |"} {
+		if !strings.Contains(string(raw), row) {
+			t.Fatalf("plan is missing %q:\n%s", row, raw)
+		}
 	}
 }
