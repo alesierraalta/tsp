@@ -1,6 +1,7 @@
 package check
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -131,5 +132,39 @@ func TestCheckScopedPathsRespectTheRepositoryOptOutAndTheWaiver(t *testing.T) {
 	res := Run(".", deps)
 	if res.Exit != 0 || !strings.Contains(res.Text, optOutName) {
 		t.Fatalf("exit = %d, want 0 naming the opt-out: %s", res.Exit, res.Text)
+	}
+}
+
+// A test written with the change is not a TSP run: the agent that wrote the code wrote that test too, so it
+// cannot stand for the pass that looks for what a green suite hides. When the caller can read whether a TSP
+// run is on record for the branch, a tested change with none still owes that run, once per branch; a run on
+// record settles it, and a caller that cannot read the record keeps the answer the tree alone gives.
+func TestCheckScopedTestedChangeOwesATSPRunOncePerBranch(t *testing.T) {
+	status := porcelain(" M src/app.js", " M tests/app.test.js")
+	cases := []struct {
+		name     string
+		ran      func(root string) (bool, error)
+		wantExit int
+		wantOut  string
+	}{
+		{"no run on record owes one", func(string) (bool, error) { return false, nil }, 1, "a test came with it (tests/app.test.js), but no TSP run is on record for this branch"},
+		{"a run on record settles it", func(string) (bool, error) { return true, nil }, 0, "a test was added or changed with it: tests/app.test.js"},
+		{"an unreadable record keeps the tree's answer", func(string) (bool, error) { return false, errors.New("detached HEAD") }, 0, "a test was added or changed with it: tests/app.test.js"},
+		{"no record reader keeps the tree's answer", nil, 0, "a test was added or changed with it: tests/app.test.js"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &fakeRepo{root: "/r", status: status, plan: owing}
+			deps := repo.deps()
+			deps.Paths = []string{"src/app.js"}
+			deps.TSPRun = tc.ran
+			res := Run(".", deps)
+			if res.Exit != tc.wantExit || !strings.Contains(res.Text, tc.wantOut) {
+				t.Fatalf("exit = %d, want %d; text missing %q:\n%s", res.Exit, tc.wantExit, tc.wantOut, res.Text)
+			}
+			if tc.wantExit == 1 && DebtLine(res.Text) == "" {
+				t.Fatalf("the debt must be the line a host shows:\n%s", res.Text)
+			}
+		})
 	}
 }

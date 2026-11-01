@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alesierraalta/tsp/internal/check"
+	"github.com/alesierraalta/tsp/internal/findings"
 )
 
 func gitIn(t *testing.T, dir string, args ...string) {
@@ -38,6 +40,7 @@ func committedUnit(t *testing.T, body map[string]string) string {
 
 type verdict struct {
 	Decision string `json:"decision"`
+	Debt     string `json:"debt"`
 	Reason   string `json:"reason"`
 	Exit     int    `json:"exit"`
 }
@@ -93,17 +96,33 @@ func TestCheckSinceRequiresTheRunInAGentleSession(t *testing.T) {
 	}
 }
 
-// A unit that brought its test owes nothing, and the decision says so.
+// The test a committed unit brought counts as its test: the unit owes no test, only the branch's one TSP run,
+// and once a round is on record for the branch the unit owes nothing and the decision says so.
 func TestCheckSinceIsSatisfiedByTheTestTheUnitBrought(t *testing.T) {
 	t.Setenv("TSP_GENTLE_OBSERVATION", "pi-session-gentle-active")
-	dir := committedUnit(t, map[string]string{
-		"a.go":      "package sample\n\nfunc F() int { return 1 }\n",
-		"a_test.go": "package sample\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {}\n",
-	})
+	t.Setenv("TSP_HOME", t.TempDir())
+	// The base already holds the module, so the round that is recorded below can run the unit's test against it.
+	dir := pathsRepo(t, "a.go")
+	writeIn(t, dir, "go.mod", "module sample\n\ngo 1.22\n")
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-qm", "module")
+	writeIn(t, dir, "a.go", "package sample\n\nfunc F() int { return 1 }\n")
+	writeIn(t, dir, "a_test.go", "package sample\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {}\n")
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-qm", "work unit")
 
 	code, out, errOut := runCheckCapturing(t, "--cwd", dir, "--since", "HEAD~1", "--paths", "a.go", "--json")
+	v := readVerdict(t, out)
+	if code != 1 || v.Decision != "required" || !strings.Contains(v.Debt, "a test came with it (a_test.go)") || !strings.Contains(v.Debt, "no TSP run is on record") {
+		t.Fatalf("before any round the unit owes the run, not a test: code=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+
+	if rec, rc := findings.Record(dir, "", "", time.Minute); rc == 2 {
+		t.Fatalf("record: %s", rec)
+	}
+	code, out, errOut = runCheckCapturing(t, "--cwd", dir, "--since", "HEAD~1", "--paths", "a.go", "--json")
 	if code != 0 {
-		t.Fatalf("a unit with its test owes nothing: code=%d stdout=%q stderr=%q", code, out, errOut)
+		t.Fatalf("a unit with its test and a round on record owes nothing: code=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 	if v := readVerdict(t, out); v.Decision != "none" {
 		t.Fatalf("nothing to gate: %+v", v)

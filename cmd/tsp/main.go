@@ -1099,7 +1099,7 @@ func runCheck(args []string) int {
 	// its name, and folding it into a joined value would name paths that do not exist — the check
 	// would then answer "nothing to check" while the change really owes a test.
 	var named []string
-	fs.Func("paths", "answer only for these paths, one --paths per path (never a comma-separated list), relative to --cwd: whether they owe a test, ignoring the plan's remaining targets", func(v string) error {
+	fs.Func("paths", "answer only for these paths, one --paths per path (never a comma-separated list), relative to --cwd: whether they owe a test, or a TSP run while none is on record for the branch, ignoring the plan's remaining targets", func(v string) error {
 		if p := strings.TrimSpace(v); p != "" {
 			named = append(named, p)
 		}
@@ -1142,7 +1142,7 @@ func runCheck(args []string) int {
 	if info, err := os.Stat(*cwd); err != nil || !info.IsDir() {
 		return refuseCheck(*asJSON, fmt.Sprintf("check: --cwd %s is not a directory: name an existing directory inside the repository", *cwd))
 	}
-	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named, Base: strings.TrimSpace(*base), Since: strings.TrimSpace(*since)})
+	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named, Base: strings.TrimSpace(*base), Since: strings.TrimSpace(*since), TSPRun: findings.HasRound})
 	if *asJSON {
 		return printCheckVerdict(res)
 	}

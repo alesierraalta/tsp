@@ -347,6 +347,17 @@ func RecordClass(dir, suite, since, class string, timeout time.Duration) (string
 	return diagnostics.String() + skipped.String() + out.String(), 0
 }
 
+// HasRound reports whether a TSP round is on record for the current branch: a round that pinned nothing counts,
+// and a loop whose commits are gone from the repository does not. A detached HEAD has no record to read.
+func HasRound(dir string) (bool, error) {
+	r, _, top, e := load(dir)
+	if e != nil {
+		return false, e
+	}
+	l, live := alive(top, r.Loop)
+	return live && l != nil && len(l.Rounds) > 0, nil
+}
+
 // SetVerdict records a human decision against the current test fingerprint.
 func SetVerdict(dir, id, decision, reason string) (string, int) {
 	r, path, top, err := load(dir)
