@@ -300,7 +300,12 @@ func Generalize(text string) string {
 	text = emailRe.ReplaceAllString(text, "an email address")
 	text = replaceSourcePaths(text)
 	text = replaceIPs(text)
-	text = hostRe.ReplaceAllString(text, "a host")
+	text = hostRe.ReplaceAllStringFunc(text, func(match string) string {
+		if isHost(match) {
+			return "a host"
+		}
+		return match
+	})
 	text = uuidRe.ReplaceAllString(text, "an identifier")
 	return lowercaseHexRe.ReplaceAllString(text, "an identifier")
 }
@@ -409,11 +414,36 @@ func Verify(text string) error {
 	if emailRe.MatchString(text) {
 		return errors.New("unsafe value: email address")
 	}
-	if hostRe.MatchString(text) {
+	if containsHost(text) {
 		return errors.New("unsafe value: host")
 	}
 	if uuidRe.MatchString(text) || lowercaseHexRe.MatchString(text) {
 		return errors.New("unsafe value: identifier")
 	}
 	return nil
+}
+
+// commonTopLevel are the last labels a capitalized host is most often written with; in any case they still
+// name a host.
+var commonTopLevel = map[string]bool{
+	"com": true, "net": true, "org": true, "io": true, "dev": true, "app": true, "co": true, "ai": true,
+	"info": true, "edu": true, "gov": true, "me": true, "us": true, "uk": true, "es": true, "de": true,
+	"fr": true, "local": true, "internal": true, "lan": true, "corp": true, "cloud": true,
+}
+
+// isHost tells a domain from a dotted code reference the host pattern also matches. A host's last label is
+// written all lowercase or all uppercase, or is a common top-level label in any case; any other mixed-case
+// last label (`Result.Case`, `fmt.Println`) names code.
+func isHost(match string) bool {
+	last := match[strings.LastIndex(match, ".")+1:]
+	return last == strings.ToLower(last) || last == strings.ToUpper(last) || commonTopLevel[strings.ToLower(last)]
+}
+
+func containsHost(text string) bool {
+	for _, match := range hostRe.FindAllString(text, -1) {
+		if isHost(match) {
+			return true
+		}
+	}
+	return false
 }
