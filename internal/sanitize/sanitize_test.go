@@ -472,3 +472,37 @@ func TestRememberWritesAPairOnce(t *testing.T) {
 		}
 	}
 }
+
+// A dotted code reference names a mechanism, not a machine: a host's last label is never written in
+// mixed case, so `Result.Case` survives while a real domain in any common spelling is still generalized.
+func TestGeneralizeKeepsCodeReferencesAndStillHidesHosts(t *testing.T) {
+	got := Generalize("compare Result.Case after fmt.Println on api.example.com, Example.com and API.EXAMPLE.COM")
+	for _, kept := range []string{"Result.Case", "fmt.Println"} {
+		if !strings.Contains(got, kept) {
+			t.Errorf("Generalize dropped the code reference %q: %q", kept, got)
+		}
+	}
+	for _, hidden := range []string{"api.example.com", "Example.com", "API.EXAMPLE.COM"} {
+		if strings.Contains(got, hidden) {
+			t.Errorf("Generalize kept the host %q: %q", hidden, got)
+		}
+	}
+	if err := Verify("compare Result.Case after fmt.Println"); err != nil {
+		t.Errorf("Verify refused code references: %v", err)
+	}
+	if err := Verify("call Example.com"); err == nil {
+		t.Error("Verify accepted a host")
+	}
+}
+
+// Capitalizing a domain does not make it code: a common top-level label in any case is still a host.
+func TestGeneralizeHidesACapitalizedHost(t *testing.T) {
+	for _, host := range []string{"Example.Com", "Api.Example.Io", "printer.Local"} {
+		if got := Generalize("reached " + host); got != "reached a host" {
+			t.Errorf("Generalize(%q) = %q, want the host hidden", host, got)
+		}
+		if err := Verify("reached " + host); err == nil {
+			t.Errorf("Verify accepted the host %q", host)
+		}
+	}
+}
