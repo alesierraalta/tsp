@@ -1484,7 +1484,7 @@ func runPlan(args []string) int {
 	all := fs.Bool("all", false, "count every row (gaps only)")
 	force := fs.Bool("force", false, "replace an existing plan (init only)")
 	micro := fs.Bool("micro", false, "write the micro plan skeleton for one small function (init only)")
-	id := fs.String("id", "", "Findings row id (add-finding)")
+	id := fs.String("id", "", "row id for add-finding and add-evidence; omitted, the next free F or E number is taken")
 	location := fs.String("location", "", "the `path:line` the finding cites (add-finding)")
 	severity := fs.String("severity", "", "consequence class (add-finding)")
 	dataSafe := fs.String("data-safe", "", "whether data is safe (add-finding)")
@@ -1648,7 +1648,7 @@ func runPlan(args []string) int {
 		// on the status and is answered by the plan package, which also knows whether the table carries
 		// the column at all.
 		for _, req := range []struct{ flag, value string }{
-			{"id", *id}, {"location", *location}, {"severity", *severity}, {"data-safe", *dataSafe},
+			{"location", *location}, {"severity", *severity}, {"data-safe", *dataSafe},
 			{"evidence", *evidence}, {"status", *status}, {"verdict-by", *verdictBy}, {"reason", *reason},
 		} {
 			if strings.TrimSpace(req.value) == "" {
@@ -1659,7 +1659,7 @@ func runPlan(args []string) int {
 		if refuseIgnoredPlanWrite(root, "add-finding", effectivePath) {
 			return 1
 		}
-		line, err := plan.AddFinding(effectivePath, plan.Finding{
+		line, rowID, err := plan.AddFindingID(effectivePath, plan.Finding{
 			ID: *id, Location: *location, Severity: *severity, DataSafe: *dataSafe,
 			Evidence: *evidence, Test: *test, Status: *status, VerdictBy: *verdictBy,
 			Reason: *reason, Fingerprint: *fingerprint,
@@ -1673,11 +1673,11 @@ func runPlan(args []string) int {
 			}
 			return 1
 		}
-		fmt.Printf("added %s to %s at line %d\n", *id, effectivePath, line)
+		fmt.Printf("added %s to %s at line %d\n", rowID, effectivePath, line)
 		return 0
 	case "add-evidence":
 		for _, req := range []struct{ flag, value string }{
-			{"id", *id}, {"claim", *claim}, {"executed", *executed}, {"observed", *observedText},
+			{"claim", *claim}, {"executed", *executed}, {"observed", *observedText},
 		} {
 			if strings.TrimSpace(req.value) == "" {
 				fmt.Fprintf(os.Stderr, "plan add-evidence: --%s is required\n", req.flag)
@@ -1696,7 +1696,7 @@ func runPlan(args []string) int {
 		if refuseIgnoredPlanWrite(root, "add-evidence", effectivePath) {
 			return 1
 		}
-		line, err := plan.AddEvidence(effectivePath, plan.Evidence{
+		line, rowID, err := plan.AddEvidenceID(effectivePath, plan.Evidence{
 			ID: *id, Claim: *claim, Executed: *executed, Admit: *admitCommand, Inputs: *inputs,
 			Observed: *observedText, Normalize: *normalize, Mutate: *mutate, Expect: *expect,
 			Control: *control, Reproduction: *reproduction, Label: *label,
@@ -1708,7 +1708,7 @@ func runPlan(args []string) int {
 			}
 			return 1
 		}
-		fmt.Printf("added %s to %s at line %d\n", *id, effectivePath, line)
+		fmt.Printf("added %s to %s at line %d\n", rowID, effectivePath, line)
 		return 0
 	default:
 		fmt.Fprint(os.Stderr, usage)
