@@ -14,6 +14,7 @@ import tppExtension, {
   GENTLE_OBSERVATION_VALUE,
   observesGentleSession,
   parseTppCommand,
+  statusFor,
   buildArgv,
   childEnv,
   runTppCommand,
@@ -200,7 +201,7 @@ const errorVerdict = (reason) => ({ stdout: JSON.stringify({ decision: "error", 
 function offerHarness(opts = {}) {
   const { hasUI = true, optedOut = false, env = {}, findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), probe, entries = [], feedback } = opts;
   const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
-  const asked = [], sent = [], calls = [], notes = [];
+  const asked = [], sent = [], calls = [], notes = [], statuses = [], widgets = [];
   // findings maps a findings subcommand to the child it answers with; a missing one answers exit 0, no output.
   // check is the pre-offer `tsp check --json` the offer derives its verdict from; the default names one run to plan.
   const exec = async (argv, o) => {
@@ -226,6 +227,8 @@ function offerHarness(opts = {}) {
   const ctx = { hasUI, cwd: "/repo", sessionManager: { getBranch: () => entries }, ui: {
     select: async (title, options) => { asked.push({ title, options }); return answer; },
     notify: (message, type) => notes.push({ message, type }),
+    setStatus: (_key, text) => statuses.push(text),
+    setWidget: (key, lines) => widgets.push({ key, lines }),
   } };
   const start = async (reason = "startup") => { await handlers.session_start?.({ type: "session_start", reason }, ctx); };
   const beforeSettle = async () => handlers.agent_before_settle?.({ type: "agent_before_settle", entries: [] }, ctx);
@@ -241,7 +244,7 @@ function offerHarness(opts = {}) {
     await handlers.agent_settled({ type: "agent_settled", aborted }, ctx);
     return proposal;
   };
-  return { asked, sent, calls, notes, entries, run, start, beforeSettle };
+  return { asked, sent, calls, notes, statuses, widgets, entries, run, start, beforeSettle };
 }
 
 // The check's argv: one object of output, the turn's own base commit, and one --paths per path.
@@ -1036,4 +1039,90 @@ test("a session with a UI never uses the headless continuation: the offer is unc
   const h = offerHarness({ check: requiredVerdict("no test was added or changed with it") });
   assert.equal(await h.run("change a", [["edit", "internal/a.go"]]), undefined, "the interactive path sends its own message instead");
   assert.deepEqual(h.sent, ["haz el TSP"]);
+});
+
+// The status line is the only place a user can see what the branch owes without asking: it names the debt, the
+// loop the branch is in, and clears when nothing is owed so a settled repository is not a permanent badge.
+test("the status line names the debt, follows the loop, and clears when nothing is owed", async () => {
+  assert.equal(statusFor(undefined, undefined), undefined);
+  assert.equal(statusFor("none", undefined), undefined);
+  assert.equal(statusFor("ask", undefined), "tsp: ask");
+  assert.equal(statusFor("required", undefined), "tsp: required");
+  assert.equal(statusFor("required", { next: "fix", round: 2, maxRounds: 3, open: 4 }), "tsp: fix · round 2/3 · 4 open");
+  assert.equal(statusFor(undefined, { next: "tsp", round: 0, maxRounds: 0, open: 1 }), "tsp: tsp · 1 open");
+  assert.equal(statusFor("required", { next: "done", round: 3, maxRounds: 3, open: 0 }), "tsp: required", "an ended loop leaves the debt standing");
+  const owed = offerHarness({ check: requiredVerdict("no test was added or changed with it") });
+  await owed.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(owed.statuses.at(-1), "tsp: required");
+  const quiet = offerHarness({ check: noneVerdict() });
+  await quiet.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(quiet.statuses.at(-1), undefined, "nothing owed clears the line");
+  const declined = offerHarness({ answer: "No" });
+  await declined.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(declined.statuses.at(-1), undefined, "an answered question is nothing owed");
+});
+
+test("a loop paints its round and open findings, survives a reload, and clears when it ends", async () => {
+  const fix = { next: "fix", round: 2, max_rounds: 3, items: [{ id: "F1" }, { id: "F2" }], message: "fix both", review: "review", lines: ["F1 at a.go", "F2 at b.go"] };
+  const h = offerHarness({ findings: { next: { stdout: JSON.stringify(fix), stderr: "", code: 1 } } });
+  await h.run("haz el TSP", []);
+  assert.equal(h.statuses.at(-1), "tsp: fix · round 2/3 · 2 open");
+  const reloaded = offerHarness({ entries: h.entries });
+  await reloaded.start("resume");
+  assert.equal(reloaded.statuses.at(-1), "tsp: fix · round 2/3 · 2 open", "a reload restores the loop the branch was in");
+  const done = { next: "done", round: 3, max_rounds: 3, items: [], message: "settled", review: "review", lines: [] };
+  const end = offerHarness({ entries: h.entries, findings: { next: { stdout: JSON.stringify(done), stderr: "", code: 0 } } });
+  await end.start("resume");
+  await end.run("haz el TSP", []);
+  assert.equal(end.statuses.at(-1), undefined, "a finished loop clears");
+});
+
+test("/tsp run starts the offer's own run, and a delegated child is told why it does not", async () => {
+  assert.deepEqual(parseTppCommand("run"), { kind: "run" });
+  assert.equal(parseTppCommand("run now").kind, "help");
+  const sent = [], commands = [];
+  tppExtension({
+    registerCommand: (name, options) => commands.push({ name, options }),
+    getAllTools: () => [], on: () => {},
+    sendUserMessage: (text) => sent.push(text),
+    appendEntry: () => {},
+  }, { env: {}, exec: async () => ({ stdout: "", stderr: "", code: 0 }) });
+  const ui = { notify: () => {}, setStatus: () => {}, setWidget: () => {} };
+  await commands[0].options.handler("run", { cwd: "/w", hasUI: true, ui });
+  assert.deepEqual(sent, ["haz el TSP"], "the same request the offer sends when it is accepted");
+  const { deps, rec } = harness();
+  const started = [];
+  await runTppCommand("run", { ...deps, startRun: () => started.push("run") });
+  assert.deepEqual(started, ["run"]);
+  assert.deepEqual(rec.exec, [], "no child process is spawned");
+  const child = harness();
+  child.deps.env = { GENTLE_PI_AGENTS_CHILD: "1" };
+  const childStarted = [];
+  await runTppCommand("run", { ...child.deps, startRun: () => childStarted.push("run") });
+  assert.deepEqual(childStarted, [], "a delegated subagent session starts nothing");
+  assert.match(child.rec.notify[0].message, /delegated subagent session/);
+});
+
+test("a report longer than the toast limit is shown in full through the panel", async () => {
+  const long = "line\n".repeat(400);
+  const shown = [];
+  const { deps, rec } = harness({ outcome: { stdout: long, stderr: "", code: 0 } });
+  await runTppCommand("check", { ...deps, show: (text) => shown.push(text) });
+  assert.deepEqual(shown, [long.trim()], "the panel gets the whole report");
+  assert.ok(rec.notify.at(-1).message.length <= 200, "the toast stays short and points at the panel");
+  const short = harness();
+  const none = [];
+  await runTppCommand("check", { ...short.deps, show: (text) => none.push(text) });
+  assert.deepEqual(none, [], "a short report stays in the toast");
+});
+
+test("a findings review longer than the toast limit is readable in full", async () => {
+  const lines = Array.from({ length: 40 }, (_, i) => `F${i + 1}: a finding with enough text to pass the toast limit ${"z".repeat(30)}`);
+  const done = { next: "done", round: 1, max_rounds: 3, items: [], message: "settled", review: "review", lines };
+  const h = offerHarness({ findings: { next: { stdout: JSON.stringify(done), stderr: "", code: 0 } } });
+  await h.run("haz el TSP", []);
+  assert.ok(h.widgets.length > 0, "the full review reaches the panel");
+  const shown = h.widgets.filter((w) => w.lines !== undefined).at(-1).lines.join("\n");
+  for (const line of lines) assert.ok(shown.includes(line), "every finding line is readable");
+  assert.ok(h.notes.at(-1).message.length < 300, "the toast is a pointer, not the report");
 });
