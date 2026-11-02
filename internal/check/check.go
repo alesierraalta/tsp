@@ -59,9 +59,13 @@ type Deps struct {
 	Gentle func() bool
 	// TSPRun reports whether a TSP run is on record for the branch at root. A test changed with the source
 	// was written by the same agent as the source, so it never stands for that run: with this set, a tested
-	// change still owes one run per branch. Nil, or a record that cannot be read, keeps the tree's answer.
+	// change still owes one run per branch. Nil, or a branch no record can exist for, keeps the tree's answer.
 	TSPRun func(root string) (bool, error)
 }
+
+// ErrNoRecord says no findings record can exist for the branch: a detached HEAD has no branch to key it by, so the
+// tree's own answer stands. Any other reader error is a record that is there and cannot be read, and is reported.
+var ErrNoRecord = errors.New("no findings record can exist for this branch")
 
 // WaiverName is the file a no-test-needed waiver is recorded in, at the repository root.
 const WaiverName = ".tsp-waiver.json"
@@ -463,7 +467,11 @@ func scopedVerdict(cwd, root string, changed, all, deleted []string, d Deps) Res
 	}
 	sort.Strings(tests)
 	if d.TSPRun != nil {
-		if ran, err := d.TSPRun(root); err == nil && !ran {
+		ran, err := d.TSPRun(root)
+		if err != nil && !errors.Is(err, ErrNoRecord) {
+			return Result{Exit: 2, Text: line + "\nthe branch's findings record could not be read: " + err.Error()}
+		}
+		if err == nil && !ran {
 			return Result{Exit: 1, Files: in, Text: line + "\n" + "a test came with it (" + capNames(tests) + "), but " + noRunDebt}
 		}
 	}

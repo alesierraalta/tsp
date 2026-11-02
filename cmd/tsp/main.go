@@ -1142,7 +1142,13 @@ func runCheck(args []string) int {
 	if info, err := os.Stat(*cwd); err != nil || !info.IsDir() {
 		return refuseCheck(*asJSON, fmt.Sprintf("check: --cwd %s is not a directory: name an existing directory inside the repository", *cwd))
 	}
-	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named, Base: strings.TrimSpace(*base), Since: strings.TrimSpace(*since), TSPRun: findings.HasRound})
+	res := check.Run(*cwd, check.Deps{PlanPath: *path, Suite: *suite, Waive: strings.TrimSpace(*waive), Paths: named, Base: strings.TrimSpace(*base), Since: strings.TrimSpace(*since), TSPRun: func(root string) (bool, error) {
+		ran, err := findings.HasRound(root)
+		if err != nil && findings.NoRecord(err) {
+			return false, fmt.Errorf("%w: %v", check.ErrNoRecord, err)
+		}
+		return ran, err
+	}})
 	if *asJSON {
 		return printCheckVerdict(res)
 	}

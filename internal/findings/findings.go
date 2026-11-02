@@ -62,6 +62,17 @@ func git(dir string, args ...string) (string, error) {
 	}
 	return strings.TrimSpace(string(b)), nil
 }
+
+// NoRecordError says the branch cannot have a findings record at all: a detached HEAD has no branch to key it by.
+// It is not a record that is there and unreadable, which a caller must report instead of answering from the tree.
+type NoRecordError struct{ reason string }
+
+func (e *NoRecordError) Error() string { return e.reason }
+
+// NoRecord reports whether err means no record can exist for this branch, as opposed to one that exists and cannot
+// be read. Only the former lets a caller keep the answer the working tree alone gives.
+func NoRecord(err error) bool { var n *NoRecordError; return errors.As(err, &n) }
+
 func load(dir string) (*registry, string, string, error) {
 	top, e := git(dir, "rev-parse", "--show-toplevel")
 	if e != nil {
@@ -69,7 +80,7 @@ func load(dir string) (*registry, string, string, error) {
 	}
 	branch, e := git(top, "symbolic-ref", "--short", "HEAD")
 	if e != nil {
-		return nil, "", "", fmt.Errorf("detached HEAD: findings require a branch")
+		return nil, "", "", &NoRecordError{"detached HEAD: findings require a branch"}
 	}
 	common, e := git(top, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if e != nil {
