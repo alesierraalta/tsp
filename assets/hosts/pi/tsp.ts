@@ -9,7 +9,8 @@
 // authority is never called; UI writes are guarded by ctx.hasUI.
 
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -324,7 +325,77 @@ export interface OfferOptions {
   env?: Readonly<Record<string, string | undefined>>; // defaults to process.env
   exec?: ExecTpp; // defaults to the tsp binary
   head?: (cwd: string) => string; // the commit a turn starts from; defaults to asking git
+  probe?: RepoProbe; // the working tree outside the edit tools; defaults to asking git
 }
+
+/** One reading of the working tree: the commit at its head and a digest per source file it has changed. */
+export interface RepoSnapshot { head: string; files: ReadonlyMap<string, string> }
+
+/**
+ * What the offer reads besides the edit tools: the source a shell command changed, and a work unit this turn
+ * committed (which leaves no worktree change to see). Undefined means the repository could not be read.
+ */
+export interface RepoProbe {
+  state(cwd: string): RepoSnapshot | undefined;
+  committed(cwd: string, from: string, to: string): readonly string[];
+}
+
+/** Runs git outside the checkout, for the same reason headAt does. */
+function gitOut(cwd: string, args: readonly string[]): string | undefined {
+  try {
+    return execFileSync("git", ["-C", cwd, ...args], {
+      cwd: tmpdir(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/** The file's content, or "" when it is gone: a digest tells a turn's change from a file that was already dirty. */
+function digest(path: string): string {
+  try {
+    return createHash("sha1").update(readFileSync(path)).digest("hex");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * A porcelain status path, read from the turn's own directory. Porcelain paths are relative to the repository
+ * root, while --paths reads from the directory the turn runs in; a change outside that directory is not the
+ * turn's. The empty prefix means the turn runs at the root, where both are the same.
+ */
+export function cwdPath(prefix: string, path: string): string | undefined {
+  if (prefix === "") return path;
+  return path.startsWith(prefix) ? path.slice(prefix.length) : undefined;
+}
+
+export const repoProbe: RepoProbe = {
+  state(cwd) {
+    // Porcelain status is always root-relative, whatever a user config says: read the turn's own prefix first.
+    const prefix = gitOut(cwd, ["rev-parse", "--show-prefix"]);
+    if (prefix === undefined) return undefined;
+    const out = gitOut(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    if (out === undefined) return undefined;
+    const files = new Map<string, string>();
+    const parts = out.split("\0");
+    for (let i = 0; i < parts.length; i++) {
+      const entry = parts[i];
+      if (entry.length < 4) continue;
+      const status = entry.slice(0, 2);
+      // A rename or copy carries the source path in the next field, which is not a change of its own.
+      if (status[0] === "R" || status[0] === "C") i++;
+      const path = cwdPath(prefix.trim(), entry.slice(3));
+      if (path !== undefined && isSourcePath(path)) files.set(path, digest(join(cwd, path)));
+    }
+    return { head: headAt(cwd), files };
+  },
+  committed(cwd, from, to) {
+    const out = gitOut(cwd, ["diff", "--name-only", "--relative", `${from}..${to}`]);
+    if (out === undefined) return [];
+    return out.split("\n").map((line) => line.trim()).filter((path) => path !== "" && isSourcePath(path));
+  },
+};
 
 /** The commit this turn starts from, or "" when it cannot be read: a repository with no commit yet owes nothing. */
 export function headAt(cwd: string): string {
@@ -430,8 +501,10 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   const env = opts.env ?? process.env;
   const exec = opts.exec ?? execTpp;
   const head = opts.head ?? headAt;
+  const probe = opts.probe ?? repoProbe;
   const child = env.GENTLE_PI_AGENTS_CHILD === "1";
-  const edited = new Set<string>(); // source paths changed in the current run
+  const edited = new Set<string>(); // source paths changed in the current run through the edit tools
+  let opened: RepoSnapshot | undefined; // the working tree as this run found it, read only when the offer can fire
   const declined = new Set<string>(); // paths the user already said No to
   let turnHead = ""; // the commit this turn started from: what --since reads the work unit against
   let staleNotified = false; // a tsp too old to answer is reported once, not once per turn
@@ -458,6 +531,8 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     if (user && !feedbackRun) pending = "";
     fixRun = mine === "fix";
     tspRun = !feedbackRun && !fixRun && user && (mine === "round" || isTspRequest(event.prompt));
+    // A run that can never ask, or that is the TSP itself, needs no snapshot: reading git costs a process.
+    opened = child || !ctx.hasUI || optedOut(ctx.cwd) || feedbackRun || fixRun || tspRun ? undefined : probe.state(ctx.cwd);
   });
   pi.on("tool_result", (event, ctx) => {
     if (!feedbackRun && !fixRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) tspRun = true;
@@ -466,10 +541,12 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string" && isSourcePath(path)) edited.add(path);
   });
   pi.on("agent_settled", async (event, ctx) => {
-    // The paths this turn edited, unfiltered: what the repository requires is read before a remembered
+    // The paths this turn changed, unfiltered: what the repository requires is read before a remembered
     // decline is applied, because a decline answers one question and cannot silence a later policy.
-    const fresh = [...edited];
+    const fresh = new Set(edited);
     edited.clear();
+    const openedNow = opened;
+    opened = undefined;
     if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd)) { pending = ""; return; }
     if (feedbackRun) {
       if (pending !== "") send(pending, loopKind(pending));
@@ -491,8 +568,20 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
       else if (step.message !== "") send(step.message, loopKind(step.message));
       return;
     }
-    if (fresh.length === 0) return;
-    const verdict = await checkVerdict(ctx.cwd, env, exec, fresh, turnHead);
+    // Only now, for a run that can ask: the working tree as it is, against the one this run opened.
+    if (openedNow !== undefined) {
+      const now = probe.state(ctx.cwd);
+      if (now !== undefined) {
+        for (const [path, hash] of now.files) if (openedNow.files.get(path) !== hash) fresh.add(path);
+        // A work unit committed in this turn leaves no worktree change: the commits it made are its changes.
+        if (openedNow.head !== "" && now.head !== "" && now.head !== openedNow.head) {
+          for (const path of probe.committed(ctx.cwd, openedNow.head, now.head)) fresh.add(path);
+        }
+      }
+    }
+    const paths = [...fresh].filter(isSourcePath);
+    if (paths.length === 0) return;
+    const verdict = await checkVerdict(ctx.cwd, env, exec, paths, turnHead);
     if (verdict === "stale") {
       // Once per session: an install that cannot answer is worth one sentence, not one per turn.
       if (!staleNotified) {
@@ -520,7 +609,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
       pi.sendUserMessage(TSP_PROMPT);
       return;
     }
-    const undecided = fresh.filter((p) => !declined.has(p));
+    const undecided = paths.filter((p) => !declined.has(p));
     if (undecided.length === 0) return;
     const owed = verdict.named ? verdict.debt : verdict.reason;
     if (owed === "") return;
@@ -529,7 +618,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
       declined.clear();
       pi.sendUserMessage(TSP_PROMPT);
     } else if (answer === OFFER_NO) {
-      fresh.forEach((p) => declined.add(p));
+      paths.forEach((p) => declined.add(p));
     }
   });
 }

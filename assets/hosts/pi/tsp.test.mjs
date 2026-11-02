@@ -5,6 +5,9 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import tppExtension, {
   FEEDBACK_LEAD,
   GENTLE_OBSERVATION_ENV,
@@ -15,6 +18,8 @@ import tppExtension, {
   childEnv,
   runTppCommand,
   isSourcePath,
+  cwdPath,
+  repoProbe as gitProbe,
 } from "./tsp.ts";
 
 // The literals internal/mode pins on the Go side: the shared protocol, spelled out on both shores.
@@ -193,7 +198,7 @@ const errorVerdict = (reason) => ({ stdout: JSON.stringify({ decision: "error", 
 // chat when the repository left that to the human; "Sí" sends the identity prompt "haz el TSP" as if the user typed
 // it. Every collaborator is faked: no Pi, no files, no git.
 function offerHarness(opts = {}) {
-  const { hasUI = true, optedOut = false, env = {}, findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3") } = opts;
+  const { hasUI = true, optedOut = false, env = {}, findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), probe } = opts;
   const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
   const asked = [], sent = [], calls = [], notes = [];
   // findings maps a findings subcommand to the child it answers with; a missing one answers exit 0, no output.
@@ -215,7 +220,7 @@ function offerHarness(opts = {}) {
     on: (event, handler) => { handlers[event] = handler; },
     sendUserMessage: (text) => sent.push(text),
   };
-  tppExtension(pi, { optedOut: () => optedOut, env, exec, head });
+  tppExtension(pi, { optedOut: () => optedOut, env, exec, head, probe });
   const ctx = { hasUI, cwd: "/repo", ui: {
     select: async (title, options) => { asked.push({ title, options }); return answer; },
     notify: (message, type) => notes.push({ message, type }),
@@ -413,6 +418,94 @@ test("no question when the run touched no source: tests, docs, config, failed ed
   await h.run("tests and docs", [["edit", "a_test.go"], ["write", "src/a.test.ts"], ["edit", "tests/x.py"], ["edit", "README.md"], ["write", "config.json"], ["edit", "a.go", true]]);
   await h.run("just reading", []);
   assert.deepEqual(h.asked, []);
+});
+
+// A repository the offer reads directly, so a change made by a shell command is seen as well as one made through
+// the edit tools. states are answered in order: the turn's opening snapshot first, then its closing one.
+const repoProbe = ({ states, committed = [], calls = [] }) => ({
+  state: (cwd) => { calls.push(["state", cwd]); return states.shift(); },
+  committed: (cwd, from, to) => { calls.push(["committed", cwd, from, to]); return committed; },
+});
+const snapshot = (files, head = "abc123") => ({ head, files: new Map(Object.entries(files)) });
+
+test("a source file changed by a shell command still ends with the TSP question", async () => {
+  const probe = repoProbe({ states: [snapshot({ "internal/retry/retry.go": "one" }), snapshot({ "internal/retry/retry.go": "two" })] });
+  const h = offerHarness({ probe });
+  await h.run("run the formatter", [["bash", "gofmt -w internal/retry/retry.go"]]);
+  assert.deepEqual(h.calls, [{ argv: CHECK(["internal/retry/retry.go"]), cwd: "/repo" }], "the check is scoped to the source the shell command changed");
+  assert.deepEqual(h.sent, ["haz el TSP"]);
+});
+
+test("a shell command that only touches tests, docs, or config asks nothing", async () => {
+  const probe = repoProbe({ states: [snapshot({ "README.md": "one", "a_test.go": "one" }), snapshot({ "README.md": "two", "a_test.go": "two" })] });
+  const h = offerHarness({ probe });
+  await h.run("regenerate the docs", [["bash", "make docs"]]);
+  assert.deepEqual(h.asked, []);
+  assert.deepEqual(h.calls, []);
+});
+
+test("a file already modified before the turn is not attributed to it", async () => {
+  const probe = repoProbe({ states: [snapshot({ "a.go": "same" }), snapshot({ "a.go": "same" })] });
+  const h = offerHarness({ probe });
+  await h.run("just run the tests", [["bash", "go test ./..."]]);
+  assert.deepEqual(h.asked, []);
+});
+
+test("a turn that commits its work unit is answered for through the commits it made", async () => {
+  const probe = repoProbe({
+    states: [snapshot({}, "abc123"), snapshot({}, "def456")],
+    committed: ["internal/retry/retry.go", "docs/retry.md"],
+  });
+  const h = offerHarness({ probe });
+  await h.run("commit the retry limit", [["bash", "git commit -am retry"]]);
+  assert.deepEqual(h.calls, [{ argv: CHECK(["internal/retry/retry.go"]), cwd: "/repo" }], "only source is scoped, and the committed path is not lost with the worktree diff");
+  assert.deepEqual(h.sent, ["haz el TSP"]);
+});
+
+test("without a repository to read, the offer falls back to the edit tools", async () => {
+  const blind = repoProbe({ states: [undefined, undefined] });
+  const h = offerHarness({ probe: blind });
+  await h.run("run the formatter", [["bash", "gofmt -w a.go"]]);
+  assert.deepEqual(h.asked, [], "a shell change cannot be attributed without a repository");
+  const edit = offerHarness({ probe: repoProbe({ states: [undefined, undefined] }) });
+  await edit.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(edit.calls, [{ argv: CHECK(["a.go"]), cwd: "/repo" }]);
+});
+
+test("a status path is read from the turn's directory, or dropped when it is outside it", () => {
+  assert.equal(cwdPath("", "internal/a.go"), "internal/a.go");
+  assert.equal(cwdPath("pkg/", "pkg/a.go"), "a.go", "porcelain status is root-relative, --paths reads from the turn's directory");
+  assert.equal(cwdPath("pkg/", "pkg/sub/a b.go"), "sub/a b.go");
+  assert.equal(cwdPath("pkg/", "other/a.go"), undefined, "a change outside the turn's directory is not the turn's");
+  assert.equal(cwdPath("pkg/", "pkg"), undefined, "a path that only shares the prefix is not inside it");
+});
+
+test("the repository probe reads a change and a commit from the turn's own directory", () => {
+  const dir = mkdtempSync(join(tmpdir(), "tsp-probe-"));
+  const git = (...args) => childProcess.execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+  try {
+    git("init", "-q");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    mkdirSync(join(dir, "pkg"));
+    writeFileSync(join(dir, "pkg", "a.go"), "package a\n");
+    writeFileSync(join(dir, "README.md"), "docs\n");
+    git("add", ".");
+    git("commit", "-qm", "one");
+    const opened = gitProbe.state(join(dir, "pkg"));
+    writeFileSync(join(dir, "pkg", "a.go"), "package a // changed\n");
+    writeFileSync(join(dir, "README.md"), "docs // changed\n");
+    const settled = gitProbe.state(join(dir, "pkg"));
+    assert.deepEqual([...settled.files.keys()], ["a.go"], "porcelain is root-relative: the probe reads the turn's directory, and docs are not source");
+    assert.notEqual(settled.files.get("a.go"), opened.files.get("a.go"), "a digest tells the change from a file that was already dirty");
+    git("add", "-A");
+    git("commit", "-qm", "two");
+    const after = gitProbe.state(join(dir, "pkg"));
+    assert.deepEqual([...after.files.keys()], [], "a committed change leaves no worktree change to see");
+    assert.deepEqual(gitProbe.committed(join(dir, "pkg"), opened.head, after.head), ["a.go"], "the commits HEAD gained are read from the turn's directory too");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("no question after a TSP run, an aborted run, without UI, or when the repo opted out", async () => {
