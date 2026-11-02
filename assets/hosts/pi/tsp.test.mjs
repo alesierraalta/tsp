@@ -228,6 +228,7 @@ function offerHarness(opts = {}) {
     notify: (message, type) => notes.push({ message, type }),
   } };
   const start = async (reason = "startup") => { await handlers.session_start?.({ type: "session_start", reason }, ctx); };
+  const beforeSettle = async () => handlers.agent_before_settle?.({ type: "agent_before_settle", entries: [] }, ctx);
   const run = async (prompt, edits, { aborted = false } = {}) => {
     await handlers.before_agent_start?.({ type: "before_agent_start", messageType: "user", prompt }, ctx);
     for (const [toolName, path, isError = false, output = ""] of edits) {
@@ -236,11 +237,11 @@ function offerHarness(opts = {}) {
       await handlers.tool_result({ type: "tool_result", toolName, input, isError, content }, ctx);
     }
     // An aborted run skips the actionable boundary, as Pi does.
-    const proposal = aborted ? undefined : await handlers.agent_before_settle?.({ type: "agent_before_settle", entries: [] }, ctx);
+    const proposal = aborted ? undefined : await beforeSettle();
     await handlers.agent_settled({ type: "agent_settled", aborted }, ctx);
     return proposal;
   };
-  return { asked, sent, calls, notes, entries, run, start };
+  return { asked, sent, calls, notes, entries, run, start, beforeSettle };
 }
 
 // The check's argv: one object of output, the turn's own base commit, and one --paths per path.
@@ -1000,4 +1001,39 @@ test("state an older version wrote, or that is corrupted, is ignored without an 
     await h.run("change a", [["edit", "internal/a.go"]]);
     assert.equal(h.asked.length, 1, `corrupt state ${JSON.stringify(data)} is ignored, not obeyed`);
   }
+});
+
+// A session without a UI cannot answer the question, so the repository's own requirement has to reach the agent
+// through the actionable boundary: one continuation per turn, never in a child, never after the branch's run.
+test("a session without UI runs a required TSP through one continuation and stays silent for ask and none", async () => {
+  const required = offerHarness({ hasUI: false, check: requiredVerdict("no test was added or changed with it") });
+  const proposal = await required.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(proposal?.continue, true, "the boundary asks Pi for one more model request");
+  assert.deepEqual(proposal.entries, [{ type: "custom_message", customType: "tsp-required", content: "haz el TSP", display: false }], "the continuation carries the TSP request, without a user message");
+  assert.deepEqual(required.sent, [], "no user message is sent: the continuation is the run");
+  assert.deepEqual(required.asked, []);
+  for (const verdict of [askVerdict("run m1"), noneVerdict()]) {
+    const quiet = offerHarness({ hasUI: false, check: verdict });
+    assert.equal(await quiet.run("change a", [["edit", "internal/a.go"]]), undefined, `${verdict.stdout}: nothing to continue`);
+  }
+});
+
+test("the headless continuation is requested once per turn, never after the branch's run, and never in a child", async () => {
+  const h = offerHarness({ hasUI: false, check: requiredVerdict("no test was added or changed with it") });
+  assert.equal((await h.run("change a", [["edit", "internal/a.go"]]))?.continue, true);
+  assert.equal(await h.beforeSettle(), undefined, "the continuation's own boundary does not ask for a second one");
+  await h.run("haz el TSP", []);
+  assert.equal(await h.run("change a", [["edit", "internal/a.go"]]), undefined, "the branch already had its run");
+  const optedOut = offerHarness({ hasUI: false, optedOut: true, check: requiredVerdict("no test") });
+  assert.equal(await optedOut.run("change a", [["edit", "internal/a.go"]]), undefined, ".no-testing-gate opts out");
+  const child = offerHarness({ hasUI: false, env: { GENTLE_PI_AGENTS_CHILD: "1" }, check: requiredVerdict("no test") });
+  assert.equal(await child.run("change a", [["edit", "internal/a.go"]]), undefined, "a delegated child has nobody to run for");
+  const aborted = offerHarness({ hasUI: false, check: requiredVerdict("no test") });
+  assert.equal(await aborted.run("change a", [["edit", "internal/a.go"]], { aborted: true }), undefined, "an aborted run skips the boundary");
+});
+
+test("a session with a UI never uses the headless continuation: the offer is unchanged", async () => {
+  const h = offerHarness({ check: requiredVerdict("no test was added or changed with it") });
+  assert.equal(await h.run("change a", [["edit", "internal/a.go"]]), undefined, "the interactive path sends its own message instead");
+  assert.deepEqual(h.sent, ["haz el TSP"]);
 });

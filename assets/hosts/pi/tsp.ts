@@ -520,6 +520,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   let pending = "";
   let lastFix = ""; // the fix answer the agent was last sent: the same one again after its fix run means it changed nothing
   let ran = false; // a TSP run already happened on this branch: one run per branch, never one per turn
+  let continued = false; // a headless run already asked for its continuation, and this run has only one
   // A user's message that merely starts like one of the extension's own is the user's: it never runs the loop.
   let own: OwnMessage | undefined;
   // The decisions live on the session branch, so a reload, a resume and a fork rebuild them instead of forgetting them.
@@ -569,7 +570,8 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     fixRun = mine === "fix";
     tspRun = !feedbackRun && !fixRun && user && (mine === "round" || isTspRequest(event.prompt));
     // A run that can never ask, or that is the TSP itself, needs no snapshot: reading git costs a process.
-    opened = child || !ctx.hasUI || optedOut(ctx.cwd) || feedbackRun || fixRun || tspRun ? undefined : probe.state(ctx.cwd);
+    // A headless session still needs it: the repository's requirement reaches the agent through the boundary.
+    opened = child || optedOut(ctx.cwd) || feedbackRun || fixRun || tspRun ? undefined : probe.state(ctx.cwd);
   });
   pi.on("tool_result", (event, ctx) => {
     if (!feedbackRun && !fixRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) tspRun = true;
@@ -577,14 +579,50 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     const path = (event.input as { path?: unknown }).path;
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string" && isSourcePath(path)) edited.add(path);
   });
+  /** The source paths this run changed, from the edit tools and the working tree it opened; never filtered by a decline. */
+  const collect = (cwd: string): string[] => {
+    const fresh = new Set(edited);
+    if (opened !== undefined) {
+      const now = probe.state(cwd);
+      if (now !== undefined) {
+        for (const [path, hash] of now.files) if (opened.files.get(path) !== hash) fresh.add(path);
+        // A work unit committed in this turn leaves no worktree change: the commits it made are its changes.
+        if (opened.head !== "" && now.head !== "" && now.head !== opened.head) {
+          for (const path of probe.committed(cwd, opened.head, now.head)) fresh.add(path);
+        }
+      }
+    }
+    return [...fresh].filter(isSourcePath);
+  };
+  pi.on("agent_before_settle", async (event, ctx) => {
+    // Without a UI nobody can answer the offer's question, so only the repository's own requirement runs, and it
+    // reaches the agent as one continuation: an aborted run never fires this boundary, a child has nobody to run
+    // for, and the branch's run or this turn's continuation already answers it.
+    if (ctx.hasUI || child || continued || ran || feedbackRun || fixRun || tspRun || optedOut(ctx.cwd)) return;
+    const paths = collect(ctx.cwd);
+    if (paths.length === 0) return;
+    const verdict = await checkVerdict(ctx.cwd, env, exec, paths, turnHead);
+    if (verdict === undefined || verdict === "stale" || verdict.decision !== DECISION_REQUIRED) return;
+    continued = true;
+    return {
+      entries: [...((event as { entries?: readonly unknown[] }).entries ?? []), { type: "custom_message", customType: "tsp-required", content: TSP_PROMPT, display: false }],
+      continue: true,
+    };
+  });
   pi.on("agent_settled", async (event, ctx) => {
+    continued = false;
     // The paths this turn changed, unfiltered: what the repository requires is read before a remembered
     // decline is applied, because a decline answers one question and cannot silence a later policy.
-    const fresh = new Set(edited);
+    const fresh = collect(ctx.cwd);
     edited.clear();
-    const openedNow = opened;
     opened = undefined;
-    if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd)) { pending = ""; return; }
+    if (event.aborted || child || optedOut(ctx.cwd)) { pending = ""; return; }
+    if (!ctx.hasUI) {
+      // The boundary requested the run; a TSP run that did happen still marks the branch, so it is not requested twice.
+      if (tspRun) { ran = true; persist(); }
+      pending = "";
+      return;
+    }
     if (feedbackRun) {
       if (pending !== "") { const next = pending; pending = ""; send(next, loopKind(next)); }
       persist();
@@ -608,18 +646,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
       else if (step.message !== "") send(step.message, loopKind(step.message));
       return;
     }
-    // Only now, for a run that can ask: the working tree as it is, against the one this run opened.
-    if (openedNow !== undefined) {
-      const now = probe.state(ctx.cwd);
-      if (now !== undefined) {
-        for (const [path, hash] of now.files) if (openedNow.files.get(path) !== hash) fresh.add(path);
-        // A work unit committed in this turn leaves no worktree change: the commits it made are its changes.
-        if (openedNow.head !== "" && now.head !== "" && now.head !== openedNow.head) {
-          for (const path of probe.committed(ctx.cwd, openedNow.head, now.head)) fresh.add(path);
-        }
-      }
-    }
-    const paths = [...fresh].filter(isSourcePath);
+    const paths = fresh;
     if (paths.length === 0) return;
     // The branch's run already happened; the check still answers ask (or required) until a round is booked, and
     // repeating the run every turn is exactly the loop #342 reports. A fresh session offers again.
