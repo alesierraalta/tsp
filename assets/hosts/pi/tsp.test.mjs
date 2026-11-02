@@ -14,6 +14,7 @@ import tppExtension, {
   GENTLE_OBSERVATION_VALUE,
   observesGentleSession,
   parseTppCommand,
+  statusFor,
   buildArgv,
   childEnv,
   runTppCommand,
@@ -198,15 +199,15 @@ const errorVerdict = (reason) => ({ stdout: JSON.stringify({ decision: "error", 
 // chat when the repository left that to the human; "Sí" sends the identity prompt "haz el TSP" as if the user typed
 // it. Every collaborator is faked: no Pi, no files, no git.
 function offerHarness(opts = {}) {
-  const { hasUI = true, optedOut = false, env = {}, findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), probe } = opts;
+  const { hasUI = true, optedOut = false, env = {}, findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), probe, entries = [], feedback } = opts;
   const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
-  const asked = [], sent = [], calls = [], notes = [];
+  const asked = [], sent = [], calls = [], notes = [], statuses = [], widgets = [];
   // findings maps a findings subcommand to the child it answers with; a missing one answers exit 0, no output.
   // check is the pre-offer `tsp check --json` the offer derives its verdict from; the default names one run to plan.
   const exec = async (argv, o) => {
     calls.push({ argv: [...argv], cwd: o.cwd });
     // A feedback template nobody configured answers as tsp does with feedback switched off: no request, no notice.
-    const fallback = argv[0] === "feedback" ? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
+    const fallback = argv[0] === "feedback" ? feedback ?? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
     const outcome = argv[0] === "check" && argv[1] === "--cwd"
       ? (typeof check === "function" ? check(calls.length) : check)
       : findings[argv[1]] ?? fallback;
@@ -214,17 +215,23 @@ function offerHarness(opts = {}) {
     return outcome;
   };
   const handlers = {};
+  // The session branch: entries survive a reload, a resume and a fork when a harness shares the same array.
   const pi = {
     registerCommand: () => {},
     getAllTools: () => [],
     on: (event, handler) => { handlers[event] = handler; },
     sendUserMessage: (text) => sent.push(text),
+    appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }),
   };
   tppExtension(pi, { optedOut: () => optedOut, env, exec, head, probe });
-  const ctx = { hasUI, cwd: "/repo", ui: {
+  const ctx = { hasUI, cwd: "/repo", sessionManager: { getBranch: () => entries }, ui: {
     select: async (title, options) => { asked.push({ title, options }); return answer; },
     notify: (message, type) => notes.push({ message, type }),
+    setStatus: (_key, text) => statuses.push(text),
+    setWidget: (key, lines) => widgets.push({ key, lines }),
   } };
+  const start = async (reason = "startup") => { await handlers.session_start?.({ type: "session_start", reason }, ctx); };
+  const beforeSettle = async () => handlers.agent_before_settle?.({ type: "agent_before_settle", entries: [] }, ctx);
   const run = async (prompt, edits, { aborted = false } = {}) => {
     await handlers.before_agent_start?.({ type: "before_agent_start", messageType: "user", prompt }, ctx);
     for (const [toolName, path, isError = false, output = ""] of edits) {
@@ -232,9 +239,12 @@ function offerHarness(opts = {}) {
       const content = output === "" ? [] : [{ type: "text", text: output }];
       await handlers.tool_result({ type: "tool_result", toolName, input, isError, content }, ctx);
     }
+    // An aborted run skips the actionable boundary, as Pi does.
+    const proposal = aborted ? undefined : await beforeSettle();
     await handlers.agent_settled({ type: "agent_settled", aborted }, ctx);
+    return proposal;
   };
-  return { asked, sent, calls, notes, run };
+  return { asked, sent, calls, notes, statuses, widgets, entries, run, start, beforeSettle };
 }
 
 // The check's argv: one object of output, the turn's own base commit, and one --paths per path.
@@ -757,8 +767,10 @@ test("the feedback run itself reviews no findings, asks no TSP question and requ
   assert.equal(h.calls.length, before, "no findings review, no check, no template: the loop ends here");
   assert.deepEqual(h.asked, []);
   assert.equal(h.sent.length, 1);
-  await h.run("change a", [["edit", "a.go"]]);
-  assert.equal(h.asked.length, 1, "the next ordinary run is offered TSP again");
+  // A branch that already had its TSP run is not asked again (one run per branch, #346/#342); a fresh session is.
+  const next = offerHarness();
+  await next.run("change a", [["edit", "a.go"]]);
+  assert.equal(next.asked.length, 1, "a fresh session is offered TSP again");
 });
 
 test("only a TSP run asks for feedback: an ordinary, aborted, headless, opted-out or child run never does", async () => {
@@ -917,4 +929,200 @@ test("a feedback submission whose failure a pipe hid is not taken as recorded", 
   await h.run("haz el TSP", [["bash", "tsp feedback --file /tmp/tsp-fb.txt 2>&1 | tail -1", false, "feedback: verdict is empty\n"]]);
   assert.equal(h.sent.length, 1);
   assert.ok(h.sent[0].startsWith(FEEDBACK_LEAD), "tail exited 0 but tsp recorded nothing, so the request still goes out");
+});
+
+// The offer's decisions live on the session branch: a reload, a resume or a fork rebuilds them from the entries
+// the extension appended, and a new session starts empty. The harness shares one entries array to model a branch.
+const tspState = (entries) => entries.filter((e) => e.type === "custom" && e.customType === "tsp-state").at(-1)?.data;
+
+test("a path declined before a reload is not offered again after it", async () => {
+  const entries = [];
+  const first = offerHarness({ entries, answer: "No" });
+  await first.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(first.asked.length, 1, "the first turn asks");
+  const resumed = offerHarness({ entries });
+  await resumed.start("resume");
+  await resumed.run("change a", [["edit", "internal/a.go"]]);
+  assert.deepEqual(resumed.asked, [], "the decline survives the reload");
+});
+
+test("a loop waiting on its feedback run delivers its pending message once after a reload", async () => {
+  const entries = [];
+  const findings = { next: { stdout: JSON.stringify({ next: "tsp", message: "round two", review: "review 1" }), stderr: "", code: 0 }, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } };
+  const first = offerHarness({ entries, findings });
+  await first.run("haz el TSP", []);
+  assert.equal(first.sent.length, 1, "the TSP run asked for its feedback");
+  assert.ok(first.sent[0].startsWith(FEEDBACK_LEAD), first.sent[0]);
+  const resumed = offerHarness({ entries, findings });
+  await resumed.start("resume");
+  assert.deepEqual(resumed.sent, ["haz el TSP — round two"], "the loop resumes where it stopped, without asking for the run again");
+});
+
+test("a fix run that repeats the same answer after a reload stops instead of sending it again", async () => {
+  const fix = { stdout: JSON.stringify({ next: "fix", tree: "t1", review: "review 1", reason: "round 1 of 5 left 1 item unsettled", message: "F1 open a_test.go TestA" }), stderr: "", code: 1 };
+  const entries = [];
+  const first = offerHarness({ entries, findings: { next: fix } });
+  await first.run("haz el TSP", []);
+  assert.deepEqual(first.sent, ["The TSP loop found defects to settle.\n\nF1 open a_test.go TestA"]);
+  const resumed = offerHarness({ entries, findings: { next: fix } });
+  await resumed.start("resume");
+  await resumed.run("The TSP loop found defects to settle.\n\nF1 open a_test.go TestA", []);
+  assert.deepEqual(resumed.sent, [], "the same fix is not sent twice");
+  assert.ok(resumed.notes.some((n) => /changed nothing/.test(n.message)), "the loop says why it stopped");
+});
+
+test("a TSP run on the branch stops the offer from asking again for the same uncommitted run", async () => {
+  const entries = [];
+  const done = { stdout: JSON.stringify({ next: "done", review: "review 1" }), stderr: "", code: 0 };
+  const h = offerHarness({ entries, findings: { next: done } });
+  await h.run("haz el TSP", []);
+  assert.equal(tspState(entries).ran, true, "the branch records that its TSP run happened");
+  await h.run("change a", [["edit", "internal/a.go"]]);
+  assert.deepEqual(h.asked, [], "the check still answers ask, and the offer does not repeat the run");
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "check"), [], "the offer does not even ask the check again");
+});
+
+test("a fork starts from the state of its parent branch, and a new session starts empty", async () => {
+  const entries = [];
+  const parent = offerHarness({ entries, answer: "No" });
+  await parent.run("change a", [["edit", "internal/a.go"]]);
+  const fork = offerHarness({ entries });
+  await fork.start("fork");
+  await fork.run("change a", [["edit", "internal/a.go"]]);
+  assert.deepEqual(fork.asked, [], "the fork carries the parent's decline");
+  const fresh = offerHarness();
+  await fresh.start("new");
+  await fresh.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(fresh.asked.length, 1, "a new session starts empty");
+});
+
+test("state an older version wrote, or that is corrupted, is ignored without an error", async () => {
+  for (const data of ["{broken", { declined: 42, lastFix: 7, pending: null, ran: "yes", own: { prompt: 1, kind: "nope" } }, null, [1, 2]]) {
+    const entries = [{ type: "custom", customType: "tsp-state", data }];
+    const h = offerHarness({ entries });
+    await h.start("resume");
+    await h.run("change a", [["edit", "internal/a.go"]]);
+    assert.equal(h.asked.length, 1, `corrupt state ${JSON.stringify(data)} is ignored, not obeyed`);
+  }
+});
+
+// A session without a UI cannot answer the question, so the repository's own requirement has to reach the agent
+// through the actionable boundary: one continuation per turn, never in a child, never after the branch's run.
+test("a session without UI runs a required TSP through one continuation and stays silent for ask and none", async () => {
+  const required = offerHarness({ hasUI: false, check: requiredVerdict("no test was added or changed with it") });
+  const proposal = await required.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(proposal?.continue, true, "the boundary asks Pi for one more model request");
+  assert.deepEqual(proposal.entries, [{ type: "custom_message", customType: "tsp-required", content: "haz el TSP", display: false }], "the continuation carries the TSP request, without a user message");
+  assert.deepEqual(required.sent, [], "no user message is sent: the continuation is the run");
+  assert.deepEqual(required.asked, []);
+  for (const verdict of [askVerdict("run m1"), noneVerdict()]) {
+    const quiet = offerHarness({ hasUI: false, check: verdict });
+    assert.equal(await quiet.run("change a", [["edit", "internal/a.go"]]), undefined, `${verdict.stdout}: nothing to continue`);
+  }
+});
+
+test("the headless continuation is requested once per turn, never after the branch's run, and never in a child", async () => {
+  const h = offerHarness({ hasUI: false, check: requiredVerdict("no test was added or changed with it") });
+  assert.equal((await h.run("change a", [["edit", "internal/a.go"]]))?.continue, true);
+  assert.equal(await h.beforeSettle(), undefined, "the continuation's own boundary does not ask for a second one");
+  await h.run("haz el TSP", []);
+  assert.equal(await h.run("change a", [["edit", "internal/a.go"]]), undefined, "the branch already had its run");
+  const optedOut = offerHarness({ hasUI: false, optedOut: true, check: requiredVerdict("no test") });
+  assert.equal(await optedOut.run("change a", [["edit", "internal/a.go"]]), undefined, ".no-testing-gate opts out");
+  const child = offerHarness({ hasUI: false, env: { GENTLE_PI_AGENTS_CHILD: "1" }, check: requiredVerdict("no test") });
+  assert.equal(await child.run("change a", [["edit", "internal/a.go"]]), undefined, "a delegated child has nobody to run for");
+  const aborted = offerHarness({ hasUI: false, check: requiredVerdict("no test") });
+  assert.equal(await aborted.run("change a", [["edit", "internal/a.go"]], { aborted: true }), undefined, "an aborted run skips the boundary");
+});
+
+test("a session with a UI never uses the headless continuation: the offer is unchanged", async () => {
+  const h = offerHarness({ check: requiredVerdict("no test was added or changed with it") });
+  assert.equal(await h.run("change a", [["edit", "internal/a.go"]]), undefined, "the interactive path sends its own message instead");
+  assert.deepEqual(h.sent, ["haz el TSP"]);
+});
+
+// The status line is the only place a user can see what the branch owes without asking: it names the debt, the
+// loop the branch is in, and clears when nothing is owed so a settled repository is not a permanent badge.
+test("the status line names the debt, follows the loop, and clears when nothing is owed", async () => {
+  assert.equal(statusFor(undefined, undefined), undefined);
+  assert.equal(statusFor("none", undefined), undefined);
+  assert.equal(statusFor("ask", undefined), "tsp: ask");
+  assert.equal(statusFor("required", undefined), "tsp: required");
+  assert.equal(statusFor("required", { next: "fix", round: 2, maxRounds: 3, open: 4 }), "tsp: fix · round 2/3 · 4 open");
+  assert.equal(statusFor(undefined, { next: "tsp", round: 0, maxRounds: 0, open: 1 }), "tsp: tsp · 1 open");
+  assert.equal(statusFor("required", { next: "done", round: 3, maxRounds: 3, open: 0 }), "tsp: required", "an ended loop leaves the debt standing");
+  const owed = offerHarness({ check: requiredVerdict("no test was added or changed with it") });
+  await owed.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(owed.statuses.at(-1), "tsp: required");
+  const quiet = offerHarness({ check: noneVerdict() });
+  await quiet.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(quiet.statuses.at(-1), undefined, "nothing owed clears the line");
+  const declined = offerHarness({ answer: "No" });
+  await declined.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(declined.statuses.at(-1), undefined, "an answered question is nothing owed");
+});
+
+test("a loop paints its round and open findings, survives a reload, and clears when it ends", async () => {
+  const fix = { next: "fix", round: 2, max_rounds: 3, items: [{ id: "F1" }, { id: "F2" }], message: "fix both", review: "review", lines: ["F1 at a.go", "F2 at b.go"] };
+  const h = offerHarness({ findings: { next: { stdout: JSON.stringify(fix), stderr: "", code: 1 } } });
+  await h.run("haz el TSP", []);
+  assert.equal(h.statuses.at(-1), "tsp: fix · round 2/3 · 2 open");
+  const reloaded = offerHarness({ entries: h.entries });
+  await reloaded.start("resume");
+  assert.equal(reloaded.statuses.at(-1), "tsp: fix · round 2/3 · 2 open", "a reload restores the loop the branch was in");
+  const done = { next: "done", round: 3, max_rounds: 3, items: [], message: "settled", review: "review", lines: [] };
+  const end = offerHarness({ entries: h.entries, findings: { next: { stdout: JSON.stringify(done), stderr: "", code: 0 } } });
+  await end.start("resume");
+  await end.run("haz el TSP", []);
+  assert.equal(end.statuses.at(-1), undefined, "a finished loop clears");
+});
+
+test("/tsp run starts the offer's own run, and a delegated child is told why it does not", async () => {
+  assert.deepEqual(parseTppCommand("run"), { kind: "run" });
+  assert.equal(parseTppCommand("run now").kind, "help");
+  const sent = [], commands = [];
+  tppExtension({
+    registerCommand: (name, options) => commands.push({ name, options }),
+    getAllTools: () => [], on: () => {},
+    sendUserMessage: (text) => sent.push(text),
+    appendEntry: () => {},
+  }, { env: {}, exec: async () => ({ stdout: "", stderr: "", code: 0 }) });
+  const ui = { notify: () => {}, setStatus: () => {}, setWidget: () => {} };
+  await commands[0].options.handler("run", { cwd: "/w", hasUI: true, ui });
+  assert.deepEqual(sent, ["haz el TSP"], "the same request the offer sends when it is accepted");
+  const { deps, rec } = harness();
+  const started = [];
+  await runTppCommand("run", { ...deps, startRun: () => started.push("run") });
+  assert.deepEqual(started, ["run"]);
+  assert.deepEqual(rec.exec, [], "no child process is spawned");
+  const child = harness();
+  child.deps.env = { GENTLE_PI_AGENTS_CHILD: "1" };
+  const childStarted = [];
+  await runTppCommand("run", { ...child.deps, startRun: () => childStarted.push("run") });
+  assert.deepEqual(childStarted, [], "a delegated subagent session starts nothing");
+  assert.match(child.rec.notify[0].message, /delegated subagent session/);
+});
+
+test("a report longer than the toast limit is shown in full through the panel", async () => {
+  const long = "line\n".repeat(400);
+  const shown = [];
+  const { deps, rec } = harness({ outcome: { stdout: long, stderr: "", code: 0 } });
+  await runTppCommand("check", { ...deps, show: (text) => shown.push(text) });
+  assert.deepEqual(shown, [long.trim()], "the panel gets the whole report");
+  assert.ok(rec.notify.at(-1).message.length <= 200, "the toast stays short and points at the panel");
+  const short = harness();
+  const none = [];
+  await runTppCommand("check", { ...short.deps, show: (text) => none.push(text) });
+  assert.deepEqual(none, [], "a short report stays in the toast");
+});
+
+test("a findings review longer than the toast limit is readable in full", async () => {
+  const lines = Array.from({ length: 40 }, (_, i) => `F${i + 1}: a finding with enough text to pass the toast limit ${"z".repeat(30)}`);
+  const done = { next: "done", round: 1, max_rounds: 3, items: [], message: "settled", review: "review", lines };
+  const h = offerHarness({ findings: { next: { stdout: JSON.stringify(done), stderr: "", code: 0 } } });
+  await h.run("haz el TSP", []);
+  assert.ok(h.widgets.length > 0, "the full review reaches the panel");
+  const shown = h.widgets.filter((w) => w.lines !== undefined).at(-1).lines.join("\n");
+  for (const line of lines) assert.ok(shown.includes(line), "every finding line is readable");
+  assert.ok(h.notes.at(-1).message.length < 300, "the toast is a pointer, not the report");
 });

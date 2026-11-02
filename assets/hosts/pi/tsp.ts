@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /** Protocol with internal/mode (Go); mode.VerifiedGentleSignal accepts only this exact pair. */
 export const GENTLE_OBSERVATION_ENV = "TPP_GENTLE_OBSERVATION";
@@ -26,7 +26,7 @@ export interface RegisteredTool {
 
 export type TppDispatch =
   | { kind: "check"; rest: string[] } | { kind: "feedback-summary" }
-  | { kind: "doctor"; mode: "auto" | "gentle" } | { kind: "help"; reason: string };
+  | { kind: "doctor"; mode: "auto" | "gentle" } | { kind: "run" } | { kind: "help"; reason: string };
 
 // The Gentle-owned tools registered by gentle-pi, by exact name — not any gentle_* prefix.
 const GENTLE_TOOLS = new Set(["gentle_odd_phase", "gentle_review", "gentle_review_capture", "gentle_review_capture_group", "gentle_review_scope"]);
@@ -38,7 +38,7 @@ export function observesGentleSession(tools: readonly RegisteredTool[]): boolean
   return tools.some((t) => GENTLE_TOOLS.has(t.name) || (t.sourceInfo?.path ?? "").split(/[\\/]+/).some((s) => GENTLE_DIRS.has(s)));
 }
 
-const HELP = "Usage: /tsp check [--path <plan.md>] [--suite \"<test command>\"] [--no-test-needed \"<reason>\"] · /tsp feedback --summary · /tsp doctor [--mode auto|gentle]";
+const HELP = "Usage: /tsp run · /tsp check [--path <plan.md>] [--suite \"<test command>\"] [--no-test-needed \"<reason>\"] · /tsp feedback --summary · /tsp doctor [--mode auto|gentle]";
 
 /** Splits arguments on whitespace, keeping a single- or double-quoted span as one word; null when a quote is left open. */
 function splitArgs(raw: string): string[] | null {
@@ -73,6 +73,7 @@ export function parseTppCommand(rawArgs: string): TppDispatch {
   switch (head) {
     case undefined: return { kind: "help", reason: "no subcommand" };
     case "check": return { kind: "check", rest };
+    case "run": return rest.length === 0 ? { kind: "run" } : { kind: "help", reason: "run takes no arguments" };
     case "feedback":
       return rest.length === 1 && rest[0] === "--summary" ? { kind: "feedback-summary" } : { kind: "help", reason: "feedback supports only --summary" };
     case "doctor": {
@@ -91,6 +92,7 @@ export function buildArgv(d: TppDispatch, cwd: string): string[] {
     case "check": return ["check", "--cwd", cwd, ...d.rest];
     case "feedback-summary": return ["feedback", "--summary"];
     case "doctor": return ["doctor", "--mode", d.mode];
+    case "run": return [];
     case "help": return [];
   }
 }
@@ -127,6 +129,8 @@ export interface TppDeps {
   exec: ExecTpp;
   notify: (message: string, type?: "info" | "warning" | "error") => void;
   setStatus?: (text: string | undefined) => void; // status-bar writer; called only when hasUI
+  startRun?: () => void; // `/tsp run`: the same request the offer sends when it is accepted
+  show?: (text: string | undefined) => void; // panel writer for a report a toast cannot hold
 }
 
 const MAX_NOTICE = 1200; // a notification is a toast, not a terminal
@@ -137,6 +141,12 @@ export async function runTppCommand(rawArgs: string, deps: TppDeps): Promise<voi
   const d = parseTppCommand(rawArgs);
   if (d.kind === "help") {
     if (deps.hasUI) deps.notify(`${d.reason}. ${HELP}`, "warning");
+    return;
+  }
+  if (d.kind === "run") {
+    // A delegated child has nobody to run for, and the user still deserves the reason.
+    if (deps.env.GENTLE_PI_AGENTS_CHILD === "1") { deps.notify(notice("tsp run: this is a delegated subagent session, so it starts no TSP run"), "warning"); return; }
+    deps.startRun?.();
     return;
   }
   const observed = observesGentleSession(deps.tools);
@@ -154,7 +164,14 @@ export async function runTppCommand(rawArgs: string, deps: TppDeps): Promise<voi
   if (deps.hasUI) {
     const output = outcome.stdout.trim() || outcome.stderr.trim();
     const ok = outcome.code === 0;
-    deps.notify(notice(output || `tsp ${label}: ${ok ? "ok" : `exited ${outcome.code}`}`), ok ? "info" : "error");
+    const full = output || `tsp ${label}: ${ok ? "ok" : `exited ${outcome.code}`}`;
+    // A toast is a summary: a report too long for it is shown whole in the panel, and the toast says where.
+    if (deps.show !== undefined && full.length > MAX_NOTICE) {
+      deps.show(full);
+      deps.notify(`tsp ${label}: ${ok ? "ok" : `exit ${outcome.code}`} — the full output is in the panel`, ok ? "info" : "error");
+    } else {
+      deps.notify(notice(full), ok ? "info" : "error");
+    }
     const suffix = observed && d.kind === "doctor" ? " · gentle session observed" : "";
     deps.setStatus?.(`tsp ${label}: ${ok ? "ok" : `exit ${outcome.code}`}${suffix}`);
   }
@@ -415,8 +432,26 @@ export function headAt(cwd: string): string {
 type Notify = (message: string, type?: "info" | "warning" | "error") => void;
 const REVIEW_TYPE = { 0: "info", 1: "warning" } as const;
 
+/** The loop the branch is in, as the status line shows it: what it owes next, how far it got, what is open. */
+export interface LoopStatus { next: string; round: number; maxRounds: number; open: number }
+
+/** What the status line shows: the loop the branch is in, else the debt the last check named; undefined clears it. */
+export function statusFor(decision: string | undefined, loop: LoopStatus | undefined): string | undefined {
+  if (loop !== undefined && (loop.next === "fix" || loop.next === "tsp")) {
+    const round = loop.round > 0 && loop.maxRounds > 0 ? ` · round ${loop.round}/${loop.maxRounds}` : "";
+    const open = loop.open > 0 ? ` · ${loop.open} open` : "";
+    return `tsp: ${loop.next}${round}${open}`;
+  }
+  if (decision === "ask" || decision === "required") return `tsp: ${decision}`;
+  return undefined;
+}
+
+/** What the offer remembers on the session branch: a reload, a resume or a fork rebuilds exactly this. */
+interface OfferState { declined: string[]; lastFix: string; pending: string; ran: boolean; own?: OwnMessage; loop?: LoopStatus }
+const STATE_TYPE = "tsp-state";
+
 /** What the loop sends the agent next ("" for nothing) and, for a fix answer, the tree and message that identify it. */
-export interface LoopStep { message: string; fix: string }
+export interface LoopStep { message: string; fix: string; loop?: LoopStatus }
 const NO_STEP: LoopStep = { message: "", fix: "" };
 
 /**
@@ -424,9 +459,14 @@ const NO_STEP: LoopStep = { message: "", fix: "" };
  * shows the user the review, the answer and its notes, and returns the step the agent is sent next. A tsp without
  * `findings next` gets today's review instead and the loop stays manual.
  */
-export async function reviewFindings(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, notify: Notify, record = true): Promise<LoopStep> {
+export async function reviewFindings(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, notify: Notify, record = true, show?: (text: string | undefined) => void): Promise<LoopStep> {
   const run = (sub: string, args: string[] = []) => exec(["findings", sub, "--cwd", cwd, ...args], { cwd, env: { ...env } });
   const shown = (r: ExecResult) => notice(r.stdout.trim() || r.stderr.trim() || `tsp findings: exited ${r.code}`);
+  // A review too long for a toast is shown whole in the panel; the toast keeps the verdict and says where it is.
+  const showOrNotify = (text: string, type: "info" | "warning" | "error") => {
+    if (show !== undefined && text.trim().length > MAX_NOTICE) { show(text); notify(`tsp findings: the whole review is in the panel`, type); return; }
+    notify(notice(text), type);
+  };
   try {
     if (record) {
       const recorded = await run("record");
@@ -435,7 +475,7 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
     const result = await run("next", ["--json"]);
     let parsed: unknown;
     try { parsed = JSON.parse(result.stdout.trim()); } catch { parsed = null; }
-    const reply = parsed && !Array.isArray(parsed) && typeof parsed === "object" ? parsed as { next?: unknown; review?: unknown; reason?: unknown; message?: unknown; notes?: unknown; tree?: unknown; lines?: unknown } : null;
+    const reply = parsed && !Array.isArray(parsed) && typeof parsed === "object" ? parsed as { next?: unknown; review?: unknown; reason?: unknown; message?: unknown; notes?: unknown; tree?: unknown; lines?: unknown; round?: unknown; max_rounds?: unknown; items?: unknown } : null;
     if (!reply || typeof reply.next !== "string" || !["fix", "tsp", "done", "stop", "error"].includes(reply.next)) {
       // `next` documents exit 2 as "cannot judge", and a binary that predates the subcommand answers with its
       // usage text instead. Both exit 2, so the answer decides: a usage reply is compatibility and keeps the
@@ -444,12 +484,12 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
       const review = await run("check");
       const shownReview = shown(review);
       if (/^usage (of findings|: tsp)/i.test(result.stderr.trim())) {
-        notify(shownReview, REVIEW_TYPE[review.code as 0 | 1] ?? "error");
+        showOrNotify(shownReview, REVIEW_TYPE[review.code as 0 | 1] ?? "error");
         return NO_STEP;
       }
       const diagnostic = [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n");
       const why = diagnostic === "" ? `tsp findings next: exited ${result.code} with no answer` : `tsp findings next: ${diagnostic}`;
-      notify(notice(`${why}\n${shownReview}`), "error");
+      showOrNotify(`${why}\n${shownReview}`, "error");
       return NO_STEP;
     }
     const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
@@ -458,12 +498,16 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
     // decide on) is shown; a fix or a round shows its reason and notes, and its message goes to the agent.
     const terminal = reply.next === "done" || reply.next === "stop" || reply.next === "error";
     const shownLines = [reply.review, ...list(reply.lines), ...(terminal ? [message] : [reply.reason, ...list(reply.notes)])];
-    notify(notice(shownLines.filter((s): s is string => typeof s === "string" && s !== "").join("\n")), reply.next === "stop" || reply.next === "error" ? "warning" : "info");
+    const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0);
+    const loop: LoopStatus = { next: reply.next, round: count(reply.round), maxRounds: count(reply.max_rounds), open: list(reply.items).length };
+    showOrNotify(shownLines.filter((s): s is string => typeof s === "string" && s !== "").join("\n"), reply.next === "stop" || reply.next === "error" ? "warning" : "info");
     if (reply.next === "fix") {
       const tree = typeof reply.tree === "string" ? reply.tree : "";
-      return { message: `${FIX_LEAD}\n\n${message}`, fix: tree === "" ? "" : `${tree}\n${message}` };
+      return { message: `${FIX_LEAD}\n\n${message}`, fix: tree === "" ? "" : `${tree}\n${message}`, loop };
     }
-    return { message: reply.next === "tsp" ? `${ROUND_LEAD}${message}` : "", fix: "" };
+    // The loop ended: nothing is running any more, so the panel that held its review is cleared.
+    if (terminal) show?.(undefined);
+    return { message: reply.next === "tsp" ? `${ROUND_LEAD}${message}` : "", fix: "", loop: terminal ? undefined : loop };
   } catch (error) {
     notify(notice(`tsp: ${error instanceof Error ? error.message : String(error)}`), "error");
     return NO_STEP;
@@ -496,7 +540,7 @@ export async function feedbackRequest(cwd: string, env: Readonly<Record<string, 
   }
 }
 
-function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
+function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   const optedOut = opts.optedOut ?? ((cwd: string) => existsSync(join(cwd, ".no-testing-gate")));
   const env = opts.env ?? process.env;
   const exec = opts.exec ?? execTpp;
@@ -515,24 +559,70 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   let fixRun = false;
   let pending = "";
   let lastFix = ""; // the fix answer the agent was last sent: the same one again after its fix run means it changed nothing
+  let ran = false; // a TSP run already happened on this branch: one run per branch, never one per turn
+  let continued = false; // a headless run already asked for its continuation, and this run has only one
+  let decision: string | undefined; // the debt the last check named, for the status line
+  let loop: LoopStatus | undefined; // the loop the branch is in, for the status line
   // A user's message that merely starts like one of the extension's own is the user's: it never runs the loop.
   let own: OwnMessage | undefined;
+  // The decisions live on the session branch, so a reload, a resume and a fork rebuild them instead of forgetting them.
+  const persist = () => pi.appendEntry(STATE_TYPE, { declined: [...declined], lastFix, pending, ran, own, loop } satisfies OfferState);
+  const restore = (ctx: { sessionManager?: { getBranch?: () => readonly unknown[] } }) => {
+    declined.clear(); lastFix = ""; pending = ""; ran = false; own = undefined; loop = undefined; decision = undefined;
+    try {
+      let data: unknown;
+      for (const entry of (ctx.sessionManager?.getBranch?.() ?? []) as { type?: unknown; customType?: unknown; data?: unknown }[]) {
+        if (entry?.type === "custom" && entry.customType === STATE_TYPE) data = entry.data;
+      }
+      const s = (data !== null && typeof data === "object" ? data : {}) as Record<string, unknown>;
+      if (Array.isArray(s.declined)) for (const path of s.declined) if (typeof path === "string") declined.add(path);
+      if (typeof s.lastFix === "string") lastFix = s.lastFix;
+      if (typeof s.pending === "string") pending = s.pending;
+      if (s.ran === true) ran = true;
+      const saved = s.loop as Partial<LoopStatus> | undefined;
+      loop = saved !== null && typeof saved === "object" && typeof saved.next === "string" && ["fix", "tsp", "done", "stop", "error"].includes(saved.next)
+        && [saved.round, saved.maxRounds, saved.open].every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0)
+        ? { next: saved.next, round: saved.round as number, maxRounds: saved.maxRounds as number, open: saved.open as number } : undefined;
+      const sent = s.own as { prompt?: unknown; kind?: unknown } | undefined;
+      if (sent !== null && typeof sent === "object" && typeof sent.prompt === "string" && (sent.kind === "feedback" || sent.kind === "fix" || sent.kind === "round")) {
+        own = { prompt: sent.prompt, kind: sent.kind };
+      }
+    } catch {
+      // State an older version wrote, or that a broken write left behind, is ignored: it never fails a session.
+    }
+  };
   const send = (prompt: string, kind: OwnMessage["kind"]) => {
     own = { prompt, kind };
     pi.sendUserMessage(prompt);
+    persist();
   };
+  pi.on("session_start", (event, ctx) => {
+    restore(ctx);
+    // A loop that was waiting on a run when the session was reloaded resumes here, once, instead of stalling.
+    // A new session has nothing to resume, and a fork is an alternative history: it keeps the state, not the send.
+    const reason = (event as { reason?: unknown }).reason;
+    if (reason !== "new" && reason !== "fork" && pending !== "") { const next = pending; pending = ""; send(next, loopKind(next)); }
+    if (ctx.hasUI) paint(ctx);
+  });
+  /** Writes the status line; a status write never fails a turn, and a host without one simply has no line. */
+  const paint = (ctx: ExtensionContext) => {
+    try { ctx.ui.setStatus("tsp", statusFor(decision, loop)); } catch { /* a status write never fails a turn */ }
+  };
+  // /tree changes the branch under the session: its entries are the state from now on.
+  pi.on("session_tree", (_event, ctx) => restore(ctx));
   pi.on("before_agent_start", (event, ctx) => {
     edited.clear();
     turnHead = head(ctx.cwd);
     const user = event.messageType === "user";
     const mine = user && own !== undefined && (event.prompt ?? "").trim() === own.prompt.trim() ? own.kind : undefined;
-    if (user) { own = undefined; feedbackGiven = false; }
+    if (user) { if (own !== undefined) { own = undefined; persist(); } feedbackGiven = false; }
     feedbackRun = mine === "feedback";
     if (user && !feedbackRun) pending = "";
     fixRun = mine === "fix";
     tspRun = !feedbackRun && !fixRun && user && (mine === "round" || isTspRequest(event.prompt));
     // A run that can never ask, or that is the TSP itself, needs no snapshot: reading git costs a process.
-    opened = child || !ctx.hasUI || optedOut(ctx.cwd) || feedbackRun || fixRun || tspRun ? undefined : probe.state(ctx.cwd);
+    // A headless session still needs it: the repository's requirement reaches the agent through the boundary.
+    opened = child || optedOut(ctx.cwd) || feedbackRun || fixRun || tspRun ? undefined : probe.state(ctx.cwd);
   });
   pi.on("tool_result", (event, ctx) => {
     if (!feedbackRun && !fixRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) tspRun = true;
@@ -540,49 +630,83 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     const path = (event.input as { path?: unknown }).path;
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string" && isSourcePath(path)) edited.add(path);
   });
-  pi.on("agent_settled", async (event, ctx) => {
+  /** The source paths this run changed, from the edit tools and the working tree it opened; never filtered by a decline. */
+  const collect = (cwd: string): string[] => {
+    const fresh = new Set(edited);
+    if (opened !== undefined) {
+      const now = probe.state(cwd);
+      if (now !== undefined) {
+        for (const [path, hash] of now.files) if (opened.files.get(path) !== hash) fresh.add(path);
+        // A work unit committed in this turn leaves no worktree change: the commits it made are its changes.
+        if (opened.head !== "" && now.head !== "" && now.head !== opened.head) {
+          for (const path of probe.committed(cwd, opened.head, now.head)) fresh.add(path);
+        }
+      }
+    }
+    return [...fresh].filter(isSourcePath);
+  };
+  pi.on("agent_before_settle", async (event, ctx) => {
+    // Without a UI nobody can answer the offer's question, so only the repository's own requirement runs, and it
+    // reaches the agent as one continuation: an aborted run never fires this boundary, a child has nobody to run
+    // for, and the branch's run or this turn's continuation already answers it.
+    if (ctx.hasUI || child || continued || ran || feedbackRun || fixRun || tspRun || optedOut(ctx.cwd)) return;
+    const paths = collect(ctx.cwd);
+    if (paths.length === 0) return;
+    const verdict = await checkVerdict(ctx.cwd, env, exec, paths, turnHead);
+    if (verdict === undefined || verdict === "stale" || verdict.decision !== DECISION_REQUIRED) return;
+    continued = true;
+    return {
+      entries: [...((event as { entries?: readonly unknown[] }).entries ?? []), { type: "custom_message", customType: "tsp-required", content: TSP_PROMPT, display: false }],
+      continue: true,
+    };
+  });
+  const settle = async (event: { aborted: boolean }, ctx: ExtensionContext) => {
+    continued = false;
     // The paths this turn changed, unfiltered: what the repository requires is read before a remembered
     // decline is applied, because a decline answers one question and cannot silence a later policy.
-    const fresh = new Set(edited);
+    const fresh = collect(ctx.cwd);
     edited.clear();
-    const openedNow = opened;
     opened = undefined;
-    if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd)) { pending = ""; return; }
-    if (feedbackRun) {
-      if (pending !== "") send(pending, loopKind(pending));
+    if (event.aborted || child || optedOut(ctx.cwd)) { pending = ""; return; }
+    if (!ctx.hasUI) {
+      // The boundary requested the run; a TSP run that did happen still marks the branch, so it is not requested twice.
+      if (tspRun) { ran = true; persist(); }
       pending = "";
+      return;
+    }
+    if (feedbackRun) {
+      if (pending !== "") { const next = pending; pending = ""; send(next, loopKind(next)); }
+      persist();
       return;
     }
     if (tspRun || fixRun) {
       const notify: Notify = (message, type) => ctx.ui.notify(message, type);
-      const step = await reviewFindings(ctx.cwd, env, exec, notify, tspRun);
+      const step = await reviewFindings(ctx.cwd, env, exec, notify, tspRun, (text) => ctx.ui.setWidget("tsp-review", text === undefined ? undefined : text.split("\n")));
+      loop = step.loop;
+      if (tspRun) { ran = true; decision = undefined; persist(); }
       if (fixRun && step.fix !== "" && step.fix === lastFix) {
         // The fix run left the tree and the items as they were: sending the same fix again would never end.
         lastFix = "";
+        loop = undefined; // the loop stopped: nothing is running any more
+        persist();
         notify(notice("the fix run changed nothing tsp findings next can see: the TSP loop stops here and needs your decision"), "warning");
         return;
       }
       lastFix = step.fix;
+      persist();
       const request = tspRun && !feedbackGiven ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
-      if (request !== "") { pending = step.message; send(request, "feedback"); }
+      if (request !== "") { pending = step.message; persist(); send(request, "feedback"); }
       else if (step.message !== "") send(step.message, loopKind(step.message));
       return;
     }
-    // Only now, for a run that can ask: the working tree as it is, against the one this run opened.
-    if (openedNow !== undefined) {
-      const now = probe.state(ctx.cwd);
-      if (now !== undefined) {
-        for (const [path, hash] of now.files) if (openedNow.files.get(path) !== hash) fresh.add(path);
-        // A work unit committed in this turn leaves no worktree change: the commits it made are its changes.
-        if (openedNow.head !== "" && now.head !== "" && now.head !== openedNow.head) {
-          for (const path of probe.committed(ctx.cwd, openedNow.head, now.head)) fresh.add(path);
-        }
-      }
-    }
-    const paths = [...fresh].filter(isSourcePath);
+    const paths = fresh;
     if (paths.length === 0) return;
+    // The branch's run already happened; the check still answers ask (or required) until a round is booked, and
+    // repeating the run every turn is exactly the loop #342 reports. A fresh session offers again.
+    if (ran) return;
     const verdict = await checkVerdict(ctx.cwd, env, exec, paths, turnHead);
     if (verdict === "stale") {
+      decision = undefined; // a check that cannot answer names no debt
       // Once per session: an install that cannot answer is worth one sentence, not one per turn.
       if (!staleNotified) {
         staleNotified = true;
@@ -592,6 +716,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     }
     if (verdict === undefined) return;
     if (verdict.decision === DECISION_ERROR) {
+      decision = undefined;
       // A policy that cannot be read may mean a required run was skipped: silence would hide exactly that.
       if (!errorNotified) {
         errorNotified = true;
@@ -600,10 +725,12 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
       }
       return;
     }
-    if (verdict.decision === DECISION_NONE) return;
+    if (verdict.decision === DECISION_NONE) { decision = DECISION_NONE; return; }
     if (verdict.decision === DECISION_REQUIRED) {
+      decision = DECISION_REQUIRED;
       // The repository decided this run happens; asking would be a question whose answer is already known.
       declined.clear();
+      persist();
       const why = verdict.reason === "" ? "the repository requires it" : verdict.reason;
       ctx.ui.notify(notice(`TSP required: ${why}`), "info");
       pi.sendUserMessage(TSP_PROMPT);
@@ -611,27 +738,37 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     }
     const undecided = paths.filter((p) => !declined.has(p));
     if (undecided.length === 0) return;
+    decision = DECISION_ASK;
     const owed = verdict.named ? verdict.debt : verdict.reason;
     if (owed === "") return;
     const answer = await ctx.ui.select(`${OFFER_QUESTION}\n${owed}`, [OFFER_YES, OFFER_NO]);
     if (answer === OFFER_YES) {
       declined.clear();
+      persist();
       pi.sendUserMessage(TSP_PROMPT);
     } else if (answer === OFFER_NO) {
       paths.forEach((p) => declined.add(p));
+      decision = undefined; // the human answered: nothing is owed until the next change
+      persist();
     }
+  };
+  pi.on("agent_settled", async (event, ctx) => {
+    try { await settle(event, ctx); } finally { if (ctx.hasUI) paint(ctx); }
   });
+  return () => send(TSP_PROMPT, "tsp");
 }
 
 export default function (pi: ExtensionAPI, offer: OfferOptions = {}) {
-  registerOffer(pi, offer);
+  const startRun = registerOffer(pi, offer);
   const register = (name: "tsp" | "tpp") => pi.registerCommand(name, {
-    description: `${name} check · feedback --summary · doctor [--mode auto|gentle] in this session`,
+    description: `${name} run · check · feedback --summary · doctor [--mode auto|gentle] in this session`,
     handler: (args: string, ctx: ExtensionCommandContext) =>
       runTppCommand(args, {
         tools: pi.getAllTools(), cwd: ctx.cwd, env: process.env, hasUI: ctx.hasUI, exec: execTpp,
         notify: (message, type) => ctx.ui.notify(message, type),
         setStatus: (text) => ctx.ui.setStatus("tsp", text),
+        startRun,
+        show: (text) => ctx.ui.setWidget("tsp-output", text === undefined ? undefined : text.split("\n")),
       }),
   });
   register("tsp");
