@@ -465,7 +465,18 @@ func TestHasRoundReadsTheBranchRecord(t *testing.T) {
 		t.Fatalf("another branch: ran=%v e=%v", ran, e)
 	}
 	command(t, d, "git", "switch", "--detach")
-	if _, e := findings.HasRound(d); e == nil {
-		t.Fatal("a detached HEAD has no branch record to read")
+	if _, e := findings.HasRound(d); e == nil || !findings.NoRecord(e) {
+		t.Fatalf("a detached HEAD has no branch record to read: e=%v", e)
+	}
+	command(t, d, "git", "switch", "topic")
+	files, _ := filepath.Glob(filepath.Join(os.Getenv("TSP_HOME"), "findings", "*", "*.json"))
+	if len(files) == 0 {
+		t.Fatal("the round left no registry to corrupt")
+	}
+	if e := os.WriteFile(files[0], []byte("{broken"), 0o644); e != nil {
+		t.Fatalf("corrupt the registry: %v", e)
+	}
+	if _, e := findings.HasRound(d); e == nil || findings.NoRecord(e) {
+		t.Fatalf("a registry that is there and unreadable is not a missing record: e=%v", e)
 	}
 }

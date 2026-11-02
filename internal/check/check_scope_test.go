@@ -2,6 +2,7 @@ package check
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -149,7 +150,10 @@ func TestCheckScopedTestedChangeOwesATSPRunOncePerBranch(t *testing.T) {
 	}{
 		{"no run on record owes one", func(string) (bool, error) { return false, nil }, 1, "a test came with it (tests/app.test.js), but no TSP run is on record for this branch"},
 		{"a run on record settles it", func(string) (bool, error) { return true, nil }, 0, "a test was added or changed with it: tests/app.test.js"},
-		{"an unreadable record keeps the tree's answer", func(string) (bool, error) { return false, errors.New("detached HEAD") }, 0, "a test was added or changed with it: tests/app.test.js"},
+		{"a branch with no record to read keeps the tree's answer", func(string) (bool, error) { return false, fmt.Errorf("%w: detached HEAD", ErrNoRecord) }, 0, "a test was added or changed with it: tests/app.test.js"},
+		{"a record that is there and unreadable is reported", func(string) (bool, error) {
+			return false, errors.New("unreadable registry: unexpected end of JSON input")
+		}, 2, "the branch's findings record could not be read: unreadable registry: unexpected end of JSON input"},
 		{"no record reader keeps the tree's answer", nil, 0, "a test was added or changed with it: tests/app.test.js"},
 	}
 	for _, tc := range cases {
