@@ -415,6 +415,10 @@ export function headAt(cwd: string): string {
 type Notify = (message: string, type?: "info" | "warning" | "error") => void;
 const REVIEW_TYPE = { 0: "info", 1: "warning" } as const;
 
+/** What the offer remembers on the session branch: a reload, a resume or a fork rebuilds exactly this. */
+interface OfferState { declined: string[]; lastFix: string; pending: string; ran: boolean; own?: OwnMessage }
+const STATE_TYPE = "tsp-state";
+
 /** What the loop sends the agent next ("" for nothing) and, for a fix answer, the tree and message that identify it. */
 export interface LoopStep { message: string; fix: string }
 const NO_STEP: LoopStep = { message: "", fix: "" };
@@ -515,18 +519,51 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
   let fixRun = false;
   let pending = "";
   let lastFix = ""; // the fix answer the agent was last sent: the same one again after its fix run means it changed nothing
+  let ran = false; // a TSP run already happened on this branch: one run per branch, never one per turn
   // A user's message that merely starts like one of the extension's own is the user's: it never runs the loop.
   let own: OwnMessage | undefined;
+  // The decisions live on the session branch, so a reload, a resume and a fork rebuild them instead of forgetting them.
+  const persist = () => pi.appendEntry(STATE_TYPE, { declined: [...declined], lastFix, pending, ran, own } satisfies OfferState);
+  const restore = (ctx: { sessionManager?: { getBranch?: () => readonly unknown[] } }) => {
+    declined.clear(); lastFix = ""; pending = ""; ran = false; own = undefined;
+    try {
+      let data: unknown;
+      for (const entry of (ctx.sessionManager?.getBranch?.() ?? []) as { type?: unknown; customType?: unknown; data?: unknown }[]) {
+        if (entry?.type === "custom" && entry.customType === STATE_TYPE) data = entry.data;
+      }
+      const s = (data !== null && typeof data === "object" ? data : {}) as Record<string, unknown>;
+      if (Array.isArray(s.declined)) for (const path of s.declined) if (typeof path === "string") declined.add(path);
+      if (typeof s.lastFix === "string") lastFix = s.lastFix;
+      if (typeof s.pending === "string") pending = s.pending;
+      if (s.ran === true) ran = true;
+      const sent = s.own as { prompt?: unknown; kind?: unknown } | undefined;
+      if (sent !== null && typeof sent === "object" && typeof sent.prompt === "string" && (sent.kind === "feedback" || sent.kind === "fix" || sent.kind === "round")) {
+        own = { prompt: sent.prompt, kind: sent.kind };
+      }
+    } catch {
+      // State an older version wrote, or that a broken write left behind, is ignored: it never fails a session.
+    }
+  };
   const send = (prompt: string, kind: OwnMessage["kind"]) => {
     own = { prompt, kind };
     pi.sendUserMessage(prompt);
+    persist();
   };
+  pi.on("session_start", (event, ctx) => {
+    restore(ctx);
+    // A loop that was waiting on a run when the session was reloaded resumes here, once, instead of stalling.
+    // A new session has nothing to resume, and a fork is an alternative history: it keeps the state, not the send.
+    const reason = (event as { reason?: unknown }).reason;
+    if (reason !== "new" && reason !== "fork" && pending !== "") { const next = pending; pending = ""; send(next, loopKind(next)); }
+  });
+  // /tree changes the branch under the session: its entries are the state from now on.
+  pi.on("session_tree", (_event, ctx) => restore(ctx));
   pi.on("before_agent_start", (event, ctx) => {
     edited.clear();
     turnHead = head(ctx.cwd);
     const user = event.messageType === "user";
     const mine = user && own !== undefined && (event.prompt ?? "").trim() === own.prompt.trim() ? own.kind : undefined;
-    if (user) { own = undefined; feedbackGiven = false; }
+    if (user) { if (own !== undefined) { own = undefined; persist(); } feedbackGiven = false; }
     feedbackRun = mine === "feedback";
     if (user && !feedbackRun) pending = "";
     fixRun = mine === "fix";
@@ -549,22 +586,25 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     opened = undefined;
     if (event.aborted || child || !ctx.hasUI || optedOut(ctx.cwd)) { pending = ""; return; }
     if (feedbackRun) {
-      if (pending !== "") send(pending, loopKind(pending));
-      pending = "";
+      if (pending !== "") { const next = pending; pending = ""; send(next, loopKind(next)); }
+      persist();
       return;
     }
     if (tspRun || fixRun) {
       const notify: Notify = (message, type) => ctx.ui.notify(message, type);
       const step = await reviewFindings(ctx.cwd, env, exec, notify, tspRun);
+      if (tspRun) { ran = true; persist(); }
       if (fixRun && step.fix !== "" && step.fix === lastFix) {
         // The fix run left the tree and the items as they were: sending the same fix again would never end.
         lastFix = "";
+        persist();
         notify(notice("the fix run changed nothing tsp findings next can see: the TSP loop stops here and needs your decision"), "warning");
         return;
       }
       lastFix = step.fix;
+      persist();
       const request = tspRun && !feedbackGiven ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
-      if (request !== "") { pending = step.message; send(request, "feedback"); }
+      if (request !== "") { pending = step.message; persist(); send(request, "feedback"); }
       else if (step.message !== "") send(step.message, loopKind(step.message));
       return;
     }
@@ -581,6 +621,9 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     }
     const paths = [...fresh].filter(isSourcePath);
     if (paths.length === 0) return;
+    // The branch's run already happened; the check still answers ask (or required) until a round is booked, and
+    // repeating the run every turn is exactly the loop #342 reports. A fresh session offers again.
+    if (ran) return;
     const verdict = await checkVerdict(ctx.cwd, env, exec, paths, turnHead);
     if (verdict === "stale") {
       // Once per session: an install that cannot answer is worth one sentence, not one per turn.
@@ -604,6 +647,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     if (verdict.decision === DECISION_REQUIRED) {
       // The repository decided this run happens; asking would be a question whose answer is already known.
       declined.clear();
+      persist();
       const why = verdict.reason === "" ? "the repository requires it" : verdict.reason;
       ctx.ui.notify(notice(`TSP required: ${why}`), "info");
       pi.sendUserMessage(TSP_PROMPT);
@@ -616,9 +660,11 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): void {
     const answer = await ctx.ui.select(`${OFFER_QUESTION}\n${owed}`, [OFFER_YES, OFFER_NO]);
     if (answer === OFFER_YES) {
       declined.clear();
+      persist();
       pi.sendUserMessage(TSP_PROMPT);
     } else if (answer === OFFER_NO) {
       paths.forEach((p) => declined.add(p));
+      persist();
     }
   });
 }

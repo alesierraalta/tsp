@@ -198,7 +198,7 @@ const errorVerdict = (reason) => ({ stdout: JSON.stringify({ decision: "error", 
 // chat when the repository left that to the human; "Sí" sends the identity prompt "haz el TSP" as if the user typed
 // it. Every collaborator is faked: no Pi, no files, no git.
 function offerHarness(opts = {}) {
-  const { hasUI = true, optedOut = false, env = {}, findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), probe } = opts;
+  const { hasUI = true, optedOut = false, env = {}, findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), probe, entries = [], feedback } = opts;
   const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
   const asked = [], sent = [], calls = [], notes = [];
   // findings maps a findings subcommand to the child it answers with; a missing one answers exit 0, no output.
@@ -206,7 +206,7 @@ function offerHarness(opts = {}) {
   const exec = async (argv, o) => {
     calls.push({ argv: [...argv], cwd: o.cwd });
     // A feedback template nobody configured answers as tsp does with feedback switched off: no request, no notice.
-    const fallback = argv[0] === "feedback" ? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
+    const fallback = argv[0] === "feedback" ? feedback ?? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
     const outcome = argv[0] === "check" && argv[1] === "--cwd"
       ? (typeof check === "function" ? check(calls.length) : check)
       : findings[argv[1]] ?? fallback;
@@ -214,17 +214,20 @@ function offerHarness(opts = {}) {
     return outcome;
   };
   const handlers = {};
+  // The session branch: entries survive a reload, a resume and a fork when a harness shares the same array.
   const pi = {
     registerCommand: () => {},
     getAllTools: () => [],
     on: (event, handler) => { handlers[event] = handler; },
     sendUserMessage: (text) => sent.push(text),
+    appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }),
   };
   tppExtension(pi, { optedOut: () => optedOut, env, exec, head, probe });
-  const ctx = { hasUI, cwd: "/repo", ui: {
+  const ctx = { hasUI, cwd: "/repo", sessionManager: { getBranch: () => entries }, ui: {
     select: async (title, options) => { asked.push({ title, options }); return answer; },
     notify: (message, type) => notes.push({ message, type }),
   } };
+  const start = async (reason = "startup") => { await handlers.session_start?.({ type: "session_start", reason }, ctx); };
   const run = async (prompt, edits, { aborted = false } = {}) => {
     await handlers.before_agent_start?.({ type: "before_agent_start", messageType: "user", prompt }, ctx);
     for (const [toolName, path, isError = false, output = ""] of edits) {
@@ -232,9 +235,12 @@ function offerHarness(opts = {}) {
       const content = output === "" ? [] : [{ type: "text", text: output }];
       await handlers.tool_result({ type: "tool_result", toolName, input, isError, content }, ctx);
     }
+    // An aborted run skips the actionable boundary, as Pi does.
+    const proposal = aborted ? undefined : await handlers.agent_before_settle?.({ type: "agent_before_settle", entries: [] }, ctx);
     await handlers.agent_settled({ type: "agent_settled", aborted }, ctx);
+    return proposal;
   };
-  return { asked, sent, calls, notes, run };
+  return { asked, sent, calls, notes, entries, run, start };
 }
 
 // The check's argv: one object of output, the turn's own base commit, and one --paths per path.
@@ -757,8 +763,10 @@ test("the feedback run itself reviews no findings, asks no TSP question and requ
   assert.equal(h.calls.length, before, "no findings review, no check, no template: the loop ends here");
   assert.deepEqual(h.asked, []);
   assert.equal(h.sent.length, 1);
-  await h.run("change a", [["edit", "a.go"]]);
-  assert.equal(h.asked.length, 1, "the next ordinary run is offered TSP again");
+  // A branch that already had its TSP run is not asked again (one run per branch, #346/#342); a fresh session is.
+  const next = offerHarness();
+  await next.run("change a", [["edit", "a.go"]]);
+  assert.equal(next.asked.length, 1, "a fresh session is offered TSP again");
 });
 
 test("only a TSP run asks for feedback: an ordinary, aborted, headless, opted-out or child run never does", async () => {
@@ -917,4 +925,79 @@ test("a feedback submission whose failure a pipe hid is not taken as recorded", 
   await h.run("haz el TSP", [["bash", "tsp feedback --file /tmp/tsp-fb.txt 2>&1 | tail -1", false, "feedback: verdict is empty\n"]]);
   assert.equal(h.sent.length, 1);
   assert.ok(h.sent[0].startsWith(FEEDBACK_LEAD), "tail exited 0 but tsp recorded nothing, so the request still goes out");
+});
+
+// The offer's decisions live on the session branch: a reload, a resume or a fork rebuilds them from the entries
+// the extension appended, and a new session starts empty. The harness shares one entries array to model a branch.
+const tspState = (entries) => entries.filter((e) => e.type === "custom" && e.customType === "tsp-state").at(-1)?.data;
+
+test("a path declined before a reload is not offered again after it", async () => {
+  const entries = [];
+  const first = offerHarness({ entries, answer: "No" });
+  await first.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(first.asked.length, 1, "the first turn asks");
+  const resumed = offerHarness({ entries });
+  await resumed.start("resume");
+  await resumed.run("change a", [["edit", "internal/a.go"]]);
+  assert.deepEqual(resumed.asked, [], "the decline survives the reload");
+});
+
+test("a loop waiting on its feedback run delivers its pending message once after a reload", async () => {
+  const entries = [];
+  const findings = { next: { stdout: JSON.stringify({ next: "tsp", message: "round two", review: "review 1" }), stderr: "", code: 0 }, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } };
+  const first = offerHarness({ entries, findings });
+  await first.run("haz el TSP", []);
+  assert.equal(first.sent.length, 1, "the TSP run asked for its feedback");
+  assert.ok(first.sent[0].startsWith(FEEDBACK_LEAD), first.sent[0]);
+  const resumed = offerHarness({ entries, findings });
+  await resumed.start("resume");
+  assert.deepEqual(resumed.sent, ["haz el TSP — round two"], "the loop resumes where it stopped, without asking for the run again");
+});
+
+test("a fix run that repeats the same answer after a reload stops instead of sending it again", async () => {
+  const fix = { stdout: JSON.stringify({ next: "fix", tree: "t1", review: "review 1", reason: "round 1 of 5 left 1 item unsettled", message: "F1 open a_test.go TestA" }), stderr: "", code: 1 };
+  const entries = [];
+  const first = offerHarness({ entries, findings: { next: fix } });
+  await first.run("haz el TSP", []);
+  assert.deepEqual(first.sent, ["The TSP loop found defects to settle.\n\nF1 open a_test.go TestA"]);
+  const resumed = offerHarness({ entries, findings: { next: fix } });
+  await resumed.start("resume");
+  await resumed.run("The TSP loop found defects to settle.\n\nF1 open a_test.go TestA", []);
+  assert.deepEqual(resumed.sent, [], "the same fix is not sent twice");
+  assert.ok(resumed.notes.some((n) => /changed nothing/.test(n.message)), "the loop says why it stopped");
+});
+
+test("a TSP run on the branch stops the offer from asking again for the same uncommitted run", async () => {
+  const entries = [];
+  const done = { stdout: JSON.stringify({ next: "done", review: "review 1" }), stderr: "", code: 0 };
+  const h = offerHarness({ entries, findings: { next: done } });
+  await h.run("haz el TSP", []);
+  assert.equal(tspState(entries).ran, true, "the branch records that its TSP run happened");
+  await h.run("change a", [["edit", "internal/a.go"]]);
+  assert.deepEqual(h.asked, [], "the check still answers ask, and the offer does not repeat the run");
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "check"), [], "the offer does not even ask the check again");
+});
+
+test("a fork starts from the state of its parent branch, and a new session starts empty", async () => {
+  const entries = [];
+  const parent = offerHarness({ entries, answer: "No" });
+  await parent.run("change a", [["edit", "internal/a.go"]]);
+  const fork = offerHarness({ entries });
+  await fork.start("fork");
+  await fork.run("change a", [["edit", "internal/a.go"]]);
+  assert.deepEqual(fork.asked, [], "the fork carries the parent's decline");
+  const fresh = offerHarness();
+  await fresh.start("new");
+  await fresh.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(fresh.asked.length, 1, "a new session starts empty");
+});
+
+test("state an older version wrote, or that is corrupted, is ignored without an error", async () => {
+  for (const data of ["{broken", { declined: 42, lastFix: 7, pending: null, ran: "yes", own: { prompt: 1, kind: "nope" } }, null, [1, 2]]) {
+    const entries = [{ type: "custom", customType: "tsp-state", data }];
+    const h = offerHarness({ entries });
+    await h.start("resume");
+    await h.run("change a", [["edit", "internal/a.go"]]);
+    assert.equal(h.asked.length, 1, `corrupt state ${JSON.stringify(data)} is ignored, not obeyed`);
+  }
 });
