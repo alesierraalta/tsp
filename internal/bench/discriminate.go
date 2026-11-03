@@ -257,12 +257,11 @@ func countDistinct(byDefect map[string][]string) int {
 // agentTestFiles lists test files the agent added or changed, relative to the workspace.
 func agentTestFiles(fixture, ws string) ([]string, error) {
 	var out []string
-	known := gitKnownFiles(ws)
 	err := filepath.Walk(ws, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		changed, skip, err := changedTest(path, info, fixture, ws, known)
+		changed, skip, err := changedTest(path, info, fixture, ws)
 		if skip {
 			return filepath.SkipDir
 		}
@@ -282,7 +281,7 @@ func agentTestFiles(fixture, ws string) ([]string, error) {
 // changedTest reports whether a walked path is a test file the change made, and whether the walk must stay out
 // of it. Only files git knows count: a benchmark run leaves ignored copies (results/, .agent-config/) that look
 // like the repository's tests and would be staged as the change's own, overflowing the suite's argument list.
-func changedTest(path string, info os.FileInfo, fixture, ws string, known map[string]bool) (bool, bool, error) {
+func changedTest(path string, info os.FileInfo, fixture, ws string) (bool, bool, error) {
 	rel, _ := filepath.Rel(ws, path)
 	if info.IsDir() {
 		if rel != "." && ignoredPathRe.MatchString(filepath.ToSlash(rel)+"/") {
@@ -294,7 +293,7 @@ func changedTest(path string, info os.FileInfo, fixture, ws string, known map[st
 		}
 		return false, false, nil
 	}
-	if !isTestFile(rel) || (known != nil && !known[filepath.ToSlash(rel)]) {
+	if !isTestFile(rel) {
 		return false, false, nil
 	}
 	got, err := os.ReadFile(path)

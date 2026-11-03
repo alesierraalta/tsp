@@ -82,7 +82,8 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 		}
 	}
 	rep.Suite = suite
-	before, after, out, err := runSuites(head, root, files, suite, timeout)
+	run := runFiles(root, files)
+	before, after, out, err := runSuites(head, root, run, suite, timeout)
 	if err != nil {
 		return rep, err
 	}
@@ -132,6 +133,42 @@ func redCheckTree(dir, rev string, agentFiles []string) (root, head string, file
 		}
 	}
 	return root, head, files, nil
+}
+
+// runFiles are the changed tests a base run executes: the ones git knows, plus an ignored witness the record
+// still has to name, never a copied repository that declares its own module.
+func runFiles(root string, files []string) []string {
+	known := gitKnownFiles(root)
+	if known == nil {
+		return files
+	}
+	var kept []string
+	for _, f := range files {
+		if !known[filepath.ToSlash(f)] && inNestedModule(root, path.Dir(f)) {
+			continue
+		}
+		kept = append(kept, f)
+	}
+	if len(kept) == 0 {
+		return files
+	}
+	return kept
+}
+
+// inNestedModule reports whether dir sits under a module of its own: a copied repository is not a package of the
+// module the run happens in, and `go test` refuses to build it from here.
+func inNestedModule(root, dir string) bool {
+	for dir != "." && dir != "/" && dir != "" {
+		if _, err := os.Stat(filepath.Join(root, dir, "go.mod")); err == nil {
+			return true
+		}
+		next := path.Dir(dir)
+		if next == dir {
+			break
+		}
+		dir = next
+	}
+	return false
 }
 
 // runSuites runs the suite at HEAD and again with the change's test files: the two outcomes judgeTests compares.
@@ -401,73 +438,113 @@ func allPlainJavaScript(files []string) bool {
 // inferRedCheckSuite picks the command that runs the changed tests: their Go packages, the Python files under
 // pytest, or the Node files.
 func inferRedCheckSuite(root string, files []string) (string, error) {
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
-		known := gitKnownFiles(root)
-		seen := map[string]bool{}
-		var pkgs, all []string
-		for _, f := range files {
-			if !strings.HasSuffix(f, "_test.go") {
-				continue
-			}
-			pkg := "./" + path.Dir(f)
-			if pkg == "./." {
-				pkg = "."
-			}
-			if !seen[pkg] {
-				seen[pkg] = true
-				all = append(all, pkg)
-				// An ignored workspace is not a package of this module: the benchmark's copied
-				// repositories made the inferred suite a list the repository does not build.
-				if known == nil || known[filepath.ToSlash(f)] {
-					pkgs = append(pkgs, pkg)
-				}
-			}
+	if suite, ok := goSuite(root, files); ok {
+		return suite, nil
+	}
+	if suite, ok := pySuite(root, files); ok {
+		return suite, nil
+	}
+	if suite, ok := nodeSuite(root, files); ok {
+		return suite, nil
+	}
+	return "", errors.New("cannot infer how to run the changed tests: pass --suite")
+}
+
+// goSuite is the Go packages the changed tests live in, dropping an ignored copy of another module.
+func goSuite(root string, files []string) (string, bool) {
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		return "", false
+	}
+	known := gitKnownFiles(root)
+	seen := map[string]bool{}
+	var pkgs, all []string
+	for _, f := range files {
+		if !strings.HasSuffix(f, "_test.go") {
+			continue
 		}
-		// Every changed test living under an ignored path still needs a suite: the record reports
-		// those witnesses and skips them, which it cannot do without running the suite.
-		if len(pkgs) == 0 {
-			pkgs = all
+		pkg := "./" + path.Dir(f)
+		if pkg == "./." {
+			pkg = "."
 		}
-		if len(pkgs) > 0 {
-			sort.Strings(pkgs)
-			return "go test -count=1 " + strings.Join(pkgs, " "), nil
+		if seen[pkg] {
+			continue
+		}
+		seen[pkg] = true
+		all = append(all, pkg)
+		// An ignored workspace is not a package of this module: the benchmark's copied repositories made
+		// the inferred suite a list the repository does not build. A copied repository declares its own
+		// module, which is what tells it apart from an ignored witness the record still has to name.
+		if known == nil || known[filepath.ToSlash(f)] || !inNestedModule(root, path.Dir(f)) {
+			pkgs = append(pkgs, pkg)
 		}
 	}
+	// Every changed test living under an ignored path still needs a suite: the record reports those
+	// witnesses and skips them, which it cannot do without running the suite.
+	if len(pkgs) == 0 {
+		pkgs = all
+	}
+	if len(pkgs) == 0 {
+		return "", false
+	}
+	sort.Strings(pkgs)
+	return "go test -count=1 " + strings.Join(pkgs, " "), true
+}
+
+// pySuite runs the changed Python files under the nearest repository environment.
+func pySuite(root string, files []string) (string, bool) {
 	var py []string
 	for _, f := range files {
 		if strings.HasSuffix(f, ".py") {
 			py = append(py, f)
 		}
 	}
-	if len(py) > 0 {
-		return pytestInterpreter(root, py) + " -m pytest " + strings.Join(py, " "), nil
+	if len(py) == 0 {
+		return "", false
 	}
+	return pytestInterpreter(root, py) + " -m pytest " + strings.Join(py, " "), true
+}
+
+// nodeSuite runs the changed JavaScript files through the repository's own runner, or through node when it
+// carries no package.json to say how they run.
+func nodeSuite(root string, files []string) (string, bool) {
 	if data, err := os.ReadFile(filepath.Join(root, "package.json")); err == nil {
-		var pkg struct{ Scripts map[string]string }
-		if json.Unmarshal(data, &pkg) == nil {
-			words, err := hookcmd.ShellWords(pkg.Scripts["test"])
-			if err == nil && len(words) > 0 {
-				if words[0] == "npx" {
-					words = words[1:]
-				}
-				if len(words) > 0 {
-					switch words[0] {
-					case "jest":
-						return "npx jest " + strings.Join(files, " "), nil
-					case "vitest":
-						return "npx vitest run " + strings.Join(files, " "), nil
-					}
-				}
-			}
+		if runner, ok := nodeRunner(data); ok {
+			return runner + " " + strings.Join(files, " "), true
 		}
-		return "node --test " + strings.Join(files, " "), nil
+		return "node --test " + strings.Join(files, " "), true
 	}
 	// Node runs plain JavaScript test files as they are, so a repository without a package.json (a Go project
 	// carrying a small JS suite) is still judged; TypeScript needs a package.json to say how it runs.
 	if len(files) > 0 && allPlainJavaScript(files) {
-		return "node --test " + strings.Join(files, " "), nil
+		return "node --test " + strings.Join(files, " "), true
 	}
-	return "", errors.New("cannot infer how to run the changed tests: pass --suite")
+	return "", false
+}
+
+// nodeRunner reads the test script a package.json declares: npx is dropped, and only jest and vitest say how a
+// Node test file runs.
+func nodeRunner(data []byte) (string, bool) {
+	var pkg struct{ Scripts map[string]string }
+	if json.Unmarshal(data, &pkg) != nil {
+		return "", false
+	}
+	words, err := hookcmd.ShellWords(pkg.Scripts["test"])
+	if err != nil || len(words) == 0 {
+		return "", false
+	}
+	if words[0] == "npx" {
+		words = words[1:]
+	}
+	if len(words) == 0 {
+		return "", false
+	}
+	switch words[0] {
+	case "jest":
+		return "npx jest", true
+	case "vitest":
+		return "npx vitest run", true
+	}
+	return "", false
 }
 
 // pytestInterpreter uses the nearest repository environment, keeping its absolute path
