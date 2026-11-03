@@ -3,6 +3,7 @@ package repair_test
 import (
 	"bytes"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -369,5 +370,94 @@ func TestRepairDryRunWritesNothing(t *testing.T) {
 	}
 	if !strings.Contains(report.String(), "[dry-run]") {
 		t.Fatalf("report = %q, want the dry-run prefix", report.String())
+	}
+}
+
+// S1/S2: a stale Pi extension is a repairable problem, and repair leaves the shipped copy behind
+// instead of only reporting it.
+func TestRepairRestoresAStalePiExtension(t *testing.T) {
+	_, cfg := seed(t)
+	home := filepath.Dir(cfg)
+	entry := filepath.Join(home, ".pi", "agent", "extensions", "tpp", "index.ts")
+	if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, []byte("// an older build\nexport default function () {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := repair.Run(repair.Options{ConfigDir: cfg})
+	if err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	shipped, err := fs.ReadFile(assets.Hosts(), "pi/tsp.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := os.ReadFile(entry)
+	if err != nil {
+		t.Fatalf("the extension is gone: %v", err)
+	}
+	if !bytes.Equal(installed, shipped) {
+		t.Fatal("repair left an extension that differs from the shipped one")
+	}
+	if !strings.Contains(strings.Join(report.Problems, "\n"), "pi extension") {
+		t.Fatalf("problems = %v, want the pi extension named", report.Problems)
+	}
+	if report.PiSync == nil {
+		t.Fatal("report carries no pi sync")
+	}
+}
+
+// S2: repair never installs the opt-in host on a machine that never asked for it.
+func TestRepairLeavesAnAbsentPiExtensionAbsent(t *testing.T) {
+	_, cfg := seed(t)
+	home := filepath.Dir(cfg)
+	if _, err := os.Stat(filepath.Join(home, ".pi")); err == nil {
+		t.Fatal("fixture already has a pi host")
+	}
+
+	if _, err := repair.Run(repair.Options{ConfigDir: cfg}); err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".pi", "agent", "extensions", "tpp", "index.ts")); !os.IsNotExist(err) {
+		t.Fatalf("repair installed the opt-in extension: %v", err)
+	}
+}
+
+// S1/S2: an unreadable extension is a repairable problem too: repair makes the destination
+// readable and leaves the shipped copy behind, instead of failing the plan on the read error.
+func TestRepairRestoresAnUnreadablePiExtension(t *testing.T) {
+	_, cfg := seed(t)
+	home := filepath.Dir(cfg)
+	entry := filepath.Join(home, ".pi", "agent", "extensions", "tpp", "index.ts")
+	if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, []byte("// an older build\nexport default function () {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(entry, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(entry, 0o644) })
+
+	report, err := repair.Run(repair.Options{ConfigDir: cfg})
+	if err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	shipped, err := fs.ReadFile(assets.Hosts(), "pi/tsp.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := os.ReadFile(entry)
+	if err != nil {
+		t.Fatalf("the extension is still unreadable: %v", err)
+	}
+	if !bytes.Equal(installed, shipped) {
+		t.Fatal("repair left an extension that differs from the shipped one")
+	}
+	if !strings.Contains(strings.Join(report.Problems, "\n"), "pi extension unreadable") {
+		t.Fatalf("problems = %v, want the unreadable extension named", report.Problems)
 	}
 }

@@ -2,6 +2,7 @@ package bench
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -193,5 +194,53 @@ func TestIsTestFile(t *testing.T) {
 		if isTestFile(p) {
 			t.Errorf("%s should not be a test file", p)
 		}
+	}
+}
+
+// S1: the suite inferred from a round's changed tests never lists an ignored workspace's packages.
+// A benchmark's copied repositories made `tsp findings record` fail with a suite the module does
+// not build, while a round whose only witness is ignored must still get a suite to report it.
+func TestInferRedCheckSuiteSkipsIgnoredWorkspaces(t *testing.T) {
+	root := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(rel, body string) {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("init", "-q")
+	write(".gitignore", "results/\n")
+	write("go.mod", "module example.invalid/sample\n\ngo 1.22\n")
+	write("pkg/a_test.go", "package pkg\n")
+	run("add", "-A")
+	run("commit", "-qm", "base")
+
+	suite, err := inferRedCheckSuite(root, []string{"pkg/a_test.go", "results/copy/a_test.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "go test -count=1 ./pkg"; suite != want {
+		t.Fatalf("suite = %q, want %q", suite, want)
+	}
+
+	only := "results/copy/a_test.go"
+	suite, err = inferRedCheckSuite(root, []string{only})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "go test -count=1 ./results/copy"; suite != want {
+		t.Fatalf("suite = %q, want %q for a round whose only witness is ignored", suite, want)
 	}
 }

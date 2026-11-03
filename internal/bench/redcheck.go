@@ -327,8 +327,9 @@ func allPlainJavaScript(files []string) bool {
 // pytest, or the Node files.
 func inferRedCheckSuite(root string, files []string) (string, error) {
 	if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
+		known := gitKnownFiles(root)
 		seen := map[string]bool{}
-		var pkgs []string
+		var pkgs, all []string
 		for _, f := range files {
 			if !strings.HasSuffix(f, "_test.go") {
 				continue
@@ -339,8 +340,18 @@ func inferRedCheckSuite(root string, files []string) (string, error) {
 			}
 			if !seen[pkg] {
 				seen[pkg] = true
-				pkgs = append(pkgs, pkg)
+				all = append(all, pkg)
+				// An ignored workspace is not a package of this module: the benchmark's copied
+				// repositories made the inferred suite a list the repository does not build.
+				if known == nil || known[filepath.ToSlash(f)] {
+					pkgs = append(pkgs, pkg)
+				}
 			}
+		}
+		// Every changed test living under an ignored path still needs a suite: the record reports
+		// those witnesses and skips them, which it cannot do without running the suite.
+		if len(pkgs) == 0 {
+			pkgs = all
 		}
 		if len(pkgs) > 0 {
 			sort.Strings(pkgs)

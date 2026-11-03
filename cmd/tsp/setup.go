@@ -89,6 +89,9 @@ func doctorReport(configDir, runMode string) doctor.Report {
 	report := doctor.RunWith(configDir, exec.LookPath, probeHook)
 	report.Mode = runMode
 	report.Hosts = doctor.HostInventory(hostHome(configDir), configDir)
+	// The hosts are reported here, but their verdict belongs to the doctor command: setup shares
+	// this report and stays Claude-centered (it refuses --hosts pi), so a stale opt-in extension
+	// must not turn a successful setup into a failure.
 	// Languages answer for the repository the command runs in, not for the install: the tools a stack
 	// needs are what the user has to install next, and no other command was naming them.
 	if wd, err := os.Getwd(); err == nil {

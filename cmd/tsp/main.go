@@ -15,6 +15,7 @@ import (
 	"github.com/alesierraalta/tsp/internal/bench"
 	"github.com/alesierraalta/tsp/internal/buildinfo"
 	"github.com/alesierraalta/tsp/internal/check"
+	"github.com/alesierraalta/tsp/internal/doctor"
 	"github.com/alesierraalta/tsp/internal/evidence"
 	"github.com/alesierraalta/tsp/internal/feature"
 	"github.com/alesierraalta/tsp/internal/feedback"
@@ -1057,6 +1058,13 @@ func runDoctor(args []string) int {
 		return 2
 	}
 	report := doctorReport(*configDir, runMode)
+	// The doctor's verdict answers for the hosts it reports: an extension that is there and wrong
+	// is not healthy. The setup path shares doctorReport but stays Claude-centered (it refuses
+	// --hosts pi), so its verdict must not change here.
+	if problems := doctor.HostProblems(report.Hosts); len(problems) > 0 {
+		report.Problems = append(report.Problems, problems...)
+		report.Healthy = false
+	}
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // S3: a skill edited on disk after install is reported, so doctor never calls a drifting host
@@ -182,6 +183,116 @@ func TestReportRendersTheHostsBlock(t *testing.T) {
 	}
 }
 
+// S1: Pi without its extension is a state doctor reports, not a host it hides: the extension is
+// opt-in, and a reader has to know whether this machine opted in.
+func TestHostInventoryReportsAPiExtensionThatIsNotInstalled(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".pi", "agent", "extensions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	pi := piOf(t, home)
+	if pi.ExtensionState != ExtensionAbsent {
+		t.Fatalf("extension state = %q, want %q", pi.ExtensionState, ExtensionAbsent)
+	}
+	if pi.Transport != TransportAbsent {
+		t.Fatalf("transport = %q, want %q without an extension", pi.Transport, TransportAbsent)
+	}
+	if !strings.Contains(pi.TransportNote, "tsp sync --hosts pi") {
+		t.Fatalf("note = %q, want the opt-in command", pi.TransportNote)
+	}
+}
+
+// S1/S4: an extension that matches what this build ships is the only state that reads as
+// installed, and it is decided by content, not by the file's presence.
+func TestHostInventoryReportsAPiExtensionThatMatchesTheBuild(t *testing.T) {
+	home := t.TempDir()
+	installExtension(t, home, shippedExtension(t))
+
+	pi := piOf(t, home)
+	if pi.ExtensionState != ExtensionCurrent {
+		t.Fatalf("extension state = %q, want %q", pi.ExtensionState, ExtensionCurrent)
+	}
+	if pi.Transport != TransportExtension {
+		t.Fatalf("transport = %q, want %q", pi.Transport, TransportExtension)
+	}
+}
+
+// S1: an older extension on disk is stale, and the report names the command that restores it.
+func TestHostInventoryReportsAPiExtensionThatIsStale(t *testing.T) {
+	home := t.TempDir()
+	installExtension(t, home, append(shippedExtension(t), []byte("\n// an older build\n")...))
+
+	pi := piOf(t, home)
+	if pi.ExtensionState != ExtensionStale {
+		t.Fatalf("extension state = %q, want %q", pi.ExtensionState, ExtensionStale)
+	}
+	if !strings.Contains(pi.TransportNote, "tsp sync --hosts pi") {
+		t.Fatalf("note = %q, want the command that restores it", pi.TransportNote)
+	}
+}
+
+// S1: a file that is there but is not the extension is broken, not stale: a truncated write has
+// to be told apart from an older version, because only one of them is a plain re-sync.
+func TestHostInventoryReportsAPiExtensionThatIsBroken(t *testing.T) {
+	home := t.TempDir()
+	installExtension(t, home, []byte("export const half = \n"))
+
+	pi := piOf(t, home)
+	if pi.ExtensionState != ExtensionBroken {
+		t.Fatalf("extension state = %q, want %q", pi.ExtensionState, ExtensionBroken)
+	}
+}
+
+// S1: the rendered report says the same thing as the JSON, and it stops counting Pi's skills as
+// if the extension were a skills directory.
+func TestReportRendersThePiExtensionState(t *testing.T) {
+	home := t.TempDir()
+	installExtension(t, home, append(shippedExtension(t), []byte("\n// an older build\n")...))
+
+	text := Report{Hosts: HostInventory(home, filepath.Join(home, ".claude"))}.String()
+	if !strings.Contains(text, "extension stale") {
+		t.Fatalf("hosts block does not report the stale extension:\n%s", text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "pi ") && strings.Contains(line, "/25 skills") {
+			t.Fatalf("hosts block counts skills for an extension host:\n%s", text)
+		}
+	}
+}
+
+// installExtension writes the extension where a sync puts it.
+func installExtension(t *testing.T, home string, content []byte) {
+	t.Helper()
+	path := filepath.Join(home, ".pi", "agent", "extensions", "tpp", "index.ts")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func shippedExtension(t *testing.T) []byte {
+	t.Helper()
+	data, err := fs.ReadFile(assets.Hosts(), "pi/tsp.ts")
+	if err != nil {
+		t.Fatalf("read the shipped extension: %v", err)
+	}
+	return data
+}
+
+func piOf(t *testing.T, home string) HostStatus {
+	t.Helper()
+	for _, h := range HostInventory(home, filepath.Join(home, ".claude")) {
+		if h.Name == "pi" {
+			return h
+		}
+	}
+	t.Fatalf("inventory has no pi host")
+	return HostStatus{}
+}
+
 // An AfterAgent gate is a wired gate: the event name follows the host, not the gate.
 func TestGeminiWithAnAfterAgentHookIsWired(t *testing.T) {
 	dir := t.TempDir()
@@ -192,5 +303,32 @@ func TestGeminiWithAnAfterAgentHookIsWired(t *testing.T) {
 	kind, note := transportFor(sync.Host{Name: "gemini", ConfigDir: dir})
 	if kind != TransportWired || !strings.Contains(note, "AfterAgent") {
 		t.Fatalf("kind = %q note = %q, want wired on AfterAgent", kind, note)
+	}
+}
+
+// S4: a slow answer is empty and bounded. A wrapper whose child inherits the version command's
+// stdout cannot hold the doctor past the timeout, because that would make one host's `pi
+// --version` hang every `tsp doctor` and `tsp repair` run.
+func TestPiVersionBoundsAChildThatHoldsThePipe(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "pi")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n/bin/sleep 5 &\necho 9.9.9\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	start := time.Now()
+	version, found := piVersion()
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Fatalf("piVersion took %s, want it bounded by the two-second timeout", elapsed)
+	}
+	if !found {
+		t.Fatal("piVersion did not find the pi on PATH")
+	}
+	if version != "" {
+		t.Fatalf("version = %q, want an empty answer for a slow one", version)
+	}
+	if suffix := piVersionSuffix(version, found); suffix != " · pi did not answer" {
+		t.Fatalf("suffix = %q, want it to say pi did not answer instead of blaming PATH", suffix)
 	}
 }

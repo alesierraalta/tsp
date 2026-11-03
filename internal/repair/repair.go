@@ -33,7 +33,10 @@ type Report struct {
 	SettingsChanged bool
 	RemovedHooks    []string
 	Sync            sync.Report
-	Remaining       []string
+	// PiSync carries the re-sync of the opt-in Pi host, present only when its extension needed
+	// repair; the Claude host is the Sync above.
+	PiSync    *sync.Report
+	Remaining []string
 
 	completed bool // the post-repair inspection ran; Remaining is final
 }
@@ -68,6 +71,9 @@ func (r Report) String() string {
 		fmt.Fprintf(&b, "%sremoved previous gate hook: %s\n", prefix, h)
 	}
 	b.WriteString(r.Sync.String())
+	if r.PiSync != nil {
+		b.WriteString(r.PiSync.String())
+	}
 	if r.completed && !r.DryRun {
 		if len(r.Remaining) == 0 {
 			fmt.Fprintf(&b, "after repair: healthy\n")
@@ -97,9 +103,14 @@ func Run(opts Options) (Report, error) {
 	}
 	desired := sync.HookCommand(binPath)
 	report := Report{DryRun: opts.DryRun, ConfigDir: opts.ConfigDir}
+	home := homeOf(opts.ConfigDir)
 
 	before := doctor.Run(opts.ConfigDir, exec.LookPath)
 	report.Problems = classify(before, desired)
+	piBefore := piExtension(home, opts.ConfigDir)
+	if piNeedsRepair(piBefore) {
+		report.Problems = append(report.Problems, "pi extension "+piBefore.ExtensionState)
+	}
 	if len(report.Problems) == 0 {
 		report.AlreadyHealthy = true
 		return report, nil
@@ -120,12 +131,67 @@ func Run(opts Options) (Report, error) {
 		return report, err
 	}
 
+	if piNeedsRepair(piBefore) {
+		// The planner reads a destination before it decides, so a copy nobody can read fails the
+		// whole host plan. Repair is the explicit fixer: make it readable first, so the plan can
+		// back up what is there and replace it.
+		if piBefore.ExtensionState == doctor.ExtensionUnreadable {
+			if err := os.Chmod(piBefore.ExtensionPath, 0o644); err != nil {
+				return report, fmt.Errorf("make %s readable: %w", piBefore.ExtensionPath, err)
+			}
+		}
+		piReport, err := sync.SyncHosts([]sync.Host{sync.PiHost(home)}, binPath, sync.Options{DryRun: opts.DryRun, Force: opts.Force})
+		report.PiSync = &piReport
+		if err != nil {
+			return report, err
+		}
+	}
+
 	if !opts.DryRun {
 		after := doctor.Run(opts.ConfigDir, exec.LookPath)
 		report.Remaining = classify(after, desired)
+		if piAfter := piExtension(home, opts.ConfigDir); piNeedsRepair(piAfter) {
+			report.Remaining = append(report.Remaining, "pi extension "+piAfter.ExtensionState)
+		}
 		report.completed = true
 	}
 	return report, nil
+}
+
+// homeOf is the home directory a config dir lives under, where the opt-in Pi host keeps its
+// extension; an unnamed config dir names no home.
+func homeOf(configDir string) string {
+	if configDir == "" {
+		return ""
+	}
+	return filepath.Dir(configDir)
+}
+
+// piExtension reports the Pi host when this machine has one, so repair can see its extension
+// without installing the opt-in host on machines that never asked for it.
+func piExtension(home, configDir string) *doctor.HostStatus {
+	if home == "" {
+		return nil
+	}
+	for _, host := range doctor.HostInventory(home, configDir) {
+		if host.Name == "pi" {
+			return &host
+		}
+	}
+	return nil
+}
+
+// piNeedsRepair is true only for an extension that is there and wrong: an absent one is the
+// opt-in default and stays absent, and a current one has nothing to fix.
+func piNeedsRepair(status *doctor.HostStatus) bool {
+	if status == nil {
+		return false
+	}
+	switch status.ExtensionState {
+	case doctor.ExtensionCurrent, doctor.ExtensionAbsent:
+		return false
+	}
+	return true
 }
 
 // classify extracts the four problems repair fixes from a doctor pass: a missing skill, a
