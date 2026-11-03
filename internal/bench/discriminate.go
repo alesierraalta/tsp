@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -49,6 +50,23 @@ var (
 )
 
 // isTestFile recognises the test files of the suites the benchmark runs.
+// gitKnownFiles lists what git tracks or would track, so a walk of the worktree can tell the
+// change's own files from an ignored workspace. Nil means git could not answer, and the walk
+// stands as it did before.
+func gitKnownFiles(ws string) map[string]bool {
+	out, err := exec.Command("git", "-C", ws, "ls-files", "-co", "--exclude-standard", "-z").Output()
+	if err != nil {
+		return nil
+	}
+	known := make(map[string]bool)
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel != "" {
+			known[rel] = true
+		}
+	}
+	return known
+}
+
 func isTestFile(rel string) bool {
 	rel = filepath.ToSlash(rel)
 	return !ignoredPathRe.MatchString(rel) && testPathRe.MatchString(rel)
