@@ -1,12 +1,17 @@
 package doctor
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/alesierraalta/tsp/internal/assets"
 	"github.com/alesierraalta/tsp/internal/sync"
@@ -27,6 +32,27 @@ const (
 	TransportAbsent = "absent"
 )
 
+// Extension states answer what the file an extension host loads actually is. A host whose
+// transport is an extension reports one of these instead of a skills count: its skills come from
+// the Claude directory Pi reads too, so counting them here said nothing about the transport.
+const (
+	// ExtensionCurrent means the file matches the copy this build ships.
+	ExtensionCurrent = "up-to-date"
+	// ExtensionStale means an older or edited copy is on disk, which a sync replaces.
+	ExtensionStale = "stale"
+	// ExtensionBroken means the file is there and is not the extension, as a truncated write is.
+	ExtensionBroken = "broken"
+	// ExtensionUnreadable means the file exists and cannot be read.
+	ExtensionUnreadable = "unreadable"
+	// ExtensionAbsent means the opt-in host is present and nothing was installed for it.
+	ExtensionAbsent = "absent"
+)
+
+// TestedPiVersion is the Pi version this build's extension was exercised against. A different
+// version is reported, not refused: the extension negotiates nothing, and the events it needs
+// belong to the host, so a mismatch is information a reader can act on.
+const TestedPiVersion = "1.5.0"
+
 // HostStatus is one agent host on this machine: where it loads TSP skills from, how many are
 // there now, and what carries the gate's answer, if anything.
 type HostStatus struct {
@@ -40,6 +66,14 @@ type HostStatus struct {
 	DriftedPaths  []string `json:"drifted_paths,omitempty"`
 	Transport     string   `json:"transport"`
 	TransportNote string   `json:"transport_note,omitempty"`
+	// ExtensionPath, ExtensionState and ExtensionNote describe the file an extension host loads.
+	// They stay empty for hosts whose transport is a hook or nothing at all.
+	ExtensionPath  string `json:"extension_path,omitempty"`
+	ExtensionState string `json:"extension_state,omitempty"`
+	ExtensionNote  string `json:"extension_note,omitempty"`
+	// PiVersion is the host's own version, read when it is on PATH, so a reader can compare it
+	// with TestedPiVersion instead of guessing.
+	PiVersion string `json:"pi_version,omitempty"`
 }
 
 // hostTransports is what TSP knows how to put in front of each host, and the sentence a reader
@@ -64,17 +98,12 @@ var hostTransports = map[string]struct{ kind, note string }{
 	},
 }
 
-// HostInventory lists every host found under home with the transport it really has. Pi is not
-// discovered — it is the opt-in host — so it appears only when an installed extension is there
-// to report on.
+// HostInventory lists every host found under home with the transport it really has. Pi is the
+// opt-in host and is never discovered: it appears whenever the host itself is on this machine,
+// because an installed Pi with no extension is a state a reader has to be able to see.
 func HostInventory(home, claudeConfigDir string) []HostStatus {
 	discovered := sync.DiscoverHosts(home, claudeConfigDir).Hosts
-	if home != "" {
-		if pi, ok := piHostStatus(home); ok {
-			discovered = append(discovered, sync.Host{Name: "pi", ConfigDir: filepath.Join(home, ".pi"), SkillsDir: pi.SkillsDir})
-		}
-	}
-	statuses := make([]HostStatus, 0, len(discovered))
+	statuses := make([]HostStatus, 0, len(discovered)+1)
 	for _, host := range discovered {
 		status := HostStatus{
 			Name:          host.Name,
@@ -85,6 +114,11 @@ func HostInventory(home, claudeConfigDir string) []HostStatus {
 		status.Transport, status.TransportNote = transportFor(host)
 		status.SkillsDrifted, status.DriftedPaths = skillsDrifted(host.SkillsDir)
 		statuses = append(statuses, status)
+	}
+	if home != "" {
+		if pi, ok := piHostStatus(home); ok {
+			statuses = append(statuses, pi)
+		}
 	}
 	return statuses
 }
@@ -109,8 +143,6 @@ func transportFor(host sync.Host) (string, string) {
 			return TransportWired, "AfterAgent hook in settings.json"
 		}
 		return TransportAbsent, "skills only: no AfterAgent hook in settings.json (run: tsp sync)"
-	case "pi":
-		return TransportExtension, "extension at " + filepath.Join(host.SkillsDir, "tpp", "index.ts") + "; opt-in, installed with: tsp sync --hosts pi"
 	}
 	if known, ok := hostTransports[host.Name]; ok {
 		return known.kind, known.note
@@ -118,15 +150,85 @@ func transportFor(host sync.Host) (string, string) {
 	return TransportAbsent, "skills only: no transport is known for this host"
 }
 
-// piHostStatus reports Pi only when its extension is installed, which is the only state in which
-// this machine has a Pi transport to describe.
+// piHostStatus reports Pi whenever the host is on this machine, with the state of the file its
+// extension would load. The extension is opt-in, so absence is reported, never assumed away.
 func piHostStatus(home string) (HostStatus, bool) {
-	extension := filepath.Join(home, ".pi", "agent", "extensions", "tpp", "index.ts")
-	info, err := os.Stat(extension)
-	if err != nil || info.IsDir() {
+	configDir := filepath.Join(home, ".pi")
+	if info, err := os.Stat(configDir); err != nil || !info.IsDir() {
 		return HostStatus{}, false
 	}
-	return HostStatus{SkillsDir: filepath.Join(home, ".pi", "agent", "extensions")}, true
+	skillsDir := filepath.Join(configDir, "agent", "extensions")
+	extension := filepath.Join(skillsDir, "tpp", "index.ts")
+	state, note := extensionStatus(extension)
+	status := HostStatus{
+		Name:           "pi",
+		ConfigDir:      configDir,
+		SkillsDir:      skillsDir,
+		ExtensionPath:  extension,
+		ExtensionState: state,
+		ExtensionNote:  note,
+		PiVersion:      piVersion(),
+		Transport:      TransportExtension,
+		TransportNote:  note,
+	}
+	if state == ExtensionAbsent {
+		status.Transport = TransportAbsent
+	}
+	return status, true
+}
+
+// extensionStatus answers what the file a host loads is, by content: a file that merely exists
+// never reads as installed, and an older copy is told apart from a truncated one.
+func extensionStatus(path string) (string, string) {
+	installed, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ExtensionAbsent, "not installed: opt-in, install with: tsp sync --hosts pi"
+	}
+	if err != nil {
+		return ExtensionUnreadable, fmt.Sprintf("cannot read %s: %v", path, err)
+	}
+	if !bytes.Contains(installed, []byte("export default")) {
+		return ExtensionBroken, "at " + path + ", does not look like the extension: no default export (run: tsp sync --hosts pi --force)"
+	}
+	shipped, err := fs.ReadFile(assets.Hosts(), "pi/tsp.ts")
+	if err != nil {
+		return ExtensionUnreadable, "this build cannot read its own extension: " + err.Error()
+	}
+	if sha256.Sum256(installed) == sha256.Sum256(shipped) {
+		return ExtensionCurrent, "at " + path + ", matches the extension this build ships"
+	}
+	return ExtensionStale, "at " + path + ", differs from the extension this build ships (run: tsp sync --hosts pi)"
+}
+
+// HostProblems names the host states a reader has to act on. An extension that is there and wrong
+// is not healthy: a verdict that called it healthy while the host line said stale would be the
+// silent success this classification exists to remove.
+func HostProblems(hosts []HostStatus) []string {
+	problems := make([]string, 0, 1)
+	for _, host := range hosts {
+		switch host.ExtensionState {
+		case "", ExtensionCurrent, ExtensionAbsent:
+			continue
+		}
+		problems = append(problems, "pi extension "+host.ExtensionState+": "+host.ExtensionNote)
+	}
+	return problems
+}
+
+// piVersion reads the host's version when it is on PATH. An unreadable or slow answer is empty:
+// the report says the version is unknown rather than failing a doctor run.
+func piVersion() string {
+	path, err := exec.LookPath("pi")
+	if err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
 }
 
 // skillsPresent counts this build's skills that are actually readable in a host's directory, so
@@ -183,6 +285,10 @@ func (r Report) writeHosts(b *strings.Builder) {
 	fmt.Fprintf(b, "\nhosts\n")
 	total := len(assets.SkillNames())
 	for _, h := range r.Hosts {
+		if h.ExtensionState != "" {
+			fmt.Fprintf(b, "  %-12s extension %s: %s%s\n", h.Name, h.ExtensionState, h.ExtensionNote, piVersionSuffix(h.PiVersion))
+			continue
+		}
 		fmt.Fprintf(b, "  %-12s %d/%d skills · %s", h.Name, h.SkillsPresent, total, h.Transport)
 		if h.TransportNote != "" {
 			fmt.Fprintf(b, ": %s", h.TransportNote)
@@ -191,5 +297,18 @@ func (r Report) writeHosts(b *strings.Builder) {
 			fmt.Fprintf(b, " · %d modified since install: run tsp sync --dry-run to list them", h.SkillsDrifted)
 		}
 		b.WriteString("\n")
+	}
+}
+
+// piVersionSuffix reports the host version against the one this build was tested with, so a
+// mismatch is visible without being treated as a failure.
+func piVersionSuffix(version string) string {
+	switch {
+	case version == "":
+		return " · pi not on PATH"
+	case version == TestedPiVersion:
+		return " · pi " + version
+	default:
+		return " · pi " + version + " (this build was tested with " + TestedPiVersion + ")"
 	}
 }
