@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -454,5 +455,69 @@ func TestUninstallModifiedPiExtensionRefusesUntilForcedWithBackup(t *testing.T) 
 	}
 	if hostState, recorded := after.Hosts["pi"]; recorded {
 		t.Fatalf("forced uninstall left the pi record: %+v", hostState)
+	}
+}
+
+// S2: an extension with no state record — an install from before state tracking, or one copied
+// by hand — is still TSP's when it matches a shipped copy, so uninstall removes it instead of
+// leaving a transport the state does not know about.
+func TestUninstallRemovesAPiExtensionWithNoStateRecord(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TPP_HOME", root)
+	home := t.TempDir()
+	entry := filepath.Join(home, ".pi", "agent", "extensions", "tpp", "index.ts")
+	shipped, err := fs.ReadFile(assets.Hosts(), "pi/tsp.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, shipped, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := Uninstall(UninstallOptions{ConfigDir: filepath.Join(home, ".claude")})
+	if err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if !contains(report.Removed, entry) {
+		t.Fatalf("uninstall did not remove an unrecorded extension that matches the shipped one: %v", report.Removed)
+	}
+	if _, err := os.Stat(entry); !os.IsNotExist(err) {
+		t.Fatalf("extension still on disk: %v", err)
+	}
+}
+
+// S2: an unrecorded extension that differs is the operator's until --force says otherwise, the
+// same rule a recorded modified asset follows.
+func TestUninstallRefusesAnUnrecordedPiExtensionThatDiffers(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TPP_HOME", root)
+	home := t.TempDir()
+	entry := filepath.Join(home, ".pi", "agent", "extensions", "tpp", "index.ts")
+	if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, []byte("// user edit\nexport default function () {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Uninstall(UninstallOptions{ConfigDir: filepath.Join(home, ".claude")}); err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("err = %v, want a refusal naming --force", err)
+	}
+	if _, err := os.Stat(entry); err != nil {
+		t.Fatalf("refusal must leave the extension: %v", err)
+	}
+
+	forced, err := Uninstall(UninstallOptions{ConfigDir: filepath.Join(home, ".claude"), Force: true})
+	if err != nil {
+		t.Fatalf("force: %v", err)
+	}
+	if _, err := os.Stat(entry); !os.IsNotExist(err) {
+		t.Fatalf("--force left the extension: %v", err)
+	}
+	if _, ok := forced.BackedUp[entry]; !ok {
+		t.Fatalf("--force did not snapshot the extension: %+v", forced.BackedUp)
 	}
 }

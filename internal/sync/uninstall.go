@@ -1,14 +1,17 @@
 package sync
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/alesierraalta/tsp/internal/assets"
 	"github.com/alesierraalta/tsp/internal/manifest"
 	"github.com/alesierraalta/tsp/internal/state"
 )
@@ -145,7 +148,61 @@ func planUninstall(st *state.State, components []manifest.Component, files map[s
 			plan.report.Actions = append(plan.report.Actions, action)
 		}
 	}
+	if home := homeOf(opts.ConfigDir); home != "" {
+		if _, recorded := st.Hosts["pi"]; !recorded {
+			action, blocked, err := classifyUnrecordedExtension(home, opts)
+			if err != nil {
+				return plan, err
+			}
+			if action != nil {
+				if blocked {
+					plan.blocked = append(plan.blocked, action.Path)
+				}
+				plan.report.Actions = append(plan.report.Actions, *action)
+			}
+		}
+	}
 	return plan, nil
+}
+
+// homeOf is the home directory a config dir lives under, which is where the opt-in Pi host
+// keeps its extension; an unnamed config dir names no home.
+func homeOf(configDir string) string {
+	if configDir == "" {
+		return ""
+	}
+	return filepath.Dir(configDir)
+}
+
+// classifyUnrecordedExtension handles the Pi extension state never recorded, as an install from
+// before state tracking leaves: it is TSP's when it matches a shipped copy, and it refuses
+// without --force when it differs, exactly as a recorded modified asset does.
+func classifyUnrecordedExtension(home string, opts UninstallOptions) (*UninstallAction, bool, error) {
+	path := filepath.Join(home, ".pi", "agent", "extensions", "tpp", "index.ts")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("read pi extension %s: %w", path, err)
+	}
+	shipped, err := fs.ReadFile(assets.Hosts(), "pi/tsp.ts")
+	if err != nil {
+		return nil, false, err
+	}
+	action := &UninstallAction{Class: UninstallRemove, Host: "pi", Path: path}
+	if sha256.Sum256(data) == sha256.Sum256(shipped) {
+		action.Reason = "no state records this pi extension, but it matches the shipped one; removed as a managed asset"
+		return action, false, nil
+	}
+	if !opts.Force {
+		action.Class = UninstallModified
+		action.Reason = "no state records this pi extension and it differs from the shipped one; refusing without --force"
+		return action, true, nil
+	}
+	action.Backup = true
+	action.Reason = "no state records this pi extension and it differs from the shipped one; --force snapshots it before removal"
+	return action, false, nil
 }
 
 // classifyUninstallAsset decides one recorded path: managed content that still matches state is
