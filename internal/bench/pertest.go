@@ -63,6 +63,10 @@ func runCapture(dir string, argv []string, timeout time.Duration) (int, string) 
 	if len(argv) == 0 || !filepath.IsAbs(argv[0]) || !underTmp(filepath.Dir(argv[0])) {
 		argv = suiteArgv(dir, argv)
 	}
+	// vitest's json reporter writes its report to a file instead of stdout: the report is read after the run,
+	// and removed first so a later run cannot read one the suite before it left behind.
+	report := filepath.Join(dir, ".vitest", "json", "output.json")
+	_ = os.Remove(report)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
@@ -76,6 +80,11 @@ func runCapture(dir string, argv []string, timeout time.Duration) (int, string) 
 		if ee := (&exec.ExitError{}); errors.As(err, &ee) {
 			code = ee.ExitCode()
 		}
+	}
+	if data, e := os.ReadFile(report); e == nil {
+		_ = os.Remove(report)
+		buf.WriteString("\n")
+		buf.Write(data)
 	}
 	return code, buf.String()
 }

@@ -312,3 +312,17 @@ func nodeCase(t *testing.T) (string, Key) {
 	}
 	return caseDir, Key{ID: "node", Suite: "node --test", Defects: []Defect{{ID: "D1"}, {ID: "D2"}}}
 }
+
+// vitest's json reporter writes its report to a file instead of stdout, and a later run must not read the
+// report the run before it left behind.
+func TestRunCaptureReadsAVitestReportWrittenToAFile(t *testing.T) {
+	dir := t.TempDir()
+	write := "mkdir -p .vitest/json && printf '{\"testResults\":[]}' > .vitest/json/output.json"
+	code, out := runCapture(dir, []string{"sh", "-c", write}, time.Minute)
+	if code != 0 || !strings.Contains(out, `{"testResults":[]}`) {
+		t.Fatalf("code=%d out=%q, want the report read from the file", code, out)
+	}
+	if _, out := runCapture(dir, []string{"sh", "-c", "true"}, time.Minute); strings.Contains(out, "testResults") {
+		t.Fatalf("out=%q, want no report from the run before", out)
+	}
+}
