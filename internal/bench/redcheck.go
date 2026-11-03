@@ -64,85 +64,14 @@ func RedCheckRange(dir, suite, base string, changed []string, timeout time.Durat
 
 func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Duration) (RedCheckReport, error) {
 	var rep RedCheckReport
-	top, err := gitRun(dir, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return rep, fmt.Errorf("not inside a git repository: %s", strings.TrimSpace(top))
-	}
-	root := strings.TrimSpace(top)
-	head, err := os.MkdirTemp("", "tsp-redcheck-")
+	root, head, files, err := redCheckTree(dir, rev, agentFiles)
 	if err != nil {
 		return rep, err
 	}
 	defer removeTree(head)
-	if err := extractRev(root, rev, head); err != nil {
-		return rep, err
-	}
-	files := agentFiles
-	if files == nil {
-		var err error
-		files, err = agentTestFiles(head, root)
-		if err != nil {
-			return rep, err
-		}
-	}
 	rep.TestFiles = files
-	if argv, _, e := perTestCommand(suite); e == nil && len(argv) > 1 && argv[0] == "cargo" && argv[1] == "test" {
-		_, out := runCapture(root, argv, timeout)
-		unsupported, sawFile := false, false
-		for _, line := range strings.Split(out, "\n") {
-			fields := strings.Fields(line)
-			if len(fields) > 2 && fields[0] == "Running" {
-				file := fields[1]
-				if file == "unittests" {
-					file = fields[2]
-				}
-				unsupported, sawFile = !isTestFile(file), true
-			}
-			if m := cargoLine.FindStringSubmatch(strings.TrimSpace(line)); unsupported && m != nil && m[2] == "FAILED" {
-				return rep, fmt.Errorf("%s: inline Rust unit tests are not supported; move the test to tests/", m[1])
-			}
-		}
-		// --quiet hides Cargo's file headings. Conservatively diagnose a failing
-		// name also defined as a unit test outside the supported test paths.
-		if !sawFile {
-			failures := parseCargo(out)
-			for _, line := range strings.Split(out, "\n") {
-				if name, failed := strings.CutSuffix(strings.TrimSpace(line), " --- FAILED"); failed {
-					failures[name] = false
-				}
-			}
-			var inline string
-			_ = filepath.WalkDir(root, func(p string, entry os.DirEntry, err error) error {
-				if err != nil {
-					return nil
-				}
-				if entry.IsDir() {
-					if entry.Name() == "target" || entry.Name() == ".git" || entry.Name() == "node_modules" {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-				rel, _ := filepath.Rel(root, p)
-				if !strings.HasSuffix(rel, ".rs") || isTestFile(rel) {
-					return nil
-				}
-				data, err := os.ReadFile(p)
-				if err != nil {
-					return nil
-				}
-				for _, m := range cargoUnitTest.FindAllStringSubmatch(string(data), -1) {
-					for name, passed := range failures {
-						if !passed && (name == m[1] || strings.HasSuffix(name, "::"+m[1])) && (inline == "" || name < inline) {
-							inline = name
-						}
-					}
-				}
-				return nil
-			})
-			if inline != "" {
-				return rep, fmt.Errorf("%s: inline Rust unit tests are not supported; move the test to tests/", inline)
-			}
-		}
+	if err := cargoInlineFailure(root, suite, timeout); err != nil {
+		return rep, err
 	}
 	if len(files) == 0 {
 		return rep, nil
@@ -153,10 +82,7 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 		}
 	}
 	rep.Suite = suite
-	// HEAD's own tests on HEAD's code: every name here existed before the agent wrote anything. A suite that
-	// cannot run at HEAD (a package the agent created) leaves the set empty, and every test it then runs is new.
-	before, _, _, _ := perTest(head, suite, timeout)
-	after, _, out, err := testsOn(head, "", root, files, suite, timeout)
+	before, after, out, err := runSuites(head, root, files, suite, timeout)
 	if err != nil {
 		return rep, err
 	}
@@ -164,34 +90,94 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 	// Without one outcome per test name (a build failure, a runner the parser cannot read) nothing is known about
 	// any single test, and a failed build must never read as a red witness.
 	if _, wholeSuite := after["suite"]; len(after) == 0 || (len(after) == 1 && wholeSuite) {
-		// A package the change creates cannot compile at base: its tests name symbols base never defined. That is
-		// a witness only when the change's own code compiles the same tests, and it is reported as one, apart from
-		// the tests that failed without a build problem.
-		if agentFiles != nil {
-			if packages := newCodeWitness(root, suite, files, timeout, out); len(packages) > 0 {
-				rep.NewCode = packages
-				return rep, nil
-			}
-		}
-		detail := tail(out, 600)
-		if len(rep.Uncollected) > 0 {
-			var diagnostics []string
-			for _, file := range rep.Uncollected {
-				diagnostics = append(diagnostics, "could not collect: "+file.File+" ("+file.Reason+")")
-			}
-			detail = strings.Join(diagnostics, "; ") + `; select the project environment with --suite "<venv>/bin/python -m pytest ..."`
-		}
-		return rep, fmt.Errorf("the changed tests could not be run test by test with %q: %s", suite, detail)
+		return rep, noOutcomes(&rep, root, suite, files, timeout, out)
 	}
 	// One package that does not build at base hides inside an aggregate run: its tests never report, so they cannot
 	// fail, and the other packages keep the report looking judged. A test that cannot be built at base cannot pass
 	// there either, so it is a witness when the change itself compiles and passes it.
-	if agentFiles != nil && len(rep.Red) == 0 && strings.Contains(out, "[build failed]") {
-		if packages := newCodeWitness(root, suite, files, timeout, out); len(packages) > 0 {
+	if len(rep.Red) == 0 && strings.Contains(out, "[build failed]") {
+		if packages := witness(root, suite, files, timeout, out); len(packages) > 0 {
 			rep.NewCode = packages
 			return rep, nil
 		}
 	}
+	rep.Red, rep.PinsNothing = judgeTests(before, after)
+	return rep, nil
+}
+
+// redCheckTree extracts the base tree a red check judges and names the change's test files, cleaning up its
+// own temporary tree when anything before the caller's defer fails.
+func redCheckTree(dir, rev string, agentFiles []string) (root, head string, files []string, err error) {
+	top, err := gitRun(dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", "", nil, fmt.Errorf("not inside a git repository: %s", strings.TrimSpace(top))
+	}
+	root = strings.TrimSpace(top)
+	if head, err = os.MkdirTemp("", "tsp-redcheck-"); err != nil {
+		return "", "", nil, err
+	}
+	if err = extractRev(root, rev, head); err != nil {
+		removeTree(head)
+		return "", "", nil, err
+	}
+	if err = linkDependencies(root, head); err != nil {
+		removeTree(head)
+		return "", "", nil, err
+	}
+	files = agentFiles
+	if files == nil {
+		if files, err = agentTestFiles(head, root); err != nil {
+			removeTree(head)
+			return "", "", nil, err
+		}
+	}
+	return root, head, files, nil
+}
+
+// runSuites runs the suite at HEAD and again with the change's test files: the two outcomes judgeTests compares.
+func runSuites(head, root string, files []string, suite string, timeout time.Duration) (before, after map[string]bool, out string, err error) {
+	before, _, _, _ = perTest(head, suite, timeout)
+	after, _, out, err = testsOn(head, "", root, files, suite, timeout)
+	return before, after, out, err
+}
+
+// witness names the packages whose changed tests the base commit cannot build, when the change's own code
+// compiles and passes them.
+func witness(root, suite string, files []string, timeout time.Duration, out string) []string {
+	if len(files) == 0 {
+		return nil
+	}
+	return newCodeWitness(root, suite, files, timeout, out)
+}
+
+// noOutcomes reports the new-code witness a build failure names, or why the suite yielded no per-test outcome.
+// A package the change creates cannot compile at base: its tests name symbols base never defined. That is a
+// witness only when the change's own code compiles the same tests.
+func noOutcomes(rep *RedCheckReport, root, suite string, files []string, timeout time.Duration, out string) error {
+	if packages := witness(root, suite, files, timeout, out); len(packages) > 0 {
+		rep.NewCode = packages
+		return nil
+	}
+	return unjudgeable(suite, out, rep.Uncollected)
+}
+
+// unjudgeable explains why a suite yielded no per-test outcome, preferring what the runner said it could not
+// collect over the tail of its output.
+func unjudgeable(suite, out string, uncollected []Uncollected) error {
+	detail := tail(out, 600)
+	if len(uncollected) > 0 {
+		var diagnostics []string
+		for _, file := range uncollected {
+			diagnostics = append(diagnostics, "could not collect: "+file.File+" ("+file.Reason+")")
+		}
+		detail = strings.Join(diagnostics, "; ") + `; select the project environment with --suite "<venv>/bin/python -m pytest ..."`
+	}
+	return fmt.Errorf("the changed tests could not be run test by test with %q: %s", suite, detail)
+}
+
+// judgeTests names the tests the change made red and the new tests that pin nothing, comparing the run at base
+// with the run that carries the change's tests.
+func judgeTests(before, after map[string]bool) (red, pins []string) {
 	for name, passed := range after {
 		if newParentCovers(after, before, name) {
 			continue
@@ -200,23 +186,112 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 			// A test that existed keeps its name when the agent adds a row to it without a subtest. It passed at
 			// HEAD and fails with the agent's version on the same code: the agent's change made it red.
 			if before[name] && !passed {
-				rep.Red = append(rep.Red, name)
+				red = append(red, name)
 			}
 			continue
 		}
 		if passed {
-			rep.PinsNothing = append(rep.PinsNothing, name)
+			pins = append(pins, name)
 		} else {
-			rep.Red = append(rep.Red, name)
+			red = append(red, name)
 		}
 	}
-	sort.Strings(rep.Red)
-	sort.Strings(rep.PinsNothing)
-	return rep, nil
+	sort.Strings(red)
+	sort.Strings(pins)
+	return red, pins
 }
 
-// undefinedSymbol is what the Go toolchain prints for a file that refers to a name its build does not define.
-var undefinedSymbol = regexp.MustCompile(`(?m)^\s*(\S+\.go):(\d+):(?:\d+:)?\s*undefined: (\S+)$`)
+// cargoInlineFailure reports the inline Rust unit tests Cargo cannot judge as file-scoped witnesses.
+func cargoInlineFailure(root, suite string, timeout time.Duration) error {
+	argv, _, err := perTestCommand(suite)
+	if err != nil || len(argv) < 2 || argv[0] != "cargo" || argv[1] != "test" {
+		return nil
+	}
+	_, out := runCapture(root, argv, timeout)
+	if name, sawFile := cargoUnsupportedName(out); name != "" {
+		return fmt.Errorf("%s: inline Rust unit tests are not supported; move the test to tests/", name)
+	} else if sawFile {
+		return nil
+	}
+	if name := cargoInlineName(root, cargoFailures(out)); name != "" {
+		return fmt.Errorf("%s: inline Rust unit tests are not supported; move the test to tests/", name)
+	}
+	return nil
+}
+
+// cargoUnsupportedName names the first failing test Cargo ran from a file that is not a file-scoped witness.
+// sawFile reports whether Cargo named any file at all: --quiet hides the headings.
+func cargoUnsupportedName(out string) (name string, sawFile bool) {
+	unsupported := false
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 2 && fields[0] == "Running" {
+			file := fields[1]
+			if file == "unittests" {
+				file = fields[2]
+			}
+			unsupported, sawFile = !isTestFile(file), true
+		}
+		if m := cargoLine.FindStringSubmatch(strings.TrimSpace(line)); unsupported && m != nil && m[2] == "FAILED" {
+			return m[1], true
+		}
+	}
+	return "", sawFile
+}
+
+// cargoFailures is what Cargo reported per test, with every `--- FAILED` line marked failed.
+func cargoFailures(out string) map[string]bool {
+	failures := parseCargo(out)
+	for _, line := range strings.Split(out, "\n") {
+		if name, failed := strings.CutSuffix(strings.TrimSpace(line), " --- FAILED"); failed {
+			failures[name] = false
+		}
+	}
+	return failures
+}
+
+// cargoInlineName finds the first failing test name that is also defined as a unit test outside the supported
+// test paths.
+func cargoInlineName(root string, failures map[string]bool) string {
+	var inline string
+	_ = filepath.WalkDir(root, func(p string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if entry.Name() == "target" || entry.Name() == ".git" || entry.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if name := inlineNameInFile(root, p, failures); name != "" && (inline == "" || name < inline) {
+			inline = name
+		}
+		return nil
+	})
+	return inline
+}
+
+// inlineNameInFile is the inline unit test name one source file defines and the run reports failed, if any.
+func inlineNameInFile(root, p string, failures map[string]bool) string {
+	rel, _ := filepath.Rel(root, p)
+	if !strings.HasSuffix(rel, ".rs") || isTestFile(rel) {
+		return ""
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	var inline string
+	for _, m := range cargoUnitTest.FindAllStringSubmatch(string(data), -1) {
+		for name, passed := range failures {
+			if !passed && (name == m[1] || strings.HasSuffix(name, "::"+m[1])) && (inline == "" || name < inline) {
+				inline = name
+			}
+		}
+	}
+	return inline
+}
 
 // newCodeWitness names the packages whose changed tests cannot be built from the base commit at all. The answer
 // needs the change's own code to compile and pass those same tests, so a test that is broken against the change
