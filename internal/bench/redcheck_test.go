@@ -282,6 +282,26 @@ func TestRangeCheckNamesTheCodeTheBaseCommitLacks(t *testing.T) {
 	})
 }
 
+// `findings record` judges a commit through RedCheckAt, which has no agent file list: the files are read from
+// the base tree and the worktree. The same witness rule has to hold there, or every round whose new test names
+// a symbol base never defined is refused with an empty detail and can never be booked.
+func TestRangeCheckJudgesARecordedRoundWithoutTheAgentFileList(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real git and go runner")
+	}
+	dir := redCheckRepo(t)
+	writeFile(t, dir, "order.go", "package rc\n\nfunc Order() string { return \"cab\" }\n\nfunc Len() int { return len(Order()) }\n\nfunc Seats() int { return 4 }\n")
+	writeFile(t, dir, "seats_test.go", "package rc\n\nimport \"testing\"\n\nfunc TestSeats(t *testing.T) {\n\tif Seats() != 4 {\n\t\tt.Fatal(Seats())\n\t}\n}\n")
+	commitAll(t, dir, "change")
+	rep, err := RedCheckAt(dir, "go test -count=1 ./...", "HEAD~1", 2*time.Minute)
+	if err != nil {
+		t.Fatalf("a recorded round must judge a base tree that does not build: %v", err)
+	}
+	if want := []string{"."}; !reflect.DeepEqual(rep.NewCode, want) {
+		t.Fatalf("new code = %v, want %v", rep.NewCode, want)
+	}
+}
+
 // A package that does not build at base reports no outcome for any of its tests, and the packages beside it
 // keep the run looking judged. A test that cannot be built at base cannot pass there, so the answer names it.
 func TestRangeCheckNamesABuildFailureBesideAPassingPackage(t *testing.T) {
@@ -316,5 +336,38 @@ func TestRangeCheckKeepsATestBrokenEverywhereUnjudgeable(t *testing.T) {
 	commitAll(t, dir, "change")
 	if _, err := RedCheckRange(dir, "", "HEAD~1", []string{"fresh/fresh_test.go"}, 2*time.Minute); err == nil {
 		t.Fatal("a test that compiles nowhere must stay unjudgeable")
+	}
+}
+
+func TestLinkDependenciesGivesTheBaseTreeTheInstalledModules(t *testing.T) {
+	worktree := t.TempDir()
+	writeFile(t, worktree, "package.json", `{"scripts":{"test":"vitest run"}}`)
+	writeFile(t, worktree, "node_modules/vite/index.js", "module.exports = 1;\n")
+	tree := t.TempDir()
+	writeFile(t, tree, "package.json", `{"scripts":{"test":"vitest run"}}`)
+	if err := linkDependencies(worktree, tree); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tree, "node_modules", "vite", "index.js"))
+	if err != nil || string(data) != "module.exports = 1;\n" {
+		t.Fatalf("linked modules unreadable: %v %q", err, data)
+	}
+	// A tree that declares no Node project gets nothing, even when the worktree has modules.
+	other := t.TempDir()
+	if err := linkDependencies(worktree, other); err != nil {
+		t.Fatalf("link without a package.json: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(other, "node_modules")); err == nil {
+		t.Fatal("linked node_modules into a tree that declares no Node project")
+	}
+	// A worktree that never installed leaves the tree as it is.
+	bare, plain := t.TempDir(), t.TempDir()
+	writeFile(t, bare, "package.json", "{}")
+	writeFile(t, plain, "package.json", "{}")
+	if err := linkDependencies(bare, plain); err != nil {
+		t.Fatalf("link without installed modules: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(plain, "node_modules")); err == nil {
+		t.Fatal("linked node_modules that do not exist in the worktree")
 	}
 }

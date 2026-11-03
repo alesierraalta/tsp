@@ -77,6 +77,9 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 	if err := extractRev(root, rev, head); err != nil {
 		return rep, err
 	}
+	if err := linkDependencies(root, head); err != nil {
+		return rep, err
+	}
 	files := agentFiles
 	if files == nil {
 		var err error
@@ -167,7 +170,7 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 		// A package the change creates cannot compile at base: its tests name symbols base never defined. That is
 		// a witness only when the change's own code compiles the same tests, and it is reported as one, apart from
 		// the tests that failed without a build problem.
-		if agentFiles != nil {
+		if len(files) > 0 {
 			if packages := newCodeWitness(root, suite, files, timeout, out); len(packages) > 0 {
 				rep.NewCode = packages
 				return rep, nil
@@ -186,7 +189,7 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 	// One package that does not build at base hides inside an aggregate run: its tests never report, so they cannot
 	// fail, and the other packages keep the report looking judged. A test that cannot be built at base cannot pass
 	// there either, so it is a witness when the change itself compiles and passes it.
-	if agentFiles != nil && len(rep.Red) == 0 && strings.Contains(out, "[build failed]") {
+	if len(files) > 0 && len(rep.Red) == 0 && strings.Contains(out, "[build failed]") {
 		if packages := newCodeWitness(root, suite, files, timeout, out); len(packages) > 0 {
 			rep.NewCode = packages
 			return rep, nil

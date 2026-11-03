@@ -315,6 +315,27 @@ func testsOn(fixture, overlay, ws string, tests []string, suite string, timeout 
 	return perTest(dir, suite, timeout, tests...)
 }
 
+// linkDependencies gives an extracted tree the dependency directory the worktree installed. A base tree
+// carries sources, not node_modules: without the link a JavaScript suite cannot even be read there, and a
+// repository that installs its tests would never be judged.
+func linkDependencies(worktree, tree string) error {
+	if _, err := os.Stat(filepath.Join(tree, "package.json")); err != nil {
+		return nil
+	}
+	src := filepath.Join(worktree, "node_modules")
+	if st, err := os.Stat(src); err != nil || !st.IsDir() {
+		return nil
+	}
+	dst := filepath.Join(tree, "node_modules")
+	if _, err := os.Lstat(dst); err == nil {
+		return nil
+	}
+	if err := os.Symlink(src, dst); err != nil {
+		return fmt.Errorf("link node_modules into the base tree: %w", err)
+	}
+	return nil
+}
+
 // stage builds fixture + overlay + the agent's test files in a fresh directory.
 func stage(fixture, overlay, ws string, tests []string) (string, error) {
 	dir, err := os.MkdirTemp(stageRoot(), "tpp-catch-")
@@ -342,6 +363,9 @@ func stage(fixture, overlay, ws string, tests []string) (string, error) {
 		if err := os.WriteFile(dst, data, 0o644); err != nil {
 			return fail(err)
 		}
+	}
+	if err := linkDependencies(ws, dir); err != nil {
+		return fail(err)
 	}
 	return dir, nil
 }
