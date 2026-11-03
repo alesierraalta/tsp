@@ -77,6 +77,9 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 	if err := extractRev(root, rev, head); err != nil {
 		return rep, err
 	}
+	if err := linkDependencies(root, head); err != nil {
+		return rep, err
+	}
 	files := agentFiles
 	if files == nil {
 		var err error

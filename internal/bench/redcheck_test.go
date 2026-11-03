@@ -318,3 +318,36 @@ func TestRangeCheckKeepsATestBrokenEverywhereUnjudgeable(t *testing.T) {
 		t.Fatal("a test that compiles nowhere must stay unjudgeable")
 	}
 }
+
+func TestLinkDependenciesGivesTheBaseTreeTheInstalledModules(t *testing.T) {
+	worktree := t.TempDir()
+	writeFile(t, worktree, "package.json", `{"scripts":{"test":"vitest run"}}`)
+	writeFile(t, worktree, "node_modules/vite/index.js", "module.exports = 1;\n")
+	tree := t.TempDir()
+	writeFile(t, tree, "package.json", `{"scripts":{"test":"vitest run"}}`)
+	if err := linkDependencies(worktree, tree); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tree, "node_modules", "vite", "index.js"))
+	if err != nil || string(data) != "module.exports = 1;\n" {
+		t.Fatalf("linked modules unreadable: %v %q", err, data)
+	}
+	// A tree that declares no Node project gets nothing, even when the worktree has modules.
+	other := t.TempDir()
+	if err := linkDependencies(worktree, other); err != nil {
+		t.Fatalf("link without a package.json: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(other, "node_modules")); err == nil {
+		t.Fatal("linked node_modules into a tree that declares no Node project")
+	}
+	// A worktree that never installed leaves the tree as it is.
+	bare, plain := t.TempDir(), t.TempDir()
+	writeFile(t, bare, "package.json", "{}")
+	writeFile(t, plain, "package.json", "{}")
+	if err := linkDependencies(bare, plain); err != nil {
+		t.Fatalf("link without installed modules: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(plain, "node_modules")); err == nil {
+		t.Fatal("linked node_modules that do not exist in the worktree")
+	}
+}
