@@ -282,6 +282,181 @@ func TestRangeCheckNamesTheCodeTheBaseCommitLacks(t *testing.T) {
 	})
 }
 
+// `findings record` judges a commit through RedCheckAt, which has no agent file list: the files are read from
+// the base tree and the worktree. The same witness rule has to hold there, or every round whose new test names
+// a symbol base never defined is refused with an empty detail and can never be booked.
+func TestRangeCheckJudgesARecordedRoundWithoutTheAgentFileList(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real git and go runner")
+	}
+	dir := redCheckRepo(t)
+	writeFile(t, dir, "order.go", "package rc\n\nfunc Order() string { return \"cab\" }\n\nfunc Len() int { return len(Order()) }\n\nfunc Seats() int { return 4 }\n")
+	writeFile(t, dir, "seats_test.go", "package rc\n\nimport \"testing\"\n\nfunc TestSeats(t *testing.T) {\n\tif Seats() != 4 {\n\t\tt.Fatal(Seats())\n\t}\n}\n")
+	commitAll(t, dir, "change")
+	rep, err := RedCheckAt(dir, "go test -count=1 ./...", "HEAD~1", 2*time.Minute)
+	if err != nil {
+		t.Fatalf("a recorded round must judge a base tree that does not build: %v", err)
+	}
+	if want := []string{"."}; !reflect.DeepEqual(rep.NewCode, want) {
+		t.Fatalf("new code = %v, want %v", rep.NewCode, want)
+	}
+}
+
+// witness keeps the record path's rule: without a changed test file there is nothing to excuse, and a change
+// whose own tests fail does not get the base tree's build failure blamed on code it lacks.
+func TestWitnessNeedsChangedTestsAndAPassingChange(t *testing.T) {
+	dir := redCheckRepo(t)
+	if got := witness(dir, "go test -count=1 ./...", nil, time.Minute, "undefined: x"); got != nil {
+		t.Fatalf("witness without changed tests = %v, want nil", got)
+	}
+	writeFile(t, dir, "broken_test.go", "package rc\n\nimport \"testing\"\n\nfunc TestBroken(t *testing.T) { t.Fatal(\"red\") }\n")
+	if got := witness(dir, "go test -count=1 ./...", []string{"broken_test.go"}, time.Minute, "undefined: x"); got != nil {
+		t.Fatalf("witness with a failing change = %v, want nil", got)
+	}
+}
+
+// redCheckTree cleans up its own extracted tree when the revision it was asked for cannot be read: a caller
+// only gets a tree it must remove when the call succeeds.
+func TestRedCheckTreeLeavesNoTreeBehindOnFailure(t *testing.T) {
+	dir := redCheckRepo(t)
+	before := redCheckTrees(t)
+	if _, _, _, err := redCheckTree(dir, "no-such-revision", nil); err == nil {
+		t.Fatal("an unreadable revision must fail")
+	}
+	if after := redCheckTrees(t); after != before {
+		t.Fatalf("extracted trees leaked: %d before, %d after", before, after)
+	}
+}
+
+func redCheckTrees(t *testing.T) int {
+	t.Helper()
+	trees, err := filepath.Glob(filepath.Join(os.TempDir(), "tsp-redcheck-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(trees)
+}
+
+// judgeTests is the comparison both the record and the range check end in. Splitting it out of redCheckAt
+// must keep its four answers: a broken existing test, a new failing test, a new passing test that pins
+// nothing, and a subtest whose new parent already says everything about it.
+func TestJudgeTestsNamesRedPinsAndIgnoresUnchangedTests(t *testing.T) {
+	before := map[string]bool{"pkg.TestKept": true, "pkg.TestBroken": true, "pkg.TestParent": true}
+	after := map[string]bool{
+		"pkg.TestKept":        true,
+		"pkg.TestBroken":      false,
+		"pkg.TestNew":         true,
+		"pkg.TestNewRed":      false,
+		"pkg.TestParent/case": false,
+		"pkg.TestFresh":       true,
+		"pkg.TestFresh/case":  false,
+	}
+	red, pins := judgeTests(before, after)
+	if want := []string{"pkg.TestBroken", "pkg.TestNewRed", "pkg.TestParent/case"}; !reflect.DeepEqual(red, want) {
+		t.Fatalf("red = %v, want %v", red, want)
+	}
+	if want := []string{"pkg.TestFresh", "pkg.TestNew"}; !reflect.DeepEqual(pins, want) {
+		t.Fatalf("pins = %v, want %v", pins, want)
+	}
+}
+
+// A benchmark run leaves ignored copies of the repository inside it. Reading the change's tests from the
+// filesystem listed them as the change's own, and the suite's argument list overflowed before it ran.
+// The base run executes the changed tests git knows and an ignored witness the record still names, but not a
+// copied repository that declares its own module.
+func TestRunFilesSkipsCopiedModulesAndKeepsIgnoredWitnesses(t *testing.T) {
+	dir := redCheckRepo(t)
+	writeFile(t, dir, ".gitignore", "results/\n")
+	writeFile(t, dir, "results/copy/order_test.go", "package rc\n\nimport \"testing\"\n\nfunc TestCopy(t *testing.T) {}\n")
+	commitAll(t, dir, "ignore")
+	writeFile(t, dir, "order_test.go", "package rc\n\nimport \"testing\"\n\nfunc TestLen(t *testing.T) {}\n")
+	writeFile(t, dir, "untracked_test.go", "package rc\n\nimport \"testing\"\n\nfunc TestNew(t *testing.T) {}\n")
+	files := []string{"order_test.go", "results/copy/order_test.go", "untracked_test.go"}
+	if want := files; !reflect.DeepEqual(runFiles(dir, files), want) {
+		t.Fatalf("run files = %v, want %v (an ignored witness is still the record's to name)", runFiles(dir, files), want)
+	}
+	writeFile(t, dir, "results/copy/go.mod", "module copy\n")
+	commitAll(t, dir, "copy is its own module")
+	if want := []string{"order_test.go", "untracked_test.go"}; !reflect.DeepEqual(runFiles(dir, files), want) {
+		t.Fatalf("run files = %v, want %v (a copied module is not this module's package)", runFiles(dir, files), want)
+	}
+	if only := []string{"results/copy/order_test.go"}; !reflect.DeepEqual(runFiles(dir, only), only) {
+		t.Fatalf("run files = %v, want %v (nothing else to run keeps the ignored witness)", runFiles(dir, only), only)
+	}
+}
+
+// inferRedCheckSuite keeps its order after the split: a Go module answers with its packages even when the same
+// change also touches Python, and a package.json with a vitest script names vitest rather than node.
+func TestInferRedCheckSuiteKeepsItsOrder(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "go.mod", "module rc\n\ngo 1.22\n")
+	writeFile(t, dir, "pkg/a_test.go", "package pkg\n")
+	writeFile(t, dir, "tools/check.py", "def test_x():\n    assert True\n")
+	suite, err := inferRedCheckSuite(dir, []string{"pkg/a_test.go", "tools/check.py"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "go test -count=1 ./pkg"; suite != want {
+		t.Fatalf("suite = %q, want %q", suite, want)
+	}
+
+	js := t.TempDir()
+	writeFile(t, js, "package.json", `{"scripts":{"test":"vitest run"}}`)
+	writeFile(t, js, "tests/a.test.js", "test('x', () => {})\n")
+	suite, err = inferRedCheckSuite(js, []string{"tests/a.test.js"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "npx vitest run tests/a.test.js"; suite != want {
+		t.Fatalf("suite = %q, want %q", suite, want)
+	}
+}
+
+// nodeRunner reads only the two runners it knows and leaves the fallback to the caller.
+func TestNodeRunnerReadsOnlyKnownRunners(t *testing.T) {
+	cases := []struct {
+		body, want string
+		ok         bool
+	}{
+		{`{"scripts":{"test":"npx vitest run --reporter=json"}}`, "npx vitest run", true},
+		{`{"scripts":{"test":"jest --ci"}}`, "npx jest", true},
+		{`{"scripts":{"test":"node --test"}}`, "", false},
+		{`{"scripts":{}}`, "", false},
+		{`{broken`, "", false},
+	}
+	for _, tc := range cases {
+		got, ok := nodeRunner([]byte(tc.body))
+		if got != tc.want || ok != tc.ok {
+			t.Fatalf("nodeRunner(%q) = %q,%v, want %q,%v", tc.body, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// inNestedModule walks up from the file's directory and stops before the root's own module: the repository's
+// module is the run's, while a module inside the tree is not.
+func TestInNestedModuleStopsAtTheRoot(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module x\n")
+	writeFile(t, root, "pkg/a_test.go", "package pkg\n")
+	if inNestedModule(root, "pkg") {
+		t.Fatal("the root's own module is not a nested module")
+	}
+	writeFile(t, root, "pkg/copied/go.mod", "module copied\n")
+	if !inNestedModule(root, "pkg/copied") {
+		t.Fatal("a module inside the tree is nested")
+	}
+}
+
+// Without git to say which files it knows, the run keeps every changed test: a directory that is not a
+// repository behaves as before instead of reporting no tests at all.
+func TestRunFilesKeepsEveryTestWithoutGit(t *testing.T) {
+	dir := t.TempDir()
+	files := []string{"tests/ledger.test.js"}
+	if got := runFiles(dir, files); !reflect.DeepEqual(got, files) {
+		t.Fatalf("run files = %v, want %v", got, files)
+	}
+}
+
 // A package that does not build at base reports no outcome for any of its tests, and the packages beside it
 // keep the run looking judged. A test that cannot be built at base cannot pass there, so the answer names it.
 func TestRangeCheckNamesABuildFailureBesideAPassingPackage(t *testing.T) {
@@ -316,5 +491,38 @@ func TestRangeCheckKeepsATestBrokenEverywhereUnjudgeable(t *testing.T) {
 	commitAll(t, dir, "change")
 	if _, err := RedCheckRange(dir, "", "HEAD~1", []string{"fresh/fresh_test.go"}, 2*time.Minute); err == nil {
 		t.Fatal("a test that compiles nowhere must stay unjudgeable")
+	}
+}
+
+func TestLinkDependenciesGivesTheBaseTreeTheInstalledModules(t *testing.T) {
+	worktree := t.TempDir()
+	writeFile(t, worktree, "package.json", `{"scripts":{"test":"vitest run"}}`)
+	writeFile(t, worktree, "node_modules/vite/index.js", "module.exports = 1;\n")
+	tree := t.TempDir()
+	writeFile(t, tree, "package.json", `{"scripts":{"test":"vitest run"}}`)
+	if err := linkDependencies(worktree, tree); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tree, "node_modules", "vite", "index.js"))
+	if err != nil || string(data) != "module.exports = 1;\n" {
+		t.Fatalf("linked modules unreadable: %v %q", err, data)
+	}
+	// A tree that declares no Node project gets nothing, even when the worktree has modules.
+	other := t.TempDir()
+	if err := linkDependencies(worktree, other); err != nil {
+		t.Fatalf("link without a package.json: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(other, "node_modules")); err == nil {
+		t.Fatal("linked node_modules into a tree that declares no Node project")
+	}
+	// A worktree that never installed leaves the tree as it is.
+	bare, plain := t.TempDir(), t.TempDir()
+	writeFile(t, bare, "package.json", "{}")
+	writeFile(t, plain, "package.json", "{}")
+	if err := linkDependencies(bare, plain); err != nil {
+		t.Fatalf("link without installed modules: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(plain, "node_modules")); err == nil {
+		t.Fatal("linked node_modules that do not exist in the worktree")
 	}
 }

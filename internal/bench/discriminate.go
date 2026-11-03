@@ -261,32 +261,49 @@ func agentTestFiles(fixture, ws string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(ws, path)
-		if info.IsDir() {
-			if rel != "." && ignoredPathRe.MatchString(filepath.ToSlash(rel)+"/") {
-				return filepath.SkipDir
-			}
-			// A virtual environment carries pyvenv.cfg whatever it is called (`python -m venv env`).
-			if _, err := os.Stat(filepath.Join(path, "pyvenv.cfg")); err == nil {
-				return filepath.SkipDir
-			}
-			return nil
+		changed, skip, err := changedTest(path, info, fixture, ws)
+		if skip {
+			return filepath.SkipDir
 		}
-		if !isTestFile(rel) {
-			return nil
-		}
-		got, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		if orig, err := os.ReadFile(filepath.Join(fixture, rel)); err == nil && bytes.Equal(orig, got) {
-			return nil
+		if changed {
+			rel, _ := filepath.Rel(ws, path)
+			out = append(out, filepath.ToSlash(rel))
 		}
-		out = append(out, filepath.ToSlash(rel))
 		return nil
 	})
 	sort.Strings(out)
 	return out, err
+}
+
+// changedTest reports whether a walked path is a test file the change made, and whether the walk must stay out
+// of it. Only files git knows count: a benchmark run leaves ignored copies (results/, .agent-config/) that look
+// like the repository's tests and would be staged as the change's own, overflowing the suite's argument list.
+func changedTest(path string, info os.FileInfo, fixture, ws string) (bool, bool, error) {
+	rel, _ := filepath.Rel(ws, path)
+	if info.IsDir() {
+		if rel != "." && ignoredPathRe.MatchString(filepath.ToSlash(rel)+"/") {
+			return false, true, nil
+		}
+		// A virtual environment carries pyvenv.cfg whatever it is called (`python -m venv env`).
+		if _, err := os.Stat(filepath.Join(path, "pyvenv.cfg")); err == nil {
+			return false, true, nil
+		}
+		return false, false, nil
+	}
+	if !isTestFile(rel) {
+		return false, false, nil
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		return false, false, err
+	}
+	if orig, err := os.ReadFile(filepath.Join(fixture, rel)); err == nil && bytes.Equal(orig, got) {
+		return false, false, nil
+	}
+	return true, false, nil
 }
 
 // suiteOn runs the suite on fixture + overlay + the agent's test files, in a fresh directory. A suite the
@@ -313,6 +330,27 @@ func testsOn(fixture, overlay, ws string, tests []string, suite string, timeout 
 	}
 	defer os.RemoveAll(dir)
 	return perTest(dir, suite, timeout, tests...)
+}
+
+// linkDependencies gives an extracted tree the dependency directory the worktree installed. A base tree
+// carries sources, not node_modules: without the link a JavaScript suite cannot even be read there, and a
+// repository that installs its tests would never be judged.
+func linkDependencies(worktree, tree string) error {
+	if _, err := os.Stat(filepath.Join(tree, "package.json")); err != nil {
+		return nil
+	}
+	src := filepath.Join(worktree, "node_modules")
+	if st, err := os.Stat(src); err != nil || !st.IsDir() {
+		return nil
+	}
+	dst := filepath.Join(tree, "node_modules")
+	if _, err := os.Lstat(dst); err == nil {
+		return nil
+	}
+	if err := os.Symlink(src, dst); err != nil {
+		return fmt.Errorf("link node_modules into the base tree: %w", err)
+	}
+	return nil
 }
 
 // stage builds fixture + overlay + the agent's test files in a fresh directory.
@@ -342,6 +380,9 @@ func stage(fixture, overlay, ws string, tests []string) (string, error) {
 		if err := os.WriteFile(dst, data, 0o644); err != nil {
 			return fail(err)
 		}
+	}
+	if err := linkDependencies(ws, dir); err != nil {
+		return fail(err)
 	}
 	return dir, nil
 }

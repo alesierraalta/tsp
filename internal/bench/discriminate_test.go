@@ -223,6 +223,8 @@ func TestInferRedCheckSuiteSkipsIgnoredWorkspaces(t *testing.T) {
 	run("init", "-q")
 	write(".gitignore", "results/\n")
 	write("go.mod", "module example.invalid/sample\n\ngo 1.22\n")
+	// A copied repository carries its own module: that is what makes it not a package of this one.
+	write("results/copy/go.mod", "module copy\n")
 	write("pkg/a_test.go", "package pkg\n")
 	run("add", "-A")
 	run("commit", "-qm", "base")
