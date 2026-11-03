@@ -74,6 +74,9 @@ type HostStatus struct {
 	// PiVersion is the host's own version, read when it is on PATH, so a reader can compare it
 	// with TestedPiVersion instead of guessing.
 	PiVersion string `json:"pi_version,omitempty"`
+	// PiFound records whether pi was on PATH at all, so an empty PiVersion is not rendered as
+	// "not on PATH" when the command was found but did not answer.
+	PiFound bool `json:"pi_found,omitempty"`
 }
 
 // hostTransports is what TSP knows how to put in front of each host, and the sentence a reader
@@ -160,6 +163,7 @@ func piHostStatus(home string) (HostStatus, bool) {
 	skillsDir := filepath.Join(configDir, "agent", "extensions")
 	extension := filepath.Join(skillsDir, "tpp", "index.ts")
 	state, note := extensionStatus(extension)
+	version, found := piVersion()
 	status := HostStatus{
 		Name:           "pi",
 		ConfigDir:      configDir,
@@ -167,7 +171,8 @@ func piHostStatus(home string) (HostStatus, bool) {
 		ExtensionPath:  extension,
 		ExtensionState: state,
 		ExtensionNote:  note,
-		PiVersion:      piVersion(),
+		PiVersion:      version,
+		PiFound:        found,
 		Transport:      TransportExtension,
 		TransportNote:  note,
 	}
@@ -217,18 +222,22 @@ func HostProblems(hosts []HostStatus) []string {
 
 // piVersion reads the host's version when it is on PATH. An unreadable or slow answer is empty:
 // the report says the version is unknown rather than failing a doctor run.
-func piVersion() string {
+func piVersion() (string, bool) {
 	path, err := exec.LookPath("pi")
 	if err != nil {
-		return ""
+		return "", false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	cmd := exec.CommandContext(ctx, path, "--version")
+	// Output waits for every holder of the pipe. A wrapper that leaves a child running would
+	// otherwise outlive the timeout, so close the pipes shortly after the kill.
+	cmd.WaitDelay = 500 * time.Millisecond
+	out, err := cmd.Output()
 	if err != nil {
-		return ""
+		return "", true
 	}
-	return strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	return strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0]), true
 }
 
 // skillsPresent counts this build's skills that are actually readable in a host's directory, so
@@ -286,7 +295,7 @@ func (r Report) writeHosts(b *strings.Builder) {
 	total := len(assets.SkillNames())
 	for _, h := range r.Hosts {
 		if h.ExtensionState != "" {
-			fmt.Fprintf(b, "  %-12s extension %s: %s%s\n", h.Name, h.ExtensionState, h.ExtensionNote, piVersionSuffix(h.PiVersion))
+			fmt.Fprintf(b, "  %-12s extension %s: %s%s\n", h.Name, h.ExtensionState, h.ExtensionNote, piVersionSuffix(h.PiVersion, h.PiFound))
 			continue
 		}
 		fmt.Fprintf(b, "  %-12s %d/%d skills · %s", h.Name, h.SkillsPresent, total, h.Transport)
@@ -302,10 +311,12 @@ func (r Report) writeHosts(b *strings.Builder) {
 
 // piVersionSuffix reports the host version against the one this build was tested with, so a
 // mismatch is visible without being treated as a failure.
-func piVersionSuffix(version string) string {
+func piVersionSuffix(version string, found bool) string {
 	switch {
-	case version == "":
+	case !found:
 		return " · pi not on PATH"
+	case version == "":
+		return " · pi did not answer"
 	case version == TestedPiVersion:
 		return " · pi " + version
 	default:

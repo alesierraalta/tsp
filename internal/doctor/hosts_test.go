@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // S3: a skill edited on disk after install is reported, so doctor never calls a drifting host
@@ -302,5 +303,32 @@ func TestGeminiWithAnAfterAgentHookIsWired(t *testing.T) {
 	kind, note := transportFor(sync.Host{Name: "gemini", ConfigDir: dir})
 	if kind != TransportWired || !strings.Contains(note, "AfterAgent") {
 		t.Fatalf("kind = %q note = %q, want wired on AfterAgent", kind, note)
+	}
+}
+
+// S4: a slow answer is empty and bounded. A wrapper whose child inherits the version command's
+// stdout cannot hold the doctor past the timeout, because that would make one host's `pi
+// --version` hang every `tsp doctor` and `tsp repair` run.
+func TestPiVersionBoundsAChildThatHoldsThePipe(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "pi")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n/bin/sleep 5 &\necho 9.9.9\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	start := time.Now()
+	version, found := piVersion()
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Fatalf("piVersion took %s, want it bounded by the two-second timeout", elapsed)
+	}
+	if !found {
+		t.Fatal("piVersion did not find the pi on PATH")
+	}
+	if version != "" {
+		t.Fatalf("version = %q, want an empty answer for a slow one", version)
+	}
+	if suffix := piVersionSuffix(version, found); suffix != " · pi did not answer" {
+		t.Fatalf("suffix = %q, want it to say pi did not answer instead of blaming PATH", suffix)
 	}
 }

@@ -132,6 +132,14 @@ func Run(opts Options) (Report, error) {
 	}
 
 	if piNeedsRepair(piBefore) {
+		// The planner reads a destination before it decides, so a copy nobody can read fails the
+		// whole host plan. Repair is the explicit fixer: make it readable first, so the plan can
+		// back up what is there and replace it.
+		if piBefore.ExtensionState == doctor.ExtensionUnreadable {
+			if err := os.Chmod(piBefore.ExtensionPath, 0o644); err != nil {
+				return report, fmt.Errorf("make %s readable: %w", piBefore.ExtensionPath, err)
+			}
+		}
 		piReport, err := sync.SyncHosts([]sync.Host{sync.PiHost(home)}, binPath, sync.Options{DryRun: opts.DryRun, Force: opts.Force})
 		report.PiSync = &piReport
 		if err != nil {
