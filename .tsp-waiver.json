@@ -1,9 +1,8 @@
 {
-  "fingerprint": "sha256:69fca04a418bd54f8617ff40d364cab458a41f9fd4e3a48d46889ede1b82a373",
+  "fingerprint": "sha256:445dea0aaba8ff1492e22951b76a1c61a320cd1d560eff702d1e49d3f1e0c4f7",
   "files": [
-    "cmd/tsp/main.go",
     "internal/buildinfo/buildinfo.go"
   ],
-  "reason": "help text and version strings only: no behaviour changed, and the help assertions in cmd/tsp pin the text",
-  "recorded": "2026-10-26T13:06:10Z"
+  "reason": "the release bumps one constant and the skills' pin; the suite already covers the code, and the tag workflow re-runs it",
+  "recorded": "2026-11-03T22:03:57Z"
 }
