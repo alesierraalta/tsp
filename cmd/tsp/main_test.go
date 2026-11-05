@@ -3476,3 +3476,57 @@ func TestPlanAddRowsAssignTheNextFreeID(t *testing.T) {
 		}
 	}
 }
+
+// A candidate's Disposition is its author's claim; an independent review is a second answer to it. `plan
+// check` reads the review's recorded shape — reviewer, explicit attestation, refutation attempt, effective
+// controls and observed decisive evidence — and never turns a malformed one into a confirmation. The same
+// plan without the section keeps the T1 behaviour.
+func TestPlanCheckValidatesIndependentCandidateReviews(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	planText := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
+		"\n## Evidence ledger\n\n| Id | Claim | Executed | Inputs | Observed | Mutation | Reproduction | Label |\n|---|---|---|---|---|---|---|---|\n" +
+		"| E1 | tenant read blocked | `go test ./...` | two tenants | 403 | reverted -> red | run the test | observado |\n" +
+		"\n## Security candidates\n\n| Id | Actor | Authority | Resource | Action | Boundary | Evidence id | Disposition | Observed boundary violation | Missing fact | Safe validation step | Refuting evidence id |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| S1 | user B | own account | user A record | read | tenant boundary | E1 | confirmed | user A record returned | - | - | - |\n"
+	reviews := "\n## Candidate reviews\n\n| Id | Candidate id | Reviewer | Independence attestation | Refutation attempt | Effective controls | Outcome | Decisive evidence id | Blocker |\n|---|---|---|---|---|---|---|---|---|\n" +
+		"| R1 | S1 | reviewer carol | attested | tried a second tenant and direct id substitution | tenant filter is enforced in the repository layer | confirmed | E1 | - |\n"
+	path := filepath.Join(dir, "plan.md")
+	check := func(text string) (string, int) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return runCLIAt(t, dir, bin, "plan", "check", "--path", "plan.md")
+	}
+
+	out, code := check(planText)
+	t.Logf("$ plan check (author disposition only)\n%s", out)
+	if code != 0 || !strings.Contains(out, "well formed") {
+		t.Fatalf("candidate without a review = %d\n%s", code, out)
+	}
+	out, code = check(planText + reviews)
+	t.Logf("$ plan check (independent review)\n%s", out)
+	if code != 0 || !strings.Contains(out, "well formed") {
+		t.Fatalf("complete independent review = %d\n%s", code, out)
+	}
+
+	out, code = check(planText + strings.Replace(reviews, "| attested |", "| - |", 1))
+	t.Logf("$ plan check (missing attestation)\n%s", out)
+	if code != 1 || !strings.Contains(out, "independence attestation") {
+		t.Fatalf("missing attestation = %d\n%s", code, out)
+	}
+	out, code = check(planText + strings.Replace(reviews, "| R1 | S1 |", "| R1 | S9 |", 1))
+	t.Logf("$ plan check (dangling candidate)\n%s", out)
+	if code != 1 || !strings.Contains(out, "not a row in Security candidates") {
+		t.Fatalf("dangling candidate reference = %d\n%s", code, out)
+	}
+	out, code = check(planText + strings.Replace(reviews, "| confirmed | E1 |", "| confirmed | - |", 1))
+	t.Logf("$ plan check (no decisive evidence)\n%s", out)
+	if code != 1 || !strings.Contains(out, "decisive observed Evidence ledger row") {
+		t.Fatalf("confirmation without decisive evidence = %d\n%s", code, out)
+	}
+}

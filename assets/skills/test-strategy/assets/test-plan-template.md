@@ -101,6 +101,29 @@ row. Promote actionable findings to Findings using its existing statuses and evi
 | Id | Actor | Authority | Resource | Action | Boundary | Evidence id | Disposition | Observed boundary violation | Missing fact | Safe validation step | Refuting evidence id |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 
+## Candidate reviews
+
+Optional, and separate from `Security candidates`: a candidate row's `Disposition` is its author's claim,
+while a review is a second answer to it. One row per review of an existing candidate, naming its
+`Candidate id`. `Reviewer` names who did the review, and `Independence attestation` is the literal
+`attested`, recording that the reviewer states they did not produce the candidate. `Refutation attempt`
+records a real attempt to refute the claimed path, and `Effective controls` records the controls found to
+prevent it. `Outcome` is `confirmed`, `rejected` or `blocked`. A `confirmed` or `rejected` review cites an
+executed, observed Evidence ledger row that is decisive; a `blocked` review names the specific `Blocker`
+that still has to be resolved. Use `-` for inapplicable cells. A candidate keeps its own disposition
+whether or not it is reviewed, and a review confirmation never replaces the author's disposition.
+
+`plan check` validates the recorded structure and references, not whether the reviewer was truly
+independent or whether the cited evidence proves the claim: an attestation and a table cannot mechanically
+prove identity or truth. Test verification is a different instrument: `tsp verify` freezes the candidate
+in a read-only worktree and asks a second session for a verdict document, publishing `.tsp-verify.json`,
+while a review row is a plan record a human reads. Use one section with one table and a distinct review
+id; duplicate sections or ids, malformed tables, dangling candidate or evidence references, and an
+outcome without its required evidence are refused.
+
+| Id | Candidate id | Reviewer | Independence attestation | Refutation attempt | Effective controls | Outcome | Decisive evidence id | Blocker |
+|---|---|---|---|---|---|---|---|---|
+
 ## Security coverage
 
 Optional, and separate from both Findings and Security candidates: one row per surface, boundary,

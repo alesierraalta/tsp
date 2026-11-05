@@ -956,6 +956,19 @@ evidence; `blocked` requires a missing fact and a safe validation step; `rejecte
 refuting evidence. `plan check` validates the record and references, not whether an observation
 actually proves the claim. Existing plans without this table remain valid.
 
+A candidate's disposition is its author's claim, so the template carries a separate, optional
+`Candidate reviews` table: one row per review of an existing candidate, naming the reviewer and an
+explicit `attested` independence declaration, the refutation attempt and the effective controls that
+were evaluated. A `confirmed` or `rejected` review cites an executed, observed Evidence ledger row
+that is decisive; a `blocked` review names the specific blocker still to be resolved. A candidate
+keeps its own disposition whether or not it is reviewed, and a review confirmation never replaces
+the author's disposition. `plan check` validates the recorded structure and references — duplicate
+sections or ids, malformed tables, dangling candidate or evidence references, and an outcome without
+its required evidence are refused — but an attestation and a table cannot mechanically prove that
+the reviewer was independent or that the evidence proves the claim. Test verification is a different
+instrument: `tsp verify` freezes the candidate and asks a second session for a verdict artifact,
+whereas a review row is a plan record a human reads.
+
 A plan may also carry the template's optional `Security coverage` table, one row per surface,
 boundary, subsystem or attack class the audit considered. `Source` is the `path:line` that locates
 the work, and `Disposition` is `covered`, `blocked`, `excluded` or `deferred`. A `covered` row cites
