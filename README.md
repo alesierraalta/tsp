@@ -956,6 +956,14 @@ evidence; `blocked` requires a missing fact and a safe validation step; `rejecte
 refuting evidence. `plan check` validates the record and references, not whether an observation
 actually proves the claim. Existing plans without this table remain valid.
 
+A plan may also carry the template's optional `Security coverage` table, one row per surface,
+boundary, subsystem or attack class the audit considered. `Source` is the `path:line` that locates
+the work, and `Disposition` is `covered`, `blocked`, `excluded` or `deferred`. A `covered` row cites
+an executed, observed Evidence ledger row: coverage without observed evidence is refused rather than
+counted. `blocked` and `deferred` state why the work is not covered and stay owed in `plan gaps`;
+`excluded` states why the item is not applicable, so a reasoned exclusion leaves the denominator the
+way an `n/a` layer does. The section is optional, and existing plans without it keep their behaviour.
+
 A plan may declare itself scoped. A bounded change — one target inside one or two files, touching
 none of the classes the skill's boundary list forbids — plans its blast radius instead of the whole
 app, and says so in one header line: `Light: <blast radius> · touches <classes>`. Every layer the
@@ -1040,7 +1048,10 @@ tsp plan gaps                # exit 1 and name every layer still owed, with its 
 `plan gaps` reads the layer matrix's status cells. A row counts as swept when its status reads
 `done`, `fixed` or `closed`, and `n/a`, `na`, `none` and `skipped` leave the denominator entirely:
 marking a layer out of scope is a decision the plan records, not a silent omission. The `Skill`
-cell only labels the rows still owed, so a row with no owner still has to be swept.
+cell only labels the rows still owed, so a row with no owner still has to be swept. When the plan
+carries a `Security coverage` table, the same report adds its ratio and names every blocked or
+deferred row, and it refuses to read a malformed table (a population without an id, a row without its
+`path:line` source) as complete, so an incomplete security audit cannot exit as complete.
 
 Nothing verifies that an assigned sibling was really invoked — the cell is what the check has, and
 that is deliberate, because the check must run with no host and no transcript. So the routing

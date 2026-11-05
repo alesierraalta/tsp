@@ -239,12 +239,26 @@ func auditLine(res Result, offerFeedback ...bool) string {
 		// The bound run's scope could not be read: the operator hears the scoped problem itself,
 		// actionable in one line — never "owes nothing", which the unreadable scope cannot prove.
 		return "tsp: " + res.RunProblem + suffix
-	case res.Owed > 0 && res.Pending > 0:
-		return fmt.Sprintf("tsp: %d layer(s) assigned and never invoked, %d ranked target(s) still pending.%s", res.Owed, res.Pending, suffix)
-	case res.Owed > 0:
-		return fmt.Sprintf("tsp: %d layer(s) assigned and never invoked.%s", res.Owed, suffix)
-	case res.Pending > 0:
-		return fmt.Sprintf("tsp: %d ranked target(s) still pending.%s", res.Pending, suffix)
+	}
+	// The debt is composed rather than switched one case at a time: layers, ranked targets and security
+	// coverage can be owed together, and any one of them makes "owes nothing" false.
+	var owed []string
+	if res.Owed > 0 {
+		owed = append(owed, fmt.Sprintf("%d layer(s) assigned and never invoked", res.Owed))
+	}
+	if res.Pending > 0 {
+		owed = append(owed, fmt.Sprintf("%d ranked target(s) still pending", res.Pending))
+	}
+	if res.Coverage > 0 {
+		owed = append(owed, fmt.Sprintf("%d security coverage item(s) incomplete", res.Coverage))
+	}
+	if res.CoverageProblems > 0 {
+		owed = append(owed, "the security coverage table could not be read")
+	}
+	if len(owed) > 0 {
+		return "tsp: " + strings.Join(owed, ", ") + "." + suffix
+	}
+	switch {
 	case res.Unreadable > 0:
 		return fmt.Sprintf("tsp: %d breadth table(s) could not be read to the end, so the rows under it were never counted.%s", res.Unreadable, suffix)
 	case res.Unplanned:

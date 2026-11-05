@@ -93,6 +93,11 @@ type Result struct {
 	// both make Gaps.Any() true without raising Owed or Pending.
 	Unreadable int
 	Unplanned  bool
+	// Coverage and CoverageProblems are the third half of the same decision: blocked or deferred security
+	// coverage, and a coverage table Gaps could not read. Either makes Gaps.Any() true without raising
+	// Owed or Pending, so the operator line reads these counts instead of falling through to the all-clear.
+	Coverage         int
+	CoverageProblems int
 	// Micro marks a plan that owes nothing because it is an activated micro plan: complete, with no layer swept.
 	Micro bool
 	// Problem is a repository state the gate could not act on: a plan declaration it cannot read. It is
@@ -324,6 +329,7 @@ func audit(d Deps, root, rel, run string, res Result, entry *Entry) Result {
 	entry.Audited = true
 	res.Owed, res.Pending = len(gaps.UnsweptLayers), len(gaps.PendingTargets)
 	res.Unreadable, res.Unplanned = len(gaps.InterruptedTables), gaps.NoLayerMatrix
+	res.Coverage, res.CoverageProblems = len(gaps.IncompleteCoverage), len(gaps.CoverageProblems)
 	res.Micro = gaps.Micro != ""
 	// A run no row carries, or a table whose Run column cannot be read, fails closed as a scoped
 	// problem: the counts above are not an all-clear, and the rows of other runs are never printed

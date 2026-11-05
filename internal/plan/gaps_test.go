@@ -318,6 +318,17 @@ func TestAnyIsDecidedByTheFieldsAndNotByTheReportText(t *testing.T) {
 			g:    Gaps{NoLayerMatrix: true},
 			want: true,
 		},
+		{
+			name: "security coverage blocked or deferred",
+			g: Gaps{LayersDone: 4, LayersTotal: 4, TargetsDone: 2, TargetsTotal: 2,
+				CoverageCovered: 1, CoverageTotal: 3,
+				IncompleteCoverage: []string{"(line 20): C2 bulk export — blocked: no second tenant fixture"}},
+			want: true,
+		},
+		{
+			name: "security coverage fully covered",
+			g:    Gaps{LayersDone: 4, LayersTotal: 4, TargetsDone: 2, TargetsTotal: 2, CoverageCovered: 2, CoverageTotal: 2},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -101,6 +101,20 @@ row. Promote actionable findings to Findings using its existing statuses and evi
 | Id | Actor | Authority | Resource | Action | Boundary | Evidence id | Disposition | Observed boundary violation | Missing fact | Safe validation step | Refuting evidence id |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 
+## Security coverage
+
+Optional, and separate from both Findings and Security candidates: one row per surface, boundary,
+subsystem or attack class the security audit considered. `Source` is the `path:line` that locates the
+work, so a coverage claim can be checked against the code it names; `Kind` is `surface`, `boundary`,
+`subsystem` or `attack class`. A `covered` row cites an executed, observed Evidence ledger row, and
+coverage without observed evidence is refused rather than counted. `blocked` and `deferred` state why
+the work is not covered and stay owed in `plan gaps`; `excluded` states why the item is not
+applicable, so a reasoned exclusion leaves the denominator the way an `n/a` layer does. Use `-` for
+inapplicable cells. Plans without this section remain valid.
+
+| Id | Source | Kind | Subject | Disposition | Reason | Evidence id |
+|---|---|---|---|---|---|---|
+
 ## Evidence ledger
 
 One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under
