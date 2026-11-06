@@ -143,6 +143,9 @@ func newSandboxPreflightFixture(t *testing.T) *sandboxPreflightFixture {
 	if err := os.WriteFile(filepath.Join(cgroup, "memory.max"), []byte("4294967296\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(cgroup, "memory.swap.max"), []byte("0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(cgroup, "pids.max"), []byte("1024\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -239,6 +242,15 @@ func TestSandboxPreflightRefusesBoundsThatAreNotEstablished(t *testing.T) {
 			detail: "above the",
 		},
 		{
+			name: "swap is unlimited",
+			break_: func(t *testing.T, f *sandboxPreflightFixture) {
+				if err := os.WriteFile(filepath.Join(f.paths.Cgroup, "memory.swap.max"), []byte("max\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			detail: "swap limit",
+		},
+		{
 			name: "pids are above the bound",
 			break_: func(t *testing.T, f *sandboxPreflightFixture) {
 				if err := os.WriteFile(filepath.Join(f.paths.Cgroup, "pids.max"), []byte("4096\n"), 0o644); err != nil {
@@ -262,6 +274,16 @@ func TestSandboxPreflightRefusesBoundsThatAreNotEstablished(t *testing.T) {
 				writeSandboxFakeDF(t, f.binDir, map[string]int{"/tmp": 2097152, "/w": 2097152, "/dev/shm": 65536})
 			},
 			detail: "above the",
+		},
+		{
+			name: "tmpfs size row is wrapped",
+			break_: func(t *testing.T, f *sandboxPreflightFixture) {
+				df := "#!/bin/sh\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\nvery-long-filesystem-name\\n 9999999 1 1 1%% %s\\n' \"$2\"\n"
+				if err := os.WriteFile(filepath.Join(f.binDir, "df"), []byte(df), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			detail: "cannot be read",
 		},
 		{
 			name: "root is writable",
@@ -359,6 +381,17 @@ func TestSandboxRunnerRefusesUnconfirmedBounds(t *testing.T) {
 	}
 	if !strings.Contains(refusal.Detail, "memory limit") {
 		t.Fatalf("detail = %q, want the control the sandbox could not establish", refusal.Detail)
+	}
+}
+
+// A container that exits zero without the preflight's confirmation never proved its bounds: an image whose
+// entrypoint ignores the script would otherwise read as a sandboxed pass.
+func TestSandboxRunnerRefusesARunThatNeverConfirmedItsBounds(t *testing.T) {
+	installFakeDocker(t, "case \"$1\" in\nrun) echo ok ;;\nrm) exit 0 ;;\nesac\n")
+	_, err := sandboxRunner("example/go:1", admit.SandboxReadOnly)(context.Background(), t.TempDir(), "printf one")
+	var refusal evidence.Refusal
+	if !errors.As(err, &refusal) || refusal.Reason != evidence.ReasonSandboxBoundsUnverified {
+		t.Fatalf("run = %v, want a %s refusal", err, evidence.ReasonSandboxBoundsUnverified)
 	}
 }
 

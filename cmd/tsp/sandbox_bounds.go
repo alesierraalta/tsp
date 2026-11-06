@@ -86,11 +86,13 @@ func sandboxPreflightScript(b sandboxBounds, p sandboxPaths, writable bool) stri
 	var s strings.Builder
 	fmt.Fprintf(&s, `tsp_fail() { printf '%%s%%s\n' %s "$1" >&2; exit %d; }
 tsp_num() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; }
-tsp_kib() { df -Pk "$1" 2>/dev/null | tail -n 1 | awk '{print $2}'; }
+tsp_kib() { df -Pk "$1" 2>/dev/null | awk -v mp="$1" '$NF == mp && NF >= 6 { v = $2 } END { print v }'; }
 tsp_mount() { awk -v mp="$1" -v f="$2" '$2 == mp { v = $f } END { print v }' %s; }
 tsp_mem=$(cat %s 2>/dev/null) || tsp_fail "the memory limit cannot be read from the container's cgroup"
 tsp_num "$tsp_mem" || tsp_fail "the memory limit is '$tsp_mem', want %d"
 [ "$tsp_mem" -le %d ] || tsp_fail "the memory limit is $tsp_mem, above the %d bound"
+tsp_swap=$(cat %s 2>/dev/null) || tsp_fail "the swap limit cannot be read from the container's cgroup"
+[ "$tsp_swap" = 0 ] || tsp_fail "the swap limit is '$tsp_swap', want 0"
 tsp_pids=$(cat %s 2>/dev/null) || tsp_fail "the pids limit cannot be read from the container's cgroup"
 tsp_num "$tsp_pids" || tsp_fail "the pids limit is '$tsp_pids', want %d"
 [ "$tsp_pids" -le %d ] || tsp_fail "the pids limit is $tsp_pids, above the %d bound"
@@ -101,7 +103,7 @@ tsp_nofile=$(ulimit -n)
 tsp_num "$tsp_nofile" || tsp_fail "the open-file limit is '$tsp_nofile', want %d"
 [ "$tsp_nofile" -le %d ] || tsp_fail "the open-file limit is $tsp_nofile, above the %d bound"
 `, shellQuote(sandboxFailurePrefix), sandboxBoundsExitCode, shellQuote(p.ProcMounts),
-		cg("memory.max"), b.Memory, b.Memory, b.Memory,
+		cg("memory.max"), b.Memory, b.Memory, b.Memory, cg("memory.swap.max"),
 		cg("pids.max"), b.Pids, b.Pids, b.Pids,
 		cg("cpu.max"), b.CPUs, b.CPUs, b.CPUs,
 		b.NoFile, b.NoFile, b.NoFile)
@@ -263,29 +265,44 @@ func runSandboxWithin(ctx context.Context, dir, image, mount, command string, b 
 	if exceeded || ctx.Err() != nil {
 		removeSandboxContainer(docker, name)
 	}
-	output, _ = stripSandboxConfirmation(output)
+	output, confirmed := stripSandboxConfirmation(output)
 	if exceeded {
 		return output, evidence.Refusal{
 			Reason: evidence.ReasonSandboxOutputLimit,
 			Detail: fmt.Sprintf("the command printed more than the sandbox's %d-byte output bound, so it was stopped and its container removed; narrow the command so its output fits", b.OutputBytes),
 		}
 	}
-	if err == nil {
-		return output, nil
-	}
 	// The caller's deadline must stay recognisable to the admission, so it is returned as it is rather
 	// than wrapped in a refusal about the sandbox.
 	if ctx.Err() != nil {
 		return output, ctx.Err()
 	}
+	if confirmed {
+		if err == nil {
+			return output, nil
+		}
+		return output, sandboxRefusal(image, output, err)
+	}
 	var exit *exec.ExitError
 	if detail, ok := sandboxBoundsFailure(output); ok && errors.As(err, &exit) && exit.ExitCode() == sandboxBoundsExitCode {
 		return output, evidence.Refusal{
 			Reason: evidence.ReasonSandboxBoundsUnverified,
-			Detail: "the sandbox could not confirm its bounds, so the command never ran: " + detail + "; the container runtime must apply cgroup v2 memory, cpu and pids limits for this mode",
+			Detail: "the sandbox could not confirm its bounds, so the command never ran: " + detail + "; the container runtime must apply cgroup v2 memory, swap, cpu and pids limits for this mode",
 		}
 	}
-	return output, sandboxRefusal(image, output, err)
+	// A docker that never started, or could not start a container, is named as such.
+	if err != nil {
+		var refusal evidence.Refusal
+		if errors.As(sandboxRefusal(image, output, err), &refusal) && refusal.Reason == evidence.ReasonMisconfigured {
+			return output, refusal
+		}
+	}
+	// Anything else finished without the confirmation, so the preflight did not run first: an image whose
+	// entrypoint does not hand `sh -c` the script would otherwise read as a sandboxed observation.
+	return output, evidence.Refusal{
+		Reason: evidence.ReasonSandboxBoundsUnverified,
+		Detail: fmt.Sprintf("the container finished without confirming its bounds, so its output is not a sandboxed observation; the image %q must run `sh -c` as given, without an entrypoint that replaces it", image),
+	}
 }
 
 // removeSandboxContainer stops a container whose docker CLI was killed. It runs on its own short deadline,
