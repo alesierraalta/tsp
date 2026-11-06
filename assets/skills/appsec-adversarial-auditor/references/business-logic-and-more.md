@@ -36,4 +36,20 @@ Probe: make the authorization, validation, or rate-limit dependency fail (kill t
 | Model output to sink | make the model emit `'; DROP...`, shell metacharacters, `<script>` and follow it to the SQL, shell, or HTML sink | output reaches the sink unparameterized or unescaped |
 | Retrieval tenant scoping | as tenant B, query text that only matches tenant A documents | any tenant A chunk is returned |
 
+### MCP and agent action binding
+
+An agent or MCP client is a deputy, never an authority. Test the binding at the executor, not only at the model:
+
+| Concern | Probe | Violation |
+|---|---|---|
+| Caller identity | two principals share one agent or MCP session; B asks for A's resource | the tool returns or mutates A's data for B |
+| Scope binding | the caller lacks the scope the tool needs; the tool is still offered | the tool runs with the server's ambient credential |
+| Server provenance | register or point the client at an unapproved MCP server; alter a tool description | the server is trusted, or its description reaches the model unmarked |
+| Consent | invoke a high-impact tool without the approval the design promises | the action runs silently |
+| Tenant routing | B's request reaches a server configured for A's tenant | any cross-tenant effect |
+
+A prompt-injected instruction is a plausible symptom; the demonstrated violation is the executed action or the observed cross-boundary read, with the authorized control succeeding in the same run. Keep the deterministic proof here.
+
+Deployment facts to validate outside the repository: the MCP server registry or allowlist, transport and auth mode, the scopes the client was actually granted, tool sandbox and egress policy, and the tenant each server is configured against.
+
 Behavioral prompt-injection evaluation stays with `llm-redteam`.

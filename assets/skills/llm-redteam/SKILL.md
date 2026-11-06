@@ -29,6 +29,7 @@ NOT for: deterministic controls (tool authorization, output-to-sink taint, tenan
 7. **Adaptive multi-turn jailbreaks** (crescendo-style), not only static prompts; static suites decay.
 8. **Measure, do not assert.** Report attack success rate over repeated trials with a confidence interval, and utility under attack plus a benign-task control for over-refusal. A guardrail's claimed catch rate is a claim until measured on both attacks and benign traffic.
 9. **A pass means "not found by these probes".** Probe results never prove safety; deterministic controls do.
+10. **A successful injection is not yet a boundary violation.** The violation is an observed effect: a tool executed with the wrong authority, data reached a sink, or a canary crossed the boundary. Model text claiming success, or a suspicious completion, is a lead. Prove the deterministic path (tool authorization, sink taint, tenant scoping) with `appsec-adversarial-auditor`, and report the behavioral result separately from that proof.
 
 ## Decision Gates
 
@@ -48,7 +49,7 @@ NOT for: deterministic controls (tool authorization, output-to-sink taint, tenan
 
 ## Execution Steps
 
-1. Trifecta and tool inventory; decide scope.
+1. Trifecta and tool inventory; decide scope. Read the deployed model, guardrail, tool-scope and egress configuration, and mark anything you could not read as `blocked` with the missing fact rather than assuming it.
 2. Plant canaries; run Rules 3-6 probes, one channel at a time.
 3. Run the adaptive multi-turn campaign with a fixed attacker budget.
 4. Repeat trials; compute ASR with CI, utility under attack, over-refusal.

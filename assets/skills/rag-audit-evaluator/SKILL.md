@@ -29,12 +29,13 @@ NOT for: prompts with no retrieval, general red-teaming (`llm-redteam`), judge c
 9. **Freshness and deletion SLA.** After updating or deleting a document, it must stop being retrieved within the stated SLA (also from caches and replicas), and an old version must not outrank the new one. A deleted document still retrievable is a defect (right to erasure).
 10. **Embedding or chunker change ships via a shadow index.** Build the new index beside the old one, replay the same query set on both, and compare top-K overlap, rank correlation and golden-set metrics on a stratified sample with a paired bootstrap CI. Guard against mixed versions (old query vectors against new index) and dimension, normalization, or tokenizer mismatch. Keep a rollback.
 11. **Record versions.** Every benchmark records index build ID, embedding model and version, chunker version, K, and sample size; rerun after any of them changes.
+12. **Isolation is proven at every shared layer, not inferred from a wrong answer.** Enumerate the boundary: index or namespace, metadata filter, reranker, answer context, cache, replica, and logs. A leak needs an observed foreign chunk, citation, or canary in an answer; an answer that merely looks wrong is a lead, not a violation. Validate these deployment facts rather than assume them: one index per tenant versus a shared index with filters, filtering inside the query versus after top-K, cache keys including principal and ACL version, and replicas or index rebuilds that do not merge tenants. An unvalidated item is `blocked`, never `passed`.
 
 ## Decision Gates
 
 | What fails in production | Test | Skip |
 | :--- | :--- | :--- |
-| Multi-tenant or ACL-scoped corpus | Rule 1 first, before any quality metric | Never skip when more than one principal exists |
+| Multi-tenant or ACL-scoped corpus | Rule 1 and Rule 12 first, before any quality metric | Never skip when more than one principal exists |
 | Wrong or missing chunks | Rank-weighted precision/recall, graded nDCG, recall@50 vs precision@5 for rerankers | Generation metrics until retrieval passes |
 | Right chunks, wrong answer | Faithfulness + no-context control + completeness (Rule 6) | Retrieval sweeps |
 | Answer buried in long context | Gold-chunk position sweep: place the gold chunk at start, middle and end, vary distractor count, compare accuracy | Contexts of 1-3 chunks |
