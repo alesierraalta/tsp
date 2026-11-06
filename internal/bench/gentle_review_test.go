@@ -142,3 +142,34 @@ func TestGentleReviewIsAKnownRunnerOnHaiku(t *testing.T) {
 		t.Fatalf("gentle-review known=%v default=%q", KnownRunner(RunnerGentleReview), DefaultModel(RunnerGentleReview))
 	}
 }
+
+// A clean control has no fix to diff against, so it is presented over an empty base: the whole fixture is the
+// change, and every finding on it is a false positive. EmptyBase presents any case that way, so the defect is
+// hidden in the whole code rather than shown as the diff.
+func TestScaffoldAsChangeUsesAnEmptyBaseForAControlAndOnRequest(t *testing.T) {
+	control := asChangeCase(t)
+	if err := os.RemoveAll(filepath.Join(control, "fix")); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		caseDir string
+		key     Key
+	}{
+		"control":    {control, Key{Suite: "true", Control: ControlClean}},
+		"empty base": {asChangeCase(t), Key{Suite: "true"}},
+	} {
+		ws := filepath.Join(t.TempDir(), "ws")
+		suite, err := ScaffoldAsChangeFrom(tc.caseDir, ws, tc.key, time.Minute, name == "empty base")
+		if err != nil || !suite.Green {
+			t.Fatalf("%s: ScaffoldAsChangeFrom = %+v, %v", name, suite, err)
+		}
+		base, err := gitRun(ws, "ls-tree", "-r", "--name-only", "HEAD~1")
+		if err != nil || strings.TrimSpace(base) != "" {
+			t.Fatalf("%s: base tree = %q, %v; want empty", name, base, err)
+		}
+		diff, _ := gitRun(ws, "diff", "--name-status", "HEAD~1", "HEAD")
+		if !strings.Contains(diff, "A\tsrc/avg.js") || !strings.Contains(diff, "A\tREADME.md") {
+			t.Fatalf("%s: diff = %q; want the whole fixture added", name, diff)
+		}
+	}
+}

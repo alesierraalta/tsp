@@ -120,7 +120,10 @@ type Options struct {
 	// AsChange presents every case as a change: a base commit with the fixed code and a candidate commit with the
 	// fixture, so an arm that reviews a diff and an arm that writes tests read the same repository.
 	AsChange bool
-	Runs     int
+	// EmptyBase, with AsChange, commits a base with no files, so the whole fixture is the change and a defect has to be
+	// found in the code rather than read off a diff of its own.
+	EmptyBase bool
+	Runs      int
 	// Prompt replaces the bare instruction for every arm of a reading, so a bare agent can be asked to hunt
 	// defects instead of rerunning the suite; empty keeps the bench prompt.
 	Prompt string
@@ -711,7 +714,9 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	res := Result{Case: name, Run: run, Family: key.Family, Total: len(key.Defects), Workspace: ws}
 	scaffold := Scaffold
 	if opts.AsChange {
-		scaffold = ScaffoldAsChange
+		scaffold = func(caseDir, ws string, key Key, timeout time.Duration) (SuiteResult, error) {
+			return ScaffoldAsChangeFrom(caseDir, ws, key, timeout, opts.EmptyBase)
+		}
 	}
 	suite, err := scaffold(caseDir, ws, key, opts.SuiteTimeout)
 	res.Suite = suite
