@@ -23,4 +23,7 @@ jobs:
       # its own verdict, which is why the exit code is reported and, in a repository that runs the
       # released binary instead, replaced by it.
       - run: go build -o "$RUNNER_TEMP/tsp" ./cmd/tsp
+      # The check runs each changed test on its own, and a Python test is run through pytest; without it
+      # the gate cannot judge a Python test and fails closed, which is right but says nothing about the test.
+      - run: python3 -m pip install --quiet pytest
       - run: '"$RUNNER_TEMP/tsp" check --base "origin/${{ github.base_ref }}"'
