@@ -933,6 +933,22 @@ An explicit `--sandbox-image` still wins over the declaration, and the declarati
 default. The sandbox itself is the same whatever the image: read-only root, a tmpfs at `/tmp` where
 `HOME` and `XDG_CACHE_HOME` point, and no network.
 
+Every sandboxed observation is also bounded: 4 GiB of memory with no swap, 2 CPUs, 1024 processes,
+4096 open files, 64 MiB of shared memory, a 1 GiB `/tmp` and 8 MiB of combined output. The tmpfs
+mounts are memory, so they count against the 4 GiB. Before the row's command starts, the container
+reads its own cgroup v2 limits, mounts and tmpfs sizes and prints them on one line, which is removed
+from the output before it is digested, so existing pins still match. A limit the runtime did not apply
+(no cgroup v2, a memory or cpu controller missing, a rootless setup without delegation) refuses the row
+as `sandbox-bounds-unverified` and names the limit; the command never runs. Output above the bound
+refuses it as `sandbox-output-limit`. A run that hits the output bound or `--timeout` has its
+container removed by name, so nothing keeps running after the row is over.
+
+A replay no longer writes to a bind mount of the staged copy: the copy is mounted read-only at `/src`
+and each run works on its own 2 GiB tmpfs copy at `/w`. Each of the two runs starts from the staged
+tree, so the run after the edit is put back no longer sees files the run under the edit wrote. A
+staged tree that does not fit in the workspace is refused as `sandbox-bounds-unverified`. These bounds
+apply to `tsp plan admit --sandbox` only; they do not sandbox `tsp scan` or agent activity.
+
 A malformed, unreadable or unusable declaration fails closed for these manual commands; it never
 silently falls back to the default. The Stop-hook gate ignores `.tpp.json`: it audits only the plan
 and run bound to the exact session, and stays silent without a valid binding.

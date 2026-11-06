@@ -96,6 +96,10 @@ const (
 	ReasonSandboxReadOnly   = "sandbox-read-only"
 	ReasonMisconfigured     = "sandbox-misconfigured"
 	ReasonNoNetwork         = "network-unavailable"
+	// A sandbox whose resource or storage bounds could not be confirmed from inside the container, and a
+	// command whose output outgrew the bound the sandbox holds it to.
+	ReasonSandboxBoundsUnverified = "sandbox-bounds-unverified"
+	ReasonSandboxOutputLimit      = "sandbox-output-limit"
 	ReasonMutationNotReplay = "mutation-not-replayed"
 	ReasonMutationNotRed    = "mutation-not-red"
 	ReasonMutationNotGreen  = "mutation-not-green"
