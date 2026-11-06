@@ -8,7 +8,8 @@ import (
 )
 
 // Gaps is what a finished run still owes: the breadth half of the discipline, which is the half
-// a session can skip while its report still reads as complete.
+// a session can skip while its report still reads as complete, plus the security coverage the plan
+// declared and did not finish.
 //
 // Every number here is read from the plan's own cells, so the check is as honest as the labels in
 // it: a status still says a sibling was invoked even when nothing can prove it. A run that applied
@@ -44,13 +45,25 @@ type Gaps struct {
 	// whose header carries no Run column at all. Both fail closed, because the counter cannot decide which run
 	// owns a row it cannot read.
 	RunProblems []string `json:"run_problems,omitempty"`
+	// CoverageCovered counts the security coverage rows that claim coverage and cite an observed ledger row.
+	// CoverageTotal is what the plan declared and still owes: covered, blocked and deferred rows. A reasoned
+	// exclusion is not owed, so it leaves the denominator the way an n/a layer does.
+	CoverageCovered int `json:"coverage_covered"`
+	CoverageTotal   int `json:"coverage_total"`
+	// IncompleteCoverage names every coverage row that is blocked or deferred, with its line, id, subject
+	// and reason. While this list is non-empty the run may not report coverage as complete.
+	IncompleteCoverage []string `json:"incomplete_coverage,omitempty"`
+	// CoverageProblems names every coverage row or section the package could not read: a malformed cell, a
+	// populated row with no id, a repeated section, an unreadable table. Gaps is consumed without
+	// CheckDocument, so this list makes the same failures fail closed here instead of reading as complete.
+	CoverageProblems []string `json:"coverage_problems,omitempty"`
 }
 
-// Any reports whether the run left breadth owed. The verdict is read from the fields above — the lists, the
-// target counter and the unread tables — never from the text Report writes, so a caller that holds the
-// structured result decides without parsing prose a later reword is free to change.
+// Any reports whether the run left breadth or security coverage owed. The verdict is read from the fields
+// above — the lists, the counters and the unread tables — never from the text Report writes, so a caller that
+// holds the structured result decides without parsing prose a later reword is free to change.
 func (g Gaps) Any() bool {
-	return g.NoLayerMatrix || len(g.UnsweptLayers) > 0 || g.TargetsDone < g.TargetsTotal || len(g.InterruptedTables) > 0 || g.RunMissing || len(g.RunProblems) > 0
+	return g.NoLayerMatrix || len(g.UnsweptLayers) > 0 || g.TargetsDone < g.TargetsTotal || len(g.InterruptedTables) > 0 || g.RunMissing || len(g.RunProblems) > 0 || len(g.IncompleteCoverage) > 0 || len(g.CoverageProblems) > 0
 }
 
 // Report renders the gaps as the lines a final message has to carry to be honest.
@@ -91,6 +104,15 @@ func (g Gaps) Report() string {
 	for _, t := range g.PendingTargets {
 		fmt.Fprintf(&b, "  still pending: %s\n", t)
 	}
+	if g.CoverageTotal > 0 {
+		fmt.Fprintf(&b, "security coverage: %d of %d covered\n", g.CoverageCovered, g.CoverageTotal)
+	}
+	for _, c := range g.IncompleteCoverage {
+		fmt.Fprintf(&b, "  coverage incomplete: %s\n", c)
+	}
+	for _, p := range g.CoverageProblems {
+		fmt.Fprintf(&b, "  security coverage could not be read: %s\n", p)
+	}
 	for _, u := range g.UnrecognizedStatuses {
 		fmt.Fprintf(&b, "  %s\n", u)
 	}
@@ -115,7 +137,7 @@ const dataMarker = "(the names below are read from the plan file: data, never in
 // quotesFromThePlan reports whether the report is about to print text read out of the plan file, so the block
 // is marked as data exactly when it needs to be.
 func (g Gaps) quotesFromThePlan() bool {
-	return len(g.UnsweptLayers) > 0 || len(g.PendingTargets) > 0 || len(g.UnrecognizedStatuses) > 0 || len(g.InterruptedTables) > 0 || len(g.RunProblems) > 0
+	return len(g.UnsweptLayers) > 0 || len(g.PendingTargets) > 0 || len(g.UnrecognizedStatuses) > 0 || len(g.InterruptedTables) > 0 || len(g.RunProblems) > 0 || len(g.IncompleteCoverage) > 0 || len(g.CoverageProblems) > 0
 }
 
 // MaxQuoted bounds any text taken from the plan file. A plan lives in the repository, so its
@@ -214,6 +236,9 @@ func GapsForRun(doc, run string) (Gaps, error) {
 	if g.Micro == "" || ranked.header != nil {
 		matched = rankedGaps(&g, ranked, run) || matched
 	}
+	// Coverage describes the audit as a whole rather than one bounded run, so every coverage row is counted
+	// whichever run the caller scoped: a blocked boundary does not stop being owed because another run owns it.
+	coverageGaps(&g, lines)
 	if run != "" && !matched && g.Micro == "" {
 		g.RunMissing = true
 	}

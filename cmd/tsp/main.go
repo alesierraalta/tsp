@@ -1523,7 +1523,7 @@ func runPlan(args []string) int {
 	timeout := fs.Duration("timeout", 120*time.Second, "bound one command; 0 leaves it unbounded (admit only)")
 	only := fs.String("only", "", "comma-separated evidence ids to admit; empty means every row (admit only)")
 	record := fs.String("record", "", "comma-separated evidence ids whose freshly observed digest is written into the plan (admit only; requires --execute)")
-	sandbox := fs.Bool("sandbox", false, "observe each command inside a container instead of on this machine (admit only; requires --execute and docker)")
+	sandbox := fs.Bool("sandbox", false, "observe each command inside a container instead of on this machine, with memory, cpu, process, storage and output bounds the container must confirm (admit only; requires --execute, docker and cgroup v2)")
 	sandboxImage := fs.String("sandbox-image", sandboxImageDefault, "image the sandbox runs in (admit only; see --sandbox); sandboxImage in the repository declaration overrides this default, which is pulled on first use")
 	commit := fs.String("commit", "", "commit the export covers; the default is the short HEAD of the repository (export only)")
 	if code, ok := parseFlags(fs, args[1:]); !ok {
@@ -2620,26 +2620,13 @@ const sandboxImageDefault = "golang:1.26-alpine"
 //
 // `--read-only` and `--network none` do not change whether a command passes; they are exactly the isolation this
 // mode claims, so they are asserted here rather than relied on to make anything work.
+//
+// Every observation also runs under sandboxDefaults: memory, cpu, pids, open files, shared memory, /tmp and
+// a replay's workspace are bounded, the container confirms those bounds before the row's command starts, and
+// output above the bound or a passed deadline stops the run and removes its container (sandbox_bounds.go).
 func sandboxRunner(image, mount string) admit.Runner {
 	return func(ctx context.Context, dir, command string) (string, error) {
-		args, err := sandboxArgs(dir, image, mount, command)
-		if err != nil {
-			return "", err
-		}
-		cmd := exec.CommandContext(ctx, "docker", args...)
-		var buf bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &buf, &buf
-		err = cmd.Run()
-		output := buf.String()
-		if err == nil {
-			return output, nil
-		}
-		// The caller's deadline must stay recognisable to the admission, so it is returned as it is rather
-		// than wrapped in a refusal about the sandbox.
-		if ctx.Err() != nil {
-			return output, ctx.Err()
-		}
-		return output, sandboxRefusal(image, output, err)
+		return runSandboxWithin(ctx, dir, image, mount, command, sandboxDefaults, sandboxContainerPaths, "docker")
 	}
 }
 
@@ -2648,31 +2635,7 @@ func sandboxRunner(image, mount string) admit.Runner {
 // the sandbox is a property of this vector alone. A dir that is not absolute is refused here, before
 // docker starts, because the mount path is the tree the container is given.
 func sandboxArgs(dir, image, mount, command string) ([]string, error) {
-	if !filepath.IsAbs(dir) {
-		return nil, evidence.Refusal{
-			Reason: evidence.ReasonMisconfigured,
-			Detail: fmt.Sprintf("the sandbox mounts the working directory by absolute path, and %q is not one", dir),
-		}
-	}
-	return []string{
-		"run", "--rm", "--quiet",
-		"--network", "none",
-		"--read-only",
-		"--tmpfs", "/tmp:exec",
-		"-v", dir + ":/w:" + mount,
-		"-w", "/w",
-		"-e", "GOCACHE=/tmp/gocache",
-		"-e", "HOME=/tmp/home",
-		"-e", "XDG_CACHE_HOME=/tmp/xdg",
-		image, "sh", "-c", sandboxScript(command),
-	}, nil
-}
-
-// sandboxScript is the row's command with the writable user directories created first: the container's
-// root is read-only, so nothing under /tmp exists until something makes it. mkdir is silent, and it
-// cannot change the command's own exit status, which is what the admission reads.
-func sandboxScript(command string) string {
-	return "mkdir -p /tmp/home /tmp/xdg\n" + command
+	return sandboxArgsWithin(dir, image, mount, command, sandboxDefaults, sandboxContainerPaths, sandboxContainerName())
 }
 
 // sandboxRefusal names why a sandboxed command produced no observation. Three of these are about the sandbox

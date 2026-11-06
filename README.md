@@ -933,6 +933,22 @@ An explicit `--sandbox-image` still wins over the declaration, and the declarati
 default. The sandbox itself is the same whatever the image: read-only root, a tmpfs at `/tmp` where
 `HOME` and `XDG_CACHE_HOME` point, and no network.
 
+Every sandboxed observation is also bounded: 4 GiB of memory with no swap, 2 CPUs, 1024 processes,
+4096 open files, 64 MiB of shared memory, a 1 GiB `/tmp` and 8 MiB of combined output. The tmpfs
+mounts are memory, so they count against the 4 GiB. Before the row's command starts, the container
+reads its own cgroup v2 limits, mounts and tmpfs sizes and prints them on one line, which is removed
+from the output before it is digested, so existing pins still match. A limit the runtime did not apply
+(no cgroup v2, a memory or cpu controller missing, a rootless setup without delegation) refuses the row
+as `sandbox-bounds-unverified` and names the limit; the command never runs. Output above the bound
+refuses it as `sandbox-output-limit`. A run that hits the output bound or `--timeout` has its
+container removed by name, so nothing keeps running after the row is over.
+
+A replay no longer writes to a bind mount of the staged copy: the copy is mounted read-only at `/src`
+and each run works on its own 2 GiB tmpfs copy at `/w`. Each of the two runs starts from the staged
+tree, so the run after the edit is put back no longer sees files the run under the edit wrote. A
+staged tree that does not fit in the workspace is refused as `sandbox-bounds-unverified`. These bounds
+apply to `tsp plan admit --sandbox` only; they do not sandbox `tsp scan` or agent activity.
+
 A malformed, unreadable or unusable declaration fails closed for these manual commands; it never
 silently falls back to the default. The Stop-hook gate ignores `.tpp.json`: it audits only the plan
 and run bound to the exact session, and stays silent without a valid binding.
@@ -955,6 +971,27 @@ from Findings statuses: `confirmed` requires a recorded boundary violation and o
 evidence; `blocked` requires a missing fact and a safe validation step; `rejected` cites observed
 refuting evidence. `plan check` validates the record and references, not whether an observation
 actually proves the claim. Existing plans without this table remain valid.
+
+A candidate's disposition is its author's claim, so the template carries a separate, optional
+`Candidate reviews` table: one row per review of an existing candidate, naming the reviewer and an
+explicit `attested` independence declaration, the refutation attempt and the effective controls that
+were evaluated. A `confirmed` or `rejected` review cites an executed, observed Evidence ledger row
+that is decisive; a `blocked` review names the specific blocker still to be resolved. A candidate
+keeps its own disposition whether or not it is reviewed, and a review confirmation never replaces
+the author's disposition. `plan check` validates the recorded structure and references — duplicate
+sections or ids, malformed tables, dangling candidate or evidence references, and an outcome without
+its required evidence are refused — but an attestation and a table cannot mechanically prove that
+the reviewer was independent or that the evidence proves the claim. Test verification is a different
+instrument: `tsp verify` freezes the candidate and asks a second session for a verdict artifact,
+whereas a review row is a plan record a human reads.
+
+A plan may also carry the template's optional `Security coverage` table, one row per surface,
+boundary, subsystem or attack class the audit considered. `Source` is the `path:line` that locates
+the work, and `Disposition` is `covered`, `blocked`, `excluded` or `deferred`. A `covered` row cites
+an executed, observed Evidence ledger row: coverage without observed evidence is refused rather than
+counted. `blocked` and `deferred` state why the work is not covered and stay owed in `plan gaps`;
+`excluded` states why the item is not applicable, so a reasoned exclusion leaves the denominator the
+way an `n/a` layer does. The section is optional, and existing plans without it keep their behaviour.
 
 A plan may declare itself scoped. A bounded change — one target inside one or two files, touching
 none of the classes the skill's boundary list forbids — plans its blast radius instead of the whole
@@ -1040,7 +1077,10 @@ tsp plan gaps                # exit 1 and name every layer still owed, with its 
 `plan gaps` reads the layer matrix's status cells. A row counts as swept when its status reads
 `done`, `fixed` or `closed`, and `n/a`, `na`, `none` and `skipped` leave the denominator entirely:
 marking a layer out of scope is a decision the plan records, not a silent omission. The `Skill`
-cell only labels the rows still owed, so a row with no owner still has to be swept.
+cell only labels the rows still owed, so a row with no owner still has to be swept. When the plan
+carries a `Security coverage` table, the same report adds its ratio and names every blocked or
+deferred row, and it refuses to read a malformed table (a population without an id, a row without its
+`path:line` source) as complete, so an incomplete security audit cannot exit as complete.
 
 Nothing verifies that an assigned sibling was really invoked — the cell is what the check has, and
 that is deliberate, because the check must run with no host and no transcript. So the routing

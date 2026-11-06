@@ -772,3 +772,49 @@ func TestDecideStaysSilentWhenTheRefIsGone(t *testing.T) {
 		t.Fatalf("an unresolvable ref must stay silent, got %q", res.Drift)
 	}
 }
+
+// Coverage is breadth too. A plan whose layer sweep and ranked targets are finished can still owe a
+// blocked or deferred security coverage row, and a malformed coverage table proves nothing. The model
+// hears both through Reason; the operator line must name the same debt instead of claiming the plan
+// owes nothing.
+func TestAuditLineNamesIncompleteCoverageInsteadOfOwesNothing(t *testing.T) {
+	finished := "## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n" +
+		"| Security | `appsec-adversarial-auditor` | untrusted input | done | run-a |\n\n" +
+		"## Ranked targets\n\n| Target | Verdict | Status | Run |\n|---|---|---|---|\n" +
+		"| 1. token refresh | probe | done | run-a |\n\n"
+	const coverage = "## Security coverage\n\n| Id | Source | Kind | Subject | Disposition | Reason | Evidence id |\n|---|---|---|---|---|---|---|\n"
+	cases := []struct{ name, plan, want string }{
+		{
+			name: "a blocked coverage row",
+			plan: finished + coverage + "| C1 | src/auth/session.go:42 | boundary | tenant isolation | blocked | no fixture | - |\n",
+			want: "coverage",
+		},
+		{
+			name: "a coverage table that cannot be read",
+			plan: finished + coverage + "| C1 | - | boundary | tenant isolation | covered | - | E1 |\n",
+			want: "coverage",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := auditRepo()
+			r.transcript = stamped(auditStart, `{"name":"Skill","input":{"skill":"tsp"}}`)
+			r.plan = tc.plan
+			setBinding(t, "sess-audit", "/repo", plan.DefaultPath, "run-a")
+			res := Decide(Input{SessionID: "sess-audit", TranscriptPath: "t"}, r.deps(auditNow))
+			if !res.Audit || !strings.Contains(res.Reason, "security coverage") {
+				t.Fatalf("the model must hear the coverage debt: audit=%v reason=%s", res.Audit, res.Reason)
+			}
+			line := auditLine(res)
+			if strings.Contains(line, "owes nothing") {
+				t.Fatalf("auditLine = %q, coverage debt is not nothing owed", line)
+			}
+			if !strings.Contains(line, tc.want) {
+				t.Fatalf("auditLine = %q, want it to mention %q", line, tc.want)
+			}
+			if strings.Contains(line, "\n") {
+				t.Fatalf("the operator line is one line: %q", line)
+			}
+		})
+	}
+}

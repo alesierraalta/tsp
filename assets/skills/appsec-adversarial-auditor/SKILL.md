@@ -42,6 +42,29 @@ cheap static ones (Semgrep, Gitleaks).
 5. **Severity by impact and exploitability evidence**, not by label, per the impact x exploitability matrix in [references/severity.md](references/severity.md): the matrix cell gives the C/M/N label; a "hypothesis" cell (not reproduced, or no named `file:line` sink) is reported as a hypothesis, never as C/M/N.
 6. **Evidence**: every finding carries an executed evidence record per `~/.claude/skills/test-strategy/references/evidence.md`; no finding from reading alone.
 7. **Positive control for every denial**: a denied probe counts only when the authorized caller succeeds on the same route in the same run; otherwise a 404 from a wrong route reads as "secure".
+8. **Authority is bound at execution, not at the entrance.** For agents and MCP, the action must carry the invoking principal's identity and effective grants to the executor. An agent, tool server, or background worker acting with its own ambient privileges is a confused deputy; a tool offered to a caller who lacks its scope is an exposed capability. Probe both the offered surface and the authority actually used.
+
+## Symptom, lead, or demonstrated violation
+
+| Observation | Disposition |
+|---|---|
+| UI hides the action, a route has no obvious check, a scanner flags a sink, or the denial comes from a proxy, wrong route, or wrong token a lead: record it `blocked` with the missing fact and the safe probe that would settle it |
+| The denied caller succeeds on the target resource while the authorized control succeeds in the same run `confirmed` — a demonstrated boundary violation |
+| The denied caller fails only because it used the wrong identity, route, or token | `rejected` — record the refuting evidence |
+
+A confirmation names actor, effective authority, resource, action, boundary, and the observed effect. Keep these dispositions separate from Findings statuses; a structural plan check does not prove the claim.
+
+## Deployment facts to validate
+
+These controls live outside the repository, so reading code cannot settle them. Mark each `validated` with the console output, command, or config that proved it, or `blocked` with the missing fact:
+
+- Gateway or reverse-proxy authentication, and whether it strips client-supplied identity headers (`X-User-Id`, forwarding headers).
+- Platform IAM, bucket and policy grants, network egress, and default-deny settings.
+- Token issuer, audience and TTL, plus IdP session lifetime, refresh, and revocation behavior.
+- MCP server registration, transport, consent, and the scopes actually granted to the client.
+- Feature flags, tenant routing, and per-environment secrets or keys.
+
+A repository check that passes while the deployed control stays unverified is a hypothesis, not a boundary.
 
 ## Decision Gates
 
@@ -53,8 +76,9 @@ cheap static ones (Semgrep, Gitleaks).
 | **Parsers & Deserializers** | Coverage-Guided Fuzzing (`f.Fuzz`, `Hypothesis`) | Crash-freedom, round-trip invariance (`decode(encode(x)) == x`) |
 | **Stateful Logic (Finance/Auth)** | Model-Based PBT (`RuleBasedStateMachine`) | Conservation laws (mass balance, non-negative funds, monotonic states) |
 | **Races** | N parallel requests, count successes ([references/race-conditions.md](references/race-conditions.md)) | Limit overrun, TOCTOU on check-then-act flows |
-| **AuthN / session / OAuth** | Probe table ([references/authn-session.md](references/authn-session.md)) | JWT, redirect_uri, state, reset-token flaws |
-| **Business logic, fail-open, GraphQL, upload, CSRF/CORS, ReDoS, PII logs, LLM tool authz** | Probe rows ([references/business-logic-and-more.md](references/business-logic-and-more.md)) | Step skipping, replay, fail-open, tool-call authorization |
+| **AuthN / session lifecycle / OAuth / delegation** | Probe table ([references/authn-session.md](references/authn-session.md)) | JWT, redirect_uri, state, reset-token, revocation and stale-authority flaws |
+| **Business logic, fail-open, GraphQL, upload, CSRF/CORS, ReDoS, PII logs, LLM/MCP tool authz** | Probe rows ([references/business-logic-and-more.md](references/business-logic-and-more.md)) | Step skipping, replay, fail-open, tool-call and MCP action binding |
+| **Agent / MCP action binding** | Induce a tool call on another principal's resource; replay it under a lower-privileged caller; inspect the executor's credential | Tool runs with ambient agent or server privilege, or a scope the caller lacks |
 | **Dependencies, images** | Route to `dependency-legitimacy` | CVEs, supply chain |
 
 ## Execution Steps
@@ -82,3 +106,4 @@ cheap static ones (Semgrep, Gitleaks).
 - [assets/semgrep-rules.yaml](assets/semgrep-rules.yaml) — Semgrep triage rules for SQLi and SSRF, Flask request sources only.
 - [assets/dual-persona-auth-test.py](assets/dual-persona-auth-test.py) — dual-persona authorization harness.
 - Sibling skills: `test-strategy` · `dependency-legitimacy` · `docker-test-containers` · `exploit-testing`.
+- Boundary, action-binding and deployment-validation framing informed by [cloudflare/security-audit-skill](https://github.com/cloudflare/security-audit-skill) at commit `c1c8a8c1471069fb0e188eeaff69b8e8db6564a8` (MIT). The text here is original; no upstream file was copied.

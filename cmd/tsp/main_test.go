@@ -1960,6 +1960,64 @@ func TestPlanScopedCLIRealRun(t *testing.T) {
 	}
 }
 
+// Security coverage is the optional section that keeps an incomplete audit from reporting itself as
+// complete: `plan check` verifies the record, and `plan gaps` exit code carries the owed work. A plan
+// without the section keeps its old behaviour, which the existing gaps tests already hold.
+func TestPlanGapsReportIncompleteSecurityCoverage(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	planText := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
+		"\n## Ranked targets\n\n| Target | Status | Run |\n|---|---|---|\n| login | done |  |\n" +
+		"\n## Layer matrix\n\n| Layer | Skill | Scope | Status | Run |\n|---|---|---|---|---|\n| Security | `appsec-adversarial-auditor` | auth | done |  |\n" +
+		"\n## Evidence ledger\n\n| Id | Claim | Executed | Inputs | Observed | Mutation | Reproduction | Label |\n|---|---|---|---|---|---|---|---|\n| E1 | tenant read blocked | `go test ./...` | two tenants | 403 | reverted -> red | run the test | observado |\n" +
+		"\n## Security coverage\n\n| Id | Source | Kind | Subject | Disposition | Reason | Evidence id |\n|---|---|---|---|---|---|---|\n" +
+		"| C1 | src/auth/session.go:42 | boundary | tenant isolation | covered | - | E1 |\n" +
+		"| C2 | src/api/export.go:17 | surface | bulk export | blocked | no second tenant fixture | - |\n"
+	path := filepath.Join(dir, "plan.md")
+	if err := os.WriteFile(path, []byte(planText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runCLIAt(t, dir, bin, "plan", "check", "--path", "plan.md")
+	t.Logf("$ plan check\n%s", out)
+	if code != 0 || !strings.Contains(out, "well formed") {
+		t.Fatalf("coverage plan check = %d\n%s", code, out)
+	}
+	out, code = runCLIAt(t, dir, bin, "plan", "gaps", "--path", "plan.md")
+	t.Logf("$ plan gaps\n%s", out)
+	if code != 1 || !strings.Contains(out, "security coverage: 1 of 2 covered") || !strings.Contains(out, "coverage incomplete") || !strings.Contains(out, "C2") {
+		t.Fatalf("incomplete coverage gaps = %d\n%s", code, out)
+	}
+
+	excluded := strings.Replace(planText, "| bulk export | blocked |", "| bulk export | excluded |", 1)
+	if err := os.WriteFile(path, []byte(excluded), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runCLIAt(t, dir, bin, "plan", "gaps", "--path", "plan.md")
+	t.Logf("$ plan gaps (excluded)\n%s", out)
+	if code != 0 || strings.Contains(out, "coverage incomplete") {
+		t.Fatalf("reasoned exclusion gaps = %d\n%s", code, out)
+	}
+
+	unproven := strings.Replace(planText, "| covered | - | E1 |", "| covered | - | - |", 1)
+	if err := os.WriteFile(path, []byte(unproven), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runCLIAt(t, dir, bin, "plan", "check", "--path", "plan.md")
+	t.Logf("$ plan check (unproven)\n%s", out)
+	if code != 1 || !strings.Contains(out, "observed Evidence ledger row") {
+		t.Fatalf("unproven coverage check = %d\n%s", code, out)
+	}
+	out, code = runCLIAt(t, dir, bin, "plan", "gaps", "--path", "plan.md")
+	t.Logf("$ plan gaps (unproven)\n%s", out)
+	if code != 1 || !strings.Contains(out, "is covered but cites no observed Evidence ledger row") {
+		t.Fatalf("unproven coverage gaps = %d\n%s", code, out)
+	}
+}
+
 func TestPlanGapsUsesTheDeclaredRun(t *testing.T) {
 	bin := buildCLI(t)
 	dir := t.TempDir()
@@ -3416,5 +3474,59 @@ func TestPlanAddRowsAssignTheNextFreeID(t *testing.T) {
 		if !strings.Contains(string(raw), row) {
 			t.Fatalf("plan is missing %q:\n%s", row, raw)
 		}
+	}
+}
+
+// A candidate's Disposition is its author's claim; an independent review is a second answer to it. `plan
+// check` reads the review's recorded shape — reviewer, explicit attestation, refutation attempt, effective
+// controls and observed decisive evidence — and never turns a malformed one into a confirmation. The same
+// plan without the section keeps the T1 behaviour.
+func TestPlanCheckValidatesIndependentCandidateReviews(t *testing.T) {
+	bin := buildCLI(t)
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	planText := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
+		"\n## Evidence ledger\n\n| Id | Claim | Executed | Inputs | Observed | Mutation | Reproduction | Label |\n|---|---|---|---|---|---|---|---|\n" +
+		"| E1 | tenant read blocked | `go test ./...` | two tenants | 403 | reverted -> red | run the test | observado |\n" +
+		"\n## Security candidates\n\n| Id | Actor | Authority | Resource | Action | Boundary | Evidence id | Disposition | Observed boundary violation | Missing fact | Safe validation step | Refuting evidence id |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| S1 | user B | own account | user A record | read | tenant boundary | E1 | confirmed | user A record returned | - | - | - |\n"
+	reviews := "\n## Candidate reviews\n\n| Id | Candidate id | Reviewer | Independence attestation | Refutation attempt | Effective controls | Outcome | Decisive evidence id | Blocker |\n|---|---|---|---|---|---|---|---|---|\n" +
+		"| R1 | S1 | reviewer carol | attested | tried a second tenant and direct id substitution | tenant filter is enforced in the repository layer | confirmed | E1 | - |\n"
+	path := filepath.Join(dir, "plan.md")
+	check := func(text string) (string, int) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return runCLIAt(t, dir, bin, "plan", "check", "--path", "plan.md")
+	}
+
+	out, code := check(planText)
+	t.Logf("$ plan check (author disposition only)\n%s", out)
+	if code != 0 || !strings.Contains(out, "well formed") {
+		t.Fatalf("candidate without a review = %d\n%s", code, out)
+	}
+	out, code = check(planText + reviews)
+	t.Logf("$ plan check (independent review)\n%s", out)
+	if code != 0 || !strings.Contains(out, "well formed") {
+		t.Fatalf("complete independent review = %d\n%s", code, out)
+	}
+
+	out, code = check(planText + strings.Replace(reviews, "| attested |", "| - |", 1))
+	t.Logf("$ plan check (missing attestation)\n%s", out)
+	if code != 1 || !strings.Contains(out, "independence attestation") {
+		t.Fatalf("missing attestation = %d\n%s", code, out)
+	}
+	out, code = check(planText + strings.Replace(reviews, "| R1 | S1 |", "| R1 | S9 |", 1))
+	t.Logf("$ plan check (dangling candidate)\n%s", out)
+	if code != 1 || !strings.Contains(out, "not a row in Security candidates") {
+		t.Fatalf("dangling candidate reference = %d\n%s", code, out)
+	}
+	out, code = check(planText + strings.Replace(reviews, "| confirmed | E1 |", "| confirmed | - |", 1))
+	t.Logf("$ plan check (no decisive evidence)\n%s", out)
+	if code != 1 || !strings.Contains(out, "decisive observed Evidence ledger row") {
+		t.Fatalf("confirmation without decisive evidence = %d\n%s", code, out)
 	}
 }
