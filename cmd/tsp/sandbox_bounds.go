@@ -277,18 +277,25 @@ func runSandboxWithin(ctx context.Context, dir, image, mount, command string, b 
 	if ctx.Err() != nil {
 		return output, ctx.Err()
 	}
+	// A preflight failure, or a replay's failed copy into its workspace after the bounds were confirmed,
+	// stops the script before the row's command, so it is read before the confirmed branch: otherwise its
+	// exit would pass for the row going red.
+	var exit *exec.ExitError
+	if detail, ok := sandboxBoundsFailure(output); ok && errors.As(err, &exit) && exit.ExitCode() == sandboxBoundsExitCode {
+		hint := "; the container runtime must apply cgroup v2 memory, swap, cpu and pids limits for this mode"
+		if confirmed {
+			hint = "; the staged tree must fit in the replay workspace bound"
+		}
+		return output, evidence.Refusal{
+			Reason: evidence.ReasonSandboxBoundsUnverified,
+			Detail: "the sandbox could not establish its bounds, so the command never ran: " + detail + hint,
+		}
+	}
 	if confirmed {
 		if err == nil {
 			return output, nil
 		}
 		return output, sandboxRefusal(image, output, err)
-	}
-	var exit *exec.ExitError
-	if detail, ok := sandboxBoundsFailure(output); ok && errors.As(err, &exit) && exit.ExitCode() == sandboxBoundsExitCode {
-		return output, evidence.Refusal{
-			Reason: evidence.ReasonSandboxBoundsUnverified,
-			Detail: "the sandbox could not confirm its bounds, so the command never ran: " + detail + "; the container runtime must apply cgroup v2 memory, swap, cpu and pids limits for this mode",
-		}
 	}
 	// A docker that never started, or could not start a container, is named as such.
 	if err != nil {

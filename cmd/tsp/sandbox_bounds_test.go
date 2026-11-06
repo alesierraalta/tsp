@@ -395,6 +395,20 @@ func TestSandboxRunnerRefusesARunThatNeverConfirmedItsBounds(t *testing.T) {
 	}
 }
 
+// A replay confirms its bounds and then copies the staged tree into its workspace. A copy that fails stops the
+// script before the row's command, so the failure must stay a refusal rather than read as the row going red.
+func TestSandboxRunnerRefusesAFailedWorkspaceSeedAfterConfirmation(t *testing.T) {
+	installFakeDocker(t, "case \"$1\" in\nrun) printf '"+sandboxConfirmationPrefix+"memory=1\\n'; echo \""+sandboxFailurePrefix+"the staged tree did not fit in the replay workspace at /w\" >&2; exit 126 ;;\nrm) exit 0 ;;\nesac\n")
+	_, err := sandboxRunner("example/go:1", admit.SandboxWritable)(context.Background(), t.TempDir(), "printf one")
+	var refusal evidence.Refusal
+	if !errors.As(err, &refusal) || refusal.Reason != evidence.ReasonSandboxBoundsUnverified {
+		t.Fatalf("run = %v, want a %s refusal", err, evidence.ReasonSandboxBoundsUnverified)
+	}
+	if !strings.Contains(refusal.Detail, "did not fit") {
+		t.Fatalf("detail = %q, want the failed seed named", refusal.Detail)
+	}
+}
+
 func TestSandboxRunnerRefusesOutputAboveTheBound(t *testing.T) {
 	logPath := installFakeDocker(t, "case \"$1\" in\nrun) i=0; while [ $i -lt 20 ]; do printf '0123456789'; i=$((i+1)); done ;;\nrm) exit 0 ;;\nesac\n")
 	bounds := sandboxDefaults
