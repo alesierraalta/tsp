@@ -76,6 +76,9 @@ const (
 	// sandboxBoundsExitCode is the preflight's exit status. It is read together with the failure line: a
 	// docker that cannot invoke the command also exits 126, but never prints that line.
 	sandboxBoundsExitCode = 126
+	// sandboxOutputAllowance is the room the output buffer keeps beyond the bound for what the bound does not
+	// count: the confirmation line and any warning the docker CLI prints before the container starts.
+	sandboxOutputAllowance = 4096
 )
 
 // sandboxPreflightScript is POSIX sh that reads the limits the container actually received and exits before
@@ -99,7 +102,7 @@ tsp_num "$tsp_pids" || tsp_fail "the pids limit is '$tsp_pids', want %d"
 read -r tsp_quota tsp_period < %s 2>/dev/null || tsp_fail "the cpu quota cannot be read from the container's cgroup"
 tsp_num "$tsp_quota" && tsp_num "$tsp_period" && [ "$tsp_period" -gt 0 ] || tsp_fail "the cpu quota is '$tsp_quota $tsp_period', want at most %d CPUs"
 [ "$tsp_quota" -le $((%d * tsp_period)) ] || tsp_fail "the cpu quota is $tsp_quota/$tsp_period, above the %d CPU bound"
-tsp_nofile=$(ulimit -n)
+tsp_nofile=$(ulimit -Hn)
 tsp_num "$tsp_nofile" || tsp_fail "the open-file limit is '$tsp_nofile', want %d"
 [ "$tsp_nofile" -le %d ] || tsp_fail "the open-file limit is $tsp_nofile, above the %d bound"
 `, shellQuote(sandboxFailurePrefix), sandboxBoundsExitCode, shellQuote(p.ProcMounts),
@@ -198,16 +201,22 @@ func sandboxContainerName() string {
 	return "tsp-sandbox-" + hex.EncodeToString(b[:])
 }
 
-// stripSandboxConfirmation removes the preflight's confirmation line from the front of the output, and
-// reports whether it was there.
+// stripSandboxConfirmation removes the preflight's confirmation line, the first line that opens with its prefix,
+// and reports whether it was there. Lines ahead of it are kept: the row cannot write before the preflight, so they
+// are the docker CLI's own (a platform or swap warning), and they were part of the output before the bounds too.
 func stripSandboxConfirmation(output string) (string, bool) {
+	start := 0
 	if !strings.HasPrefix(output, sandboxConfirmationPrefix) {
-		return output, false
+		i := strings.Index(output, "\n"+sandboxConfirmationPrefix)
+		if i < 0 {
+			return output, false
+		}
+		start = i + 1
 	}
-	if i := strings.IndexByte(output, '\n'); i >= 0 {
-		return output[i+1:], true
+	if end := strings.IndexByte(output[start:], '\n'); end >= 0 {
+		return output[:start] + output[start+end+1:], true
 	}
-	return "", true
+	return output[:start], true
 }
 
 // sandboxBoundsFailure returns the detail of the preflight's failure line, when the output carries one.
@@ -254,7 +263,9 @@ func runSandboxWithin(ctx context.Context, dir, image, mount, command string, b 
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	out := &cappedBuffer{limit: b.OutputBytes, over: cancel}
+	// The buffer holds the bound plus room for the confirmation line and the docker CLI's own warnings, which the
+	// bound does not count; the bound itself is applied once the confirmation is removed.
+	out := &cappedBuffer{limit: b.OutputBytes + sandboxOutputAllowance, over: cancel}
 	cmd := exec.CommandContext(runCtx, docker, args...)
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.WaitDelay = 2 * time.Second
@@ -262,10 +273,13 @@ func runSandboxWithin(ctx context.Context, dir, image, mount, command string, b 
 	out.mu.Lock()
 	output, exceeded := out.buf.String(), out.exceeded
 	out.mu.Unlock()
+	output, confirmed := stripSandboxConfirmation(output)
+	if !exceeded && len(output) > b.OutputBytes {
+		exceeded = true
+	}
 	if exceeded || ctx.Err() != nil {
 		removeSandboxContainer(docker, name)
 	}
-	output, confirmed := stripSandboxConfirmation(output)
 	if exceeded {
 		return output, evidence.Refusal{
 			Reason: evidence.ReasonSandboxOutputLimit,

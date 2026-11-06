@@ -334,6 +334,24 @@ func TestSandboxPreflightRefusesBoundsThatAreNotEstablished(t *testing.T) {
 	}
 }
 
+// The open-file bound is the hard limit: a soft limit inside the bound means nothing when the hard limit above it
+// lets the row raise its own. Only the soft limit is lowered here, so the hard limit stays this machine's.
+func TestSandboxPreflightRefusesAHardOpenFileLimitAboveTheBound(t *testing.T) {
+	hard, err := exec.Command("sh", "-c", "ulimit -Hn").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := strconv.Atoi(strings.TrimSpace(string(hard))); err == nil && n <= sandboxDefaults.NoFile {
+		t.Skipf("this machine's hard open-file limit is %d, not above the %d bound", n, sandboxDefaults.NoFile)
+	}
+	f := newSandboxPreflightFixture(t)
+	script := sandboxPreflightScript(sandboxDefaults, f.paths, false)
+	out, _ := exec.Command("sh", "-c", "ulimit -Sn 1024\n"+script+"\nprintf 'ROW RAN\\n'\n").CombinedOutput()
+	if strings.Contains(string(out), "ROW RAN") || !strings.Contains(string(out), "open-file") {
+		t.Fatalf("preflight let the row run with a hard open-file limit of %s above the bound:\n%s", strings.TrimSpace(string(hard)), out)
+	}
+}
+
 func TestSandboxWrapperScriptsAreValidPOSIXShell(t *testing.T) {
 	for _, writable := range []bool{false, true} {
 		script := sandboxScript("printf one", sandboxDefaults, sandboxContainerPaths, writable)
@@ -406,6 +424,32 @@ func TestSandboxRunnerRefusesAFailedWorkspaceSeedAfterConfirmation(t *testing.T)
 	}
 	if !strings.Contains(refusal.Detail, "did not fit") {
 		t.Fatalf("detail = %q, want the failed seed named", refusal.Detail)
+	}
+}
+
+// The bound is on the command's output: the preflight's own confirmation line is removed before the output is
+// digested, so it must not spend the row's budget. A row that prints exactly the bound is not above it.
+func TestSandboxRunnerAdmitsOutputExactlyAtTheBound(t *testing.T) {
+	installFakeDocker(t, "case \"$1\" in\nrun) printf '"+sandboxConfirmationPrefix+"memory=1\\n'; printf '%064d' 0 ;;\nrm) exit 0 ;;\nesac\n")
+	bounds := sandboxDefaults
+	bounds.OutputBytes = 64
+	out, err := runSandboxWithin(context.Background(), t.TempDir(), "example/go:1", admit.SandboxReadOnly, "printf one", bounds, sandboxContainerPaths, "docker")
+	if err != nil || len(out) != 64 {
+		t.Fatalf("run = %d bytes, %v; want the 64 bytes the command printed, admitted", len(out), err)
+	}
+}
+
+// The docker CLI can print a warning of its own before the container starts (an image built for another
+// platform, a kernel without swap accounting). The row cannot write before the preflight, so a warning ahead of
+// the confirmation line is not the row's: the bounded run it precedes is still a sandboxed observation.
+func TestSandboxRunnerAcceptsADockerWarningBeforeTheConfirmation(t *testing.T) {
+	installFakeDocker(t, "case \"$1\" in\nrun) echo 'WARNING: The requested image platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)' >&2; printf '"+sandboxConfirmationPrefix+"memory=1\\nok\\n' ;;\nrm) exit 0 ;;\nesac\n")
+	out, err := runSandboxWithin(context.Background(), t.TempDir(), "example/go:1", admit.SandboxReadOnly, "printf one", sandboxDefaults, sandboxContainerPaths, "docker")
+	if err != nil {
+		t.Fatalf("run = %v; want the bounded run admitted", err)
+	}
+	if strings.Contains(out, sandboxConfirmationPrefix) || !strings.Contains(out, "ok") {
+		t.Fatalf("output = %q; want the row's output without the confirmation line", out)
 	}
 }
 
