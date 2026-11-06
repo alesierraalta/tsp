@@ -87,6 +87,20 @@ Statuses: open · confirmed · fixed · gap-closed · rejected · wontfix.
 `gap-closed` is a behaviour that was correct but untested, now held by the promoted test it names; like
 `confirmed` and `fixed` it owes that test.
 
+## Security candidates
+
+This optional table records security dispositions separately from Findings statuses; older plans do not
+need it. Name the actor, their effective authority, resource, action and boundary. For `confirmed`,
+record the observed boundary violation and cite an executed, observed Evidence ledger row. For `blocked`,
+record the missing fact and a safe validation step; do not assign a confirmed severity. For `rejected`,
+cite the executed, observed ledger row that refutes the claim. Use `-` for inapplicable fields. A plan
+check validates the recorded structure and references, not whether an observation is truthful or proves
+an actual violation. Use one Security candidates section with one table and a distinct ID for each populated
+row. Promote actionable findings to Findings using its existing statuses and evidence.
+
+| Id | Actor | Authority | Resource | Action | Boundary | Evidence id | Disposition | Observed boundary violation | Missing fact | Safe validation step | Refuting evidence id |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+
 ## Evidence ledger
 
 One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under

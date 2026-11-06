@@ -950,6 +950,12 @@ test, a `razonado` row sitting in the evidence ledger, and an `n/a` layer row wi
 its `Scope` cell when the plan declares `Light:`. It says nothing about whether the testing was
 good; it says the plan can be located, honoured, and re-scored.
 
+A plan may also include the template's `Security candidates` table. Its dispositions are separate
+from Findings statuses: `confirmed` requires a recorded boundary violation and observed ledger
+evidence; `blocked` requires a missing fact and a safe validation step; `rejected` cites observed
+refuting evidence. `plan check` validates the record and references, not whether an observation
+actually proves the claim. Existing plans without this table remain valid.
+
 A plan may declare itself scoped. A bounded change — one target inside one or two files, touching
 none of the classes the skill's boundary list forbids — plans its blast radius instead of the whole
 app, and says so in one header line: `Light: <blast radius> · touches <classes>`. Every layer the

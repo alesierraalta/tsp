@@ -63,7 +63,7 @@ cheap static ones (Semgrep, Gitleaks).
 2. **Scan static sinks and secrets**: Gitleaks against `origin/main..HEAD`; Semgrep with security rulesets and custom taint queries.
 3. **Dual-persona authorization probes**: synthetic Persona A (owner) and Persona B (attacker) in isolated fixtures with declared tenant scope; submit mutations and queries as B against A's resource IDs; assert the declared denial status, plus an owner positive control and unchanged state after each denied mutation.
 4. **Fuzzing invariants for parsers**: arbitrary byte streams into untrusted deserializers; prove crash-freedom and absence of uncaught panics / OOM loops.
-5. **Synthesize and triage**: score impact and exploitability, read the matrix in `references/severity.md`, and tag each reproduced finding with its C/M/N label (unreproduced or sink-less items stay "hypothesis"), CWE/OWASP identifier, observed reproduction payload, and its evidence record.
+5. **Synthesize and triage**: record each candidate in the plan's optional Security candidates table, naming actor, effective authority, resource, action and boundary. Mark it `confirmed` only with a recorded observation of a boundary violation; mark it `blocked` with the missing fact and a safe validation step, or `rejected` with refuting evidence. Cite executed, observed evidence for confirmed and rejected candidates. These dispositions are separate from Findings statuses; a plan check verifies the record's structure, not the truth of the claim. Score impact and exploitability only for reproduced findings, read `references/severity.md`, and include the C/M/N label, CWE/OWASP identifier, observed reproduction payload and evidence record. Unreproduced or sink-less items stay hypotheses.
 
 ## Output Contract
 

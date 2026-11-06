@@ -178,6 +178,7 @@ func CheckDocument(doc string) []string {
 	ledgerIDs, ledgerIssues := ledgerProblems(ledger)
 	problems = append(problems, ledgerIssues...)
 	problems = append(problems, findingProblems(findings, ledgerIDs)...)
+	problems = append(problems, securityCandidateProblems(lines, ledger)...)
 	if lightProblems, declared := lightReport(lines); declared {
 		problems = append(problems, lightProblems...)
 	}
