@@ -33,8 +33,11 @@ type DefectResult struct {
 
 // Result is the score of one workspace against its key.
 type Result struct {
-	Case string `json:"case"`
-	Run  int    `json:"run"`
+	// Detected counts the defects a claim names, linked to observed evidence or not: the measure a review arm, which
+	// executes nothing, and a test arm share. Found stays the evidence-backed count.
+	Detected int    `json:"detected,omitempty"`
+	Case     string `json:"case"`
+	Run      int    `json:"run"`
 	// Family is the key's declared failure kind, copied here so a reading can group caught over
 	// defects per family without reopening every KEY.json. Empty on a case that predates families.
 	Family         string         `json:"family,omitempty"`
