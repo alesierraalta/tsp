@@ -64,14 +64,14 @@ const (
 
 // KnownRunner reports whether name selects a runner the bench can spawn; empty means the default.
 func KnownRunner(name string) bool {
-	return name == "" || name == RunnerClaude || name == RunnerPi || name == RunnerCodex || name == RunnerAgy
+	return name == "" || name == RunnerClaude || name == RunnerPi || name == RunnerCodex || name == RunnerAgy || name == RunnerGentleReview
 }
 
 // DefaultModel is the model a runner uses when the operator does not name one: the free Pi model the
 // readings run on, and the cheapest Claude model for the last-resort alternative.
 func DefaultModel(runner string) string {
 	switch runner {
-	case RunnerClaude:
+	case RunnerClaude, RunnerGentleReview:
 		return "haiku"
 	case RunnerAgy:
 		return "gemini-3.8-flash-low"
@@ -91,6 +91,8 @@ func runnerAgent(runner string) Agent {
 		return agyAgent
 	case RunnerCodex:
 		return codexAgent
+	case RunnerGentleReview:
+		return gentleReviewAgent
 	}
 	return claudeAgent
 }
@@ -115,6 +117,9 @@ type Options struct {
 	Rounds   int
 	Sessions int
 	Runner   string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, RunnerCodex, or RunnerAgy
+	// AsChange presents every case as a change: a base commit with the fixed code and a candidate commit with the
+	// fixture, so an arm that reviews a diff and an arm that writes tests read the same repository.
+	AsChange bool
 	Runs     int
 	// Prompt replaces the bare instruction for every arm of a reading, so a bare agent can be asked to hunt
 	// defects instead of rerunning the suite; empty keeps the bench prompt.
@@ -699,7 +704,11 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	name := filepath.Base(caseDir)
 	ws := filepath.Join(opts.Out, name, fmt.Sprint(run), "ws")
 	res := Result{Case: name, Run: run, Family: key.Family, Total: len(key.Defects), Workspace: ws}
-	suite, err := Scaffold(caseDir, ws, key, opts.SuiteTimeout)
+	scaffold := Scaffold
+	if opts.AsChange {
+		scaffold = ScaffoldAsChange
+	}
+	suite, err := scaffold(caseDir, ws, key, opts.SuiteTimeout)
 	res.Suite = suite
 	if err != nil {
 		res.Invalid, res.InvalidReason = true, err.Error()

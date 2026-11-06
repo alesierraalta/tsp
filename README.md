@@ -1306,6 +1306,19 @@ Antigravity can exit zero on authentication failure, so its streamed result stat
 just the exit code, determines success. Completed tool steps count as turns. It reports
 no price and has no turn cap: neither `--max-cost-usd` nor `--max-turns` applies; use `--timeout`.
 
+The Gentle AI review runner (`--runner gentle-review`) is Gentle AI's native review (RDD) as an arm: it
+writes no test, it reviews the case as a change. It needs `--as-change`, which presents every case as a
+base commit holding the fixed code (the fixture with `fix/all` over it) and a candidate commit holding the
+fixture with its defects; the workspace still ends on the fixture, so any arm run with `--as-change` reads
+the same repository and the same history. The runner drives `gentle-ai review` headless: it starts the
+review of `HEAD~1..HEAD` with consent granted for that exact candidate and all four lenses (risk,
+resilience, readability, reliability), captures every reviewer through Claude Code, and stops once the
+reviewer results are in. Gentle AI picks a model per lens; the bench puts its own binary on `PATH` as
+`claude`, so every reviewer runs on `--model` (default `haiku`), answers in JSON, and its cost counts toward
+`--max-cost-usd`. Each run keeps `reviewers.jsonl` beside the workspace: per reviewer, the model Gentle AI
+asked for, the model that answered, the cost, and the findings. `gentle-ai` and `claude` must be on `PATH`,
+and `gentle-ai review status` must be able to offer a START.
+
 Comparing arms:
 
 ```
@@ -1314,6 +1327,7 @@ tsp bench run --runner agy --agent-config bench --cases 'bench/cases/*'    # agy
 tsp bench run --runner codex --cases 'bench/cases/*'                       # codex, nothing
 tsp bench run --runner pi --agent-config none --cases 'bench/cases/*'      # pi, nothing
 tsp bench run --runner pi --agent-config bench --cases 'bench/cases/*'     # pi with the tsp skills
+tsp bench run --runner gentle-review --as-change --cases 'bench/cases/*'   # Gentle AI native review
 ```
 
 `--agent-config bench-all` (Pi only) is the same isolated config with every embedded skill instead of
