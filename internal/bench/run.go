@@ -490,8 +490,13 @@ func runUnits(units []unit, opts Options) ([]Result, []bool) {
 			return Result{}
 		}
 		res := runOnce(u.caseDir, u.key, u.run, opts)
-		logf("[%s #%d] reported %d/%d pinned %d caught %d/%d fp %d cost $%.3f turns %d%s%s\n",
-			name, u.run, res.Found, res.Total, res.ClaimedPinned, res.Caught, res.Total, res.FalsePositives, res.CostUSD, res.Turns, invalidTag(res), noPlanTag(res))
+		if opts.Runner == RunnerGentleReview {
+			logf("[%s #%d] review detected %d/%d unmatched %d cost $%.3f reviewers %d%s\n",
+				name, u.run, res.Detected, res.Total, res.UnmatchedFindings, res.CostUSD, res.Turns, invalidTag(res))
+		} else {
+			logf("[%s #%d] reported %d/%d detected %d pinned %d caught %d/%d fp %d cost $%.3f turns %d%s%s\n",
+				name, u.run, res.Found, res.Total, res.Detected, res.ClaimedPinned, res.Caught, res.Total, res.FalsePositives, res.CostUSD, res.Turns, invalidTag(res), noPlanTag(res))
+		}
 		spentMu.Lock()
 		spent += res.CostUSD
 		spentMu.Unlock()
@@ -792,7 +797,15 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	}
 	res.Seconds = time.Since(started).Seconds()
 	res.FinalMessage = clipFinalMessage(ar.Result)
+	if opts.Runner == RunnerGentleReview {
+		// A review writes no plan and no test: its findings are scored with the plan matcher, and no catch is run,
+		// because a test the arm never meant to write is not a miss of the review.
+		res = merge(res, ScoreReview(ar.Transcript, key))
+		res.Misses = Diagnose(res, key)
+		return finish(res, opts, res.Detected < res.Total)
+	}
 	res = merge(res, ScoreWorkspace(ws, key))
+	res.Detected = DetectedDefects(res)
 	res.Catch = Discriminate(caseDir, ws, key, opts.SuiteTimeout)
 	res.Caught = res.Catch.Count()
 	if opts.Rounds > 1 {
