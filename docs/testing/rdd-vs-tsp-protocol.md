@@ -101,4 +101,17 @@ standard library.
 
 ## Deviations
 
-None yet.
+**D1 (2026-11-06, after the pilot, before any study run).** The pilot (h06, h20, r05, r16, r17, r27, r34, r37,
+one run per arm, binary d109cf9) validated the setup and showed two things.
+
+1. Both clean controls were invalid in both arms: they have no `fix/all`, so `--as-change` could not build a
+   base. Controls are now presented over an empty base (`ScaffoldAsChangeFrom`), so the whole fixture is the
+   change and every finding on it is a false positive. The registered study is otherwise unchanged.
+2. Both arms detected 8/8, every detection a line match (one TSP keyword match), at US$0.013 (RDD) and
+   US$0.036 (TSP) per case-run. A ceiling this close to 1 can only answer "equivalent", because the regression
+   diff shows the removed guard (the known bias above). A second condition is added and labelled
+   **exploratory**: the same 22 cases and controls with `--as-change --empty-base`, so the defect is hidden in
+   the whole code instead of shown as the diff. Same arms, model, runs and analysis; it is reported apart from
+   the registered result and its verdict does not replace the registered one.
+
+Pilot numbers are reported apart and are not part of either condition.

@@ -1319,6 +1319,10 @@ reviewer results are in. Gentle AI picks a model per lens; the bench puts its ow
 asked for, the model that answered, the cost, and the findings. `gentle-ai` and `claude` must be on `PATH`,
 and `gentle-ai review status` must be able to offer a START.
 
+`--empty-base` (with `--as-change`) commits a base with no files instead of the fixed code, so the whole
+fixture is the change: a defect has to be found in the code rather than read off a diff of its own. A clean
+control, which has no `fix/all`, always gets the empty base, so every finding on it is a false positive.
+
 Comparing arms:
 
 ```

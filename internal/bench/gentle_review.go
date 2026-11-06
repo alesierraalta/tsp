@@ -36,9 +36,23 @@ const (
 // over it) and a candidate commit holding the fixture as shipped, defects included. The workspace ends on the
 // candidate, so the suite and every score read the same tree Scaffold gives; only the history differs.
 func ScaffoldAsChange(caseDir, ws string, key Key, suiteTimeout time.Duration) (SuiteResult, error) {
+	return ScaffoldAsChangeFrom(caseDir, ws, key, suiteTimeout, false)
+}
+
+// ScaffoldAsChangeFrom is ScaffoldAsChange with the base chosen: emptyBase commits a base with no files, so the
+// whole fixture is the change and a defect sits in it rather than in a diff of its own. A clean control has no
+// fix to diff against and always gets the empty base, which makes every finding on it a false positive.
+func ScaffoldAsChangeFrom(caseDir, ws string, key Key, suiteTimeout time.Duration, emptyBase bool) (SuiteResult, error) {
 	src := filepath.Join(caseDir, FixtureDir)
 	fix := filepath.Join(caseDir, "fix", "all")
-	for _, dir := range []string{src, fix} {
+	if st, err := os.Stat(fix); key.IsCleanControl() && (err != nil || !st.IsDir()) {
+		emptyBase = true
+	}
+	needed := []string{src}
+	if !emptyBase {
+		needed = append(needed, fix)
+	}
+	for _, dir := range needed {
 		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 			return SuiteResult{}, fmt.Errorf("case %s has no %s directory, so it cannot be presented as a change", caseDir, dir)
 		}
@@ -46,18 +60,21 @@ func ScaffoldAsChange(caseDir, ws string, key Key, suiteTimeout time.Duration) (
 	if err := os.MkdirAll(ws, 0o755); err != nil {
 		return SuiteResult{}, err
 	}
-	if err := copyTree(src, ws); err != nil {
-		return SuiteResult{}, fmt.Errorf("copy fixture: %w", err)
-	}
-	if err := copyTree(fix, ws); err != nil {
-		return SuiteResult{}, fmt.Errorf("copy fix/all: %w", err)
-	}
 	steps := [][]string{
 		{"init", "-q"},
 		{"config", "user.email", "bench@rdd-plus"},
 		{"config", "user.name", "rdd-plus bench"},
-		{"add", "-A"},
-		{"commit", "-qm", "base: fixed"},
+	}
+	if emptyBase {
+		steps = append(steps, []string{"commit", "-q", "--allow-empty", "-m", "base: empty"})
+	} else {
+		if err := copyTree(src, ws); err != nil {
+			return SuiteResult{}, fmt.Errorf("copy fixture: %w", err)
+		}
+		if err := copyTree(fix, ws); err != nil {
+			return SuiteResult{}, fmt.Errorf("copy fix/all: %w", err)
+		}
+		steps = append(steps, []string{"add", "-A"}, []string{"commit", "-qm", "base: fixed"})
 	}
 	if err := gitSteps(ws, steps); err != nil {
 		return SuiteResult{}, err
