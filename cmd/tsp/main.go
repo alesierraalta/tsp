@@ -222,6 +222,10 @@ func defaultConfigDir() string {
 }
 
 func main() {
+	// A gentle-review bench run puts this binary on PATH as `claude`; as that shim it runs the real claude.
+	if code, ok := bench.RunClaudeShim(); ok {
+		os.Exit(code)
+	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -1920,12 +1924,13 @@ func configModeFor(runner, agentConfig string) string {
 func runBenchRun(args []string) int {
 	fs := flag.NewFlagSet("bench run", flag.ContinueOnError)
 	cases := fs.String("cases", "bench/cases/*", "glob of case directories (each with fixture/ and KEY.json)")
-	runner := fs.String("runner", bench.RunnerPi, "agent runner: pi (default), codex (bare baseline only), agy, or claude (last resort)")
+	runner := fs.String("runner", bench.RunnerPi, "agent runner: pi (default), codex (bare baseline only), agy, claude (last resort), or gentle-review (Gentle AI native review of the change; needs --as-change)")
 	model := fs.String("model", "", "model for the agent runs; empty uses the runner's default ("+
 		bench.DefaultModel(bench.RunnerPi)+" for pi, "+bench.DefaultModel(bench.RunnerAgy)+" for agy, "+bench.DefaultModel(bench.RunnerClaude)+" for claude)")
 	escalateModel := fs.String("escalate-model", "", "rerun a case with this model, from a fresh workspace, when the first run left no new test failing on the unmodified code (tsp redcheck found no witness); cost and turns count both attempts; recorded in the provenance")
 	runs := fs.Int("runs", 1, "runs per case")
 	families := fs.String("families", "", "comma-separated failure families to run, aiming the budget at the kinds earlier readings missed (boundary, concurrency, contract, input-domain, numeric, performance, resilience-io, security, state-logic, time); empty runs every case")
+	asChange := fs.Bool("as-change", false, "present every case as a change: a base commit with the fixed code (fixture plus fix/all) and a candidate commit with the fixture, so a review arm and a test arm read the same repository; required by --runner gentle-review")
 	rounds := fs.Int("rounds", 1, "rounds per run: the agent runs again in the same workspace up to N times, every later round told the tests earlier rounds left failing on the unmodified code and asked for defects they do not cover; each round is recorded, and the provenance records the rounds")
 	sessions := fs.Int("sessions", 1, "independent review sessions per run; apply reference fixes for caught defects between sessions, retaining tests")
 	fixLoop := fs.Bool("fix-loop", false, "measure the loop a user runs: round 1, then the agent fixes what round 1's tests pinned (test files it touches restored, source committed), then round 2 runs twice from the same fixed workspace, once plain and once told what `tsp findings check` reports")
@@ -2091,8 +2096,12 @@ func runBenchRun(args []string) int {
 			prior = append(prior, bench.Prior{Name: c.Name, Count: c.Count})
 		}
 	}
+	if *runner == bench.RunnerGentleReview && !*asChange {
+		fmt.Fprintln(os.Stderr, "bench run: --runner gentle-review reviews a change, so it needs --as-change")
+		return 2
+	}
 	_, code := bench.Run(bench.Options{
-		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, FixLoop: *fixLoop, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
+		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, FixLoop: *fixLoop, AsChange: *asChange, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
 		Families:     commaList(*families),
 		Prior:        prior,
 		Timeout:      *timeout,
