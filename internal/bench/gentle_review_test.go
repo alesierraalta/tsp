@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -171,5 +172,44 @@ func TestScaffoldAsChangeUsesAnEmptyBaseForAControlAndOnRequest(t *testing.T) {
 		if !strings.Contains(diff, "A\tsrc/avg.js") || !strings.Contains(diff, "A\tREADME.md") {
 			t.Fatalf("%s: diff = %q; want the whole fixture added", name, diff)
 		}
+	}
+}
+
+// fakeReviewTools puts a gentle-ai that answers every status with transition and a claude that is never meant to
+// run on PATH, and returns a workspace with a base and a candidate commit.
+func fakeReviewTools(t *testing.T, transition string) string {
+	t.Helper()
+	bin := t.TempDir()
+	status := `{"result":{"next_transition":` + transition + `}}`
+	if err := os.WriteFile(filepath.Join(bin, "gentle-ai"), []byte("#!/bin/sh\nprintf '%s' '"+status+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ws := filepath.Join(t.TempDir(), "ws")
+	if _, err := ScaffoldAsChange(asChangeCase(t), ws, Key{Suite: "true"}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	return ws
+}
+
+// A review that stops before any reviewer ran never reviewed the change: it must fail the run with the reason, so
+// the bench retries it and never scores it as a review that found nothing.
+func TestGentleReviewAgentFailsAReviewThatStopsBeforeAnyReviewer(t *testing.T) {
+	ws := fakeReviewTools(t, `{"kind":"stop","reason_code":"managed_assets_outdated"}`)
+	_, err := gentleReviewAgent(context.Background(), ws, Key{}, Options{Model: "haiku"})
+	if err == nil || !strings.Contains(err.Error(), "managed_assets_outdated") {
+		t.Fatalf("err = %v; want the stop reason as a failure", err)
+	}
+}
+
+// A review whose follow-up is not a reviewer capture, with no reviewer captured yet, has no findings to score either.
+func TestGentleReviewAgentFailsAReviewThatEndsWithNoReviewer(t *testing.T) {
+	ws := fakeReviewTools(t, `{"kind":"collect","reason_code":"correction_plan_required","collect":{"inputs":[{"capture_operation":"review.capture-correction-plan","arguments":[]}]}}`)
+	_, err := gentleReviewAgent(context.Background(), ws, Key{}, Options{Model: "haiku"})
+	if err == nil || !strings.Contains(err.Error(), "no reviewer") {
+		t.Fatalf("err = %v; want a failure naming the missing reviewers", err)
 	}
 }
