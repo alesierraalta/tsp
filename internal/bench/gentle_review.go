@@ -361,7 +361,7 @@ func gentleReviewAgent(ctx context.Context, ws string, _ Key, opts Options) (Age
 		boundProcessTree(cmd)
 		var out, errb bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &errb
-		err := cmd.Run()
+		err := runBounded(cmd)
 		if err != nil {
 			return out.Bytes(), fmt.Errorf("gentle-ai %s: %v: %s", strings.Join(args[:2], " "), err, tail(errb.String()+out.String(), 400))
 		}

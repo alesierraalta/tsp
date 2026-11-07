@@ -19,14 +19,14 @@ import (
 // commands agy started too: they outlive agy otherwise, and one holding the output pipe keeps Run from returning.
 func agyAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 	cmd := exec.CommandContext(ctx, "agy", agyArgs(key, opts)...)
-	boundProcessTree(cmd)
 	cmd.Dir = ws
 	cmd.Env = agyEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
+	boundProcessTree(cmd)
 	cmd.Stdin = strings.NewReader("")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	started := time.Now()
-	err := cmd.Run()
+	err := runBounded(cmd)
 	ar := ParseAgyStream(bytes.NewReader(out.Bytes()))
 	if ar.DurationMS == 0 {
 		ar.DurationMS = time.Since(started).Milliseconds()

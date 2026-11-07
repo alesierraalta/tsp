@@ -86,7 +86,7 @@ func RunSuite(ws, suite string, timeout time.Duration) (SuiteResult, error) {
 	boundProcessTree(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
-	err = cmd.Run()
+	err = runBounded(cmd)
 	if err == nil {
 		res.ExitCode = 0
 	} else if ee := (&exec.ExitError{}); errors.As(err, &ee) {

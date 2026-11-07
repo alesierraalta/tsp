@@ -510,7 +510,7 @@ func runTsp(dir string, env []string, opts Options, args ...string) (string, int
 	boundProcessTree(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
-	err := cmd.Run()
+	err := runBounded(cmd)
 	if err == nil {
 		return buf.String(), 0, nil
 	}
