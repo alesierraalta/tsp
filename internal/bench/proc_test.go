@@ -142,13 +142,36 @@ func TestRunSuiteKeepsAPassingSuiteGreenWhenAChildHoldsTheOutput(t *testing.T) {
 	}
 }
 
+// Nested runs must preserve the outer mark so its cleanup can still find their orphans.
+func TestANestedRunKeepsTheOuterRunsMark(t *testing.T) {
+	if _, err := os.Stat("/proc/self/environ"); err != nil {
+		t.Skip("process environments are unavailable without /proc")
+	}
+	outer := runMarkEntry(newRunMark())
+	key, value, _ := strings.Cut(outer, "=")
+	t.Setenv(key, value)
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "environ")
+	code, _ := runCapture(dir, []string{"sh", "-c", "tr '\\0' '\\n' < /proc/$$/environ > " + envFile}, 10*time.Second)
+	if code != 0 {
+		t.Fatalf("the run itself failed: exit %d", code)
+	}
+	raw, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains("\n"+string(raw), "\n"+outer+"\n") {
+		t.Fatal("a process started by a nested run lost the outer run's mark")
+	}
+}
+
 // The kill is aimed: a process this run did not start (a concurrent run's, the operator's) survives it, even
 // when it runs the same command in the same directory.
 func TestTimeoutSparesAProcessTheRunDidNotStart(t *testing.T) {
 	dir := t.TempDir()
 	outsider := exec.Command("sleep", "30")
 	outsider.Dir = dir
-	outsider.Env = append(os.Environ(), runMarkEnv+"=another-run")
+	outsider.Env = append(os.Environ(), runMarkEntry(newRunMark()))
 	if err := outsider.Start(); err != nil {
 		t.Fatal(err)
 	}

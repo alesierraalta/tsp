@@ -14,8 +14,14 @@ import (
 	"time"
 )
 
-// runMarkEnv names the variable that marks every process a bounded run starts.
-const runMarkEnv = "TSP_RUN_ID"
+// runMarkPrefix starts the variable that marks every process a bounded run starts. Each run gets a variable of
+// its own (TSP_RUN_<mark>=1), not a shared name with its mark as the value: a run started inside another run
+// inherits the outer mark, and with a shared name the inner one would replace it, so the outer run's kill would
+// miss everything the inner run started.
+const runMarkPrefix = "TSP_RUN_"
+
+// runMarkEntry is the environment entry that carries a run's mark.
+func runMarkEntry(mark string) string { return runMarkPrefix + mark + "=1" }
 
 // boundProcessTree makes a context timeout end the whole tree a suite started, not only its first process.
 // node --test runs each test file in its own worker: killing the parent alone leaves a worker that loops on a
@@ -35,7 +41,7 @@ func boundProcessTree(cmd *exec.Cmd) {
 	if cmd.Env == nil {
 		cmd.Env = os.Environ()
 	}
-	cmd.Env = append(cmd.Env, runMarkEnv+"="+mark)
+	cmd.Env = append(cmd.Env, runMarkEntry(mark))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		below := append(descendants(cmd.Process.Pid), markedProcesses(mark)...)
@@ -64,10 +70,9 @@ func runBounded(cmd *exec.Cmd) error {
 // runMarkOf reads the mark boundProcessTree gave the command: the last one, since a run started inside another
 // run inherits the outer mark first and appends its own.
 func runMarkOf(cmd *exec.Cmd) string {
-	prefix := runMarkEnv + "="
 	for i := len(cmd.Env) - 1; i >= 0; i-- {
-		if strings.HasPrefix(cmd.Env[i], prefix) {
-			return strings.TrimPrefix(cmd.Env[i], prefix)
+		if name, ok := strings.CutSuffix(cmd.Env[i], "=1"); ok && strings.HasPrefix(name, runMarkPrefix) {
+			return strings.TrimPrefix(name, runMarkPrefix)
 		}
 	}
 	return ""
@@ -87,7 +92,7 @@ func markedProcesses(mark string) []int {
 	if err != nil {
 		return nil
 	}
-	want := []byte(runMarkEnv + "=" + mark)
+	want := []byte(runMarkEntry(mark))
 	self := os.Getpid()
 	var marked []int
 	for _, e := range entries {
