@@ -115,3 +115,12 @@ one run per arm, binary d109cf9) validated the setup and showed two things.
    the registered result and its verdict does not replace the registered one.
 
 Pilot numbers are reported apart and are not part of either condition.
+
+**D2 (2026-11-06, during the study, before any analysis).** In the audit condition Gentle AI refuses every
+review at START: the whole repository as a change exceeds the evidence budget of a lens ("candidate
+evidence is never truncated and retrying this exact candidate cannot succeed, so split it into a chained
+sequence of smaller reviewable commits"). 27 of the first 28 audit case-runs of arm A failed that way (the
+other had a fixture suite that was not green), at no model cost. RDD reviews changes and cannot audit a
+whole codebase by design, so arm A of the audit condition was stopped. The audit condition keeps arm B
+alone, read against arm B of the change condition (how much TSP depends on seeing the diff); it has no
+RDD comparison and no verdict. The registered change condition is unaffected.
