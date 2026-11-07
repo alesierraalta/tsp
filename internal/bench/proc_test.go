@@ -4,6 +4,7 @@ package bench
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,6 +25,13 @@ func grandchildAlive(t *testing.T, run func(dir, suite string)) bool {
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("the timed-out suite returned after %s, held by its grandchild", took.Round(time.Second))
 	}
+	return survived(t, pidFile)
+}
+
+// survived reads the pid a timed-out run wrote and reports whether that process outlived the kill, killing it
+// if so, so a failing test does not leave it behind either.
+func survived(t *testing.T, pidFile string) bool {
+	t.Helper()
 	raw, err := os.ReadFile(pidFile)
 	if err != nil {
 		t.Fatalf("the suite never started its grandchild: %v", err)
@@ -56,6 +64,154 @@ func TestPerTestTimeoutKillsTheWholeProcessTree(t *testing.T) {
 		_, _ = runCapture(dir, []string{"sh", "-c", strings.TrimSuffix(strings.TrimPrefix(suite, `sh -c "`), `"`)}, 300*time.Millisecond)
 	}) {
 		t.Fatal("runCapture left a grandchild of the timed-out suite running")
+	}
+}
+
+// A descendant in a session of its own escapes a kill aimed at the process group: Pi's bash tool spawns every
+// command detached and only kills it itself while Pi is alive, so killing the agent's group left a
+// `node --test | head` running for hours after the run's timeout. The timeout must end it too.
+func TestTimeoutKillsADescendantInASessionOfItsOwn(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid is not installed")
+	}
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "detached.pid")
+	_, _ = runCapture(dir, []string{"sh", "-c", "setsid sleep 30 & echo $! > " + pidFile + "; wait"}, 300*time.Millisecond)
+	if survived(t, pidFile) {
+		t.Fatal("the timeout left a descendant that runs in a session of its own")
+	}
+}
+
+// A background job an agent's command leaves behind (`node server.js &` inside a Pi tool command that then
+// returns) loses its parent long before the timeout: it is reparented and no longer a descendant of the run,
+// yet it was started by the run and must not outlive it.
+func TestTimeoutKillsAnOrphanTheRunLeftBehind(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid is not installed")
+	}
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "orphan.pid")
+	// The detached shell starts the job and exits at once, so the job is an orphan before the timeout fires.
+	script := "setsid sh -c 'sleep 30 & echo $! > " + pidFile + "'; sleep 5"
+	_, _ = runCapture(dir, []string{"sh", "-c", script}, 500*time.Millisecond)
+	if survived(t, pidFile) {
+		t.Fatal("the timeout left an orphan the run had started")
+	}
+}
+
+// A run that ends in time can leave a background job too (a server an agent started for a test and never
+// stopped). Across a reading of a hundred runs those pile up the same way a timed-out run's did; what the run
+// started must not outlive it either way.
+func TestAFinishedRunLeavesNothingRunning(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid is not installed")
+	}
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "leftover.pid")
+	// The job's output goes nowhere, so it holds no pipe: this case is only about the process outliving the run.
+	code, _ := runCapture(dir, []string{"sh", "-c", "setsid sh -c 'sleep 30 >/dev/null 2>&1 & echo $! > " + pidFile + "'"}, 10*time.Second)
+	if code != 0 {
+		t.Fatalf("the run itself failed: exit %d", code)
+	}
+	if survived(t, pidFile) {
+		t.Fatal("a run that finished in time left a process it started running")
+	}
+}
+
+// A suite that passes but leaves a background job holding its output (a test server it never stopped) still
+// passed: its exit status must come back, not -1. Losing it turns a green suite into a broken one in the score.
+func TestAFinishedRunKeepsItsExitStatusWhenAChildHoldsTheOutput(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "holder.pid")
+	code, _ := runCapture(dir, []string{"sh", "-c", "sleep 30 & echo $! > " + pidFile + "; exit 0"}, 10*time.Second)
+	survived(t, pidFile) // only to clean up: this case is about the exit status
+	if code != 0 {
+		t.Fatalf("a suite that exited 0 came back as exit %d", code)
+	}
+}
+
+// RunSuite judges whether a fixture or a fixed version is green: a passing suite that leaves a child holding
+// its output must still read green, or a sound case is refused as broken.
+func TestRunSuiteKeepsAPassingSuiteGreenWhenAChildHoldsTheOutput(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "holder.pid")
+	res, err := RunSuite(dir, `sh -c "sleep 30 & echo $! > `+pidFile+`; exit 0"`, 10*time.Second)
+	survived(t, pidFile)
+	if err != nil || !res.Green || res.ExitCode != 0 {
+		t.Fatalf("RunSuite = exit %d green %v err %v; want a green suite with exit 0", res.ExitCode, res.Green, err)
+	}
+}
+
+// Nested runs must preserve the outer mark so its cleanup can still find their orphans.
+func TestANestedRunKeepsTheOuterRunsMark(t *testing.T) {
+	if _, err := os.Stat("/proc/self/environ"); err != nil {
+		t.Skip("process environments are unavailable without /proc")
+	}
+	outer := runMarkEntry(newRunMark())
+	key, value, _ := strings.Cut(outer, "=")
+	t.Setenv(key, value)
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "environ")
+	code, _ := runCapture(dir, []string{"sh", "-c", "tr '\\0' '\\n' < /proc/$$/environ > " + envFile}, 10*time.Second)
+	if code != 0 {
+		t.Fatalf("the run itself failed: exit %d", code)
+	}
+	raw, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains("\n"+string(raw), "\n"+outer+"\n") {
+		t.Fatal("a process started by a nested run lost the outer run's mark")
+	}
+}
+
+// The kill is aimed: a process this run did not start (a concurrent run's, the operator's) survives it, even
+// when it runs the same command in the same directory.
+func TestTimeoutSparesAProcessTheRunDidNotStart(t *testing.T) {
+	dir := t.TempDir()
+	outsider := exec.Command("sleep", "30")
+	outsider.Dir = dir
+	outsider.Env = append(os.Environ(), runMarkEntry(newRunMark()))
+	if err := outsider.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = outsider.Process.Kill(); _ = outsider.Wait() }()
+	_, _ = runCapture(dir, []string{"sh", "-c", "sleep 30"}, 300*time.Millisecond)
+	if err := syscall.Kill(outsider.Process.Pid, 0); err != nil {
+		t.Fatalf("the timeout killed a process another run had started: %v", err)
+	}
+}
+
+// The run is marked through its environment, which every process it starts inherits; a caller that assigns
+// cmd.Env after boundProcessTree would drop the mark without a word, and the orphan kill would find nothing.
+// Every caller in the package therefore sets its environment first.
+func TestNoCallerReplacesTheEnvironmentAfterBoundingTheTree(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bound := false
+		for i, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case line == "boundProcessTree(cmd)":
+				bound = true
+			case bound && strings.HasPrefix(line, "cmd.Env ="):
+				t.Errorf("%s:%d replaces cmd.Env after boundProcessTree, dropping the run mark", file, i+1)
+			case bound && strings.Contains(line, "cmd.Run()"):
+				t.Errorf("%s:%d runs a bounded command with cmd.Run: use runBounded, which ends what the run left behind", file, i+1)
+			case strings.HasPrefix(line, "func "):
+				bound = false
+			}
+		}
 	}
 }
 

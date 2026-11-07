@@ -361,7 +361,7 @@ func gentleReviewAgent(ctx context.Context, ws string, _ Key, opts Options) (Age
 		boundProcessTree(cmd)
 		var out, errb bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &errb
-		err := cmd.Run()
+		err := runBounded(cmd)
 		if err != nil {
 			return out.Bytes(), fmt.Errorf("gentle-ai %s: %v: %s", strings.Join(args[:2], " "), err, tail(errb.String()+out.String(), 400))
 		}
@@ -403,7 +403,7 @@ func gentleReviewAgent(ctx context.Context, ws string, _ Key, opts Options) (Age
 			}
 			if step.Operation == "review.acknowledge-approved" {
 				notes = append(notes, "approved")
-				return reviewResult(logPath, started, notes), nil
+				return reviewedOrFailed(reviewResult(logPath, started, notes), "approval")
 			}
 		case "capture":
 			for _, c := range step.Captures {
@@ -413,13 +413,24 @@ func gentleReviewAgent(ctx context.Context, ws string, _ Key, opts Options) (Age
 			}
 		case "done":
 			notes = append(notes, "review asks for "+step.Reason)
-			return reviewResult(logPath, started, notes), nil
+			return reviewedOrFailed(reviewResult(logPath, started, notes), step.Reason)
 		default:
+			// A stop ends the review without its findings: whatever made Gentle AI stop (stale assets, a refused
+			// candidate) is not a review that found nothing, so the run fails and the bench retries it.
 			notes = append(notes, "review stopped: "+step.Reason)
-			return reviewResult(logPath, started, notes), nil
+			return reviewResult(logPath, started, notes), fmt.Errorf("gentle-review: the review stopped (%s) before its findings were in", step.Reason)
 		}
 	}
 	return reviewResult(logPath, started, notes), errors.New("gentle-review: the review did not settle in 40 transitions")
+}
+
+// reviewedOrFailed keeps a review that captured at least one reviewer and fails one that captured none: with no
+// reviewer there are no findings, and scoring that as a review that found nothing would read as a miss.
+func reviewedOrFailed(ar AgentResult, reason string) (AgentResult, error) {
+	if ar.Turns == 0 {
+		return ar, fmt.Errorf("gentle-review: the review reached %s with no reviewer result", reason)
+	}
+	return ar, nil
 }
 
 // reviewResult reads the reviewer calls the shim logged into the run's answer: the reviewers' results as one JSON
