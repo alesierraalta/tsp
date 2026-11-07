@@ -115,3 +115,28 @@ one run per arm, binary d109cf9) validated the setup and showed two things.
    the registered result and its verdict does not replace the registered one.
 
 Pilot numbers are reported apart and are not part of either condition.
+
+**D2 (2026-11-06, during the study, before any analysis).** In the audit condition Gentle AI refuses every
+review at START: the whole repository as a change exceeds the evidence budget of a lens ("candidate
+evidence is never truncated and retrying this exact candidate cannot succeed, so split it into a chained
+sequence of smaller reviewable commits"). 27 of the first 28 audit case-runs of arm A failed that way (the
+other had a fixture suite that was not green), at no model cost. RDD reviews changes and cannot audit a
+whole codebase by design, so arm A of the audit condition was stopped. The audit condition keeps arm B
+alone, read against arm B of the change condition (how much TSP depends on seeing the diff); it has no
+RDD comparison and no verdict. The registered change condition is unaffected.
+
+**D3 (2026-11-07, after the arms first finished, before the final analysis).** Two machine reboots interrupted
+the study; it was resumed with `.runs/rdd-vs-tsp/resume.sh`, which keeps finished runs and reruns only
+missing ones, with the same binary. Two defects of the setup were found and corrected, neither of which
+changes a measure or the decision rule:
+
+1. After the second reboot a full `gentle-ai sync` brought back `managed_assets_outdated`; 22 arm A runs
+   stopped before any reviewer and the runner returned them as reviews with no findings (bench defect #381).
+   The analysis excluded them already, because their answering model was unknown. They were deleted, the
+   workaround was reapplied, resume now checks that review START is offered before every arm A case, and
+   the runs were repeated. Two `result.json` files cut short by the reboot were deleted and repeated too.
+2. The first resume did not carry arm B's clean-control runs into the arm (control case directories have no
+   hash suffix); those six runs were lost and repeated.
+
+The first analysis printed before these corrections ("RDD better at detection" on 15 cases) used an
+incomplete, non-random subset and is not a result.
