@@ -344,3 +344,22 @@ func TestClaudeInheritedRunsKeepTheOperatorsHome(t *testing.T) {
 		t.Fatalf("inherited env = %v, want the process environment untouched (nil)", env)
 	}
 }
+
+// Claude Code loads every ancestor's CLAUDE.md, so a workspace under the operator's home receives the operator's
+// ~/.claude/CLAUDE.md whatever HOME says (#392). A run with its own config reads settings and memory from that
+// config alone; a run that inherits the operator's configuration keeps every source.
+func TestClaudeArgsKeepAnIsolatedRunToItsOwnConfig(t *testing.T) {
+	isolated := strings.Join(claudeArgs("prompt", Options{ConfigDir: "/cfg", MaxTurns: 5, Model: "haiku"}), " ")
+	if !strings.Contains(isolated, "--setting-sources user") {
+		t.Fatalf("isolated args = %q, want --setting-sources user", isolated)
+	}
+	inherited := strings.Join(claudeArgs("prompt", Options{MaxTurns: 5}), " ")
+	if strings.Contains(inherited, "--setting-sources") {
+		t.Fatalf("inherited args = %q, want no setting-sources restriction", inherited)
+	}
+	for _, want := range []string{"-p prompt", "--output-format stream-json", "--max-turns 5", "--permission-mode bypassPermissions"} {
+		if !strings.Contains(inherited, want) {
+			t.Fatalf("args = %q, want %q", inherited, want)
+		}
+	}
+}

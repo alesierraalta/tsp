@@ -1180,13 +1180,23 @@ func yesNo(b bool) string {
 }
 
 // claudeAgent spawns the real CLI with the run's prompt and reads its stream-json.
-func claudeAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
-	args := []string{"-p", agentPrompt(key, opts), "--output-format", "stream-json", "--verbose",
+// claudeArgs is the claude command line for one run. A run with a config of its own reads settings and memory from
+// that config alone (--setting-sources user): Claude Code also loads every ancestor's CLAUDE.md, so a workspace
+// under the operator's home would otherwise receive the operator's ~/.claude/CLAUDE.md whatever HOME says (#392).
+func claudeArgs(prompt string, opts Options) []string {
+	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose",
 		"--max-turns", fmt.Sprint(opts.MaxTurns), "--permission-mode", "bypassPermissions"}
+	if opts.ConfigDir != "" {
+		args = append(args, "--setting-sources", "user")
+	}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}
-	cmd := exec.CommandContext(ctx, "claude", args...)
+	return args
+}
+
+func claudeAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+	cmd := exec.CommandContext(ctx, "claude", claudeArgs(agentPrompt(key, opts), opts)...)
 	cmd.Dir = ws
 	cmd.Env = agentEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
 	boundProcessTree(cmd)
