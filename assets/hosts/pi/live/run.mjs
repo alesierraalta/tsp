@@ -33,6 +33,19 @@ const tspAsked = (r) => r.seen.filter((m) => m.text.startsWith(TSP_PROMPT)).leng
 const checks = (r) => r.tspCalls.filter((c) => c.startsWith("check")).length;
 
 /** Each case: what it sets up, what the model does, and the behaviour wanted. */
+const PLAN_WITHOUT_FINDINGS = [
+  "# Test plan",
+  "",
+  "| Layer | Skill | Scope | Status | Run |",
+  "|---|---|---|---|---|",
+  "",
+  "## Findings",
+  "",
+  "| Id | Finding (path:line, one line) | Severity | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |",
+  "|---|---|---|---|---|---|---|---|---|---|",
+  "",
+].join("\n");
+
 const CASES = [
   { name: "offer fires for an edit to non-test source", script: [edit("src/add.js"), text()], prompts: ["change it"], answer: () => "No",
     want: (r) => offers(r).length === 1 },
@@ -43,7 +56,8 @@ const CASES = [
   { name: "a No survives a resume of the session (--continue)", script: [edit("src/add.js", 1), text()], prompts: ["change it"], answer: () => "No",
     then: { script: [edit("src/add.js", 2), text()], prompts: ["change it again"] }, want: (r) => offers(r).length === 1 && r.settled === 2 },
   { name: "the status line shows what is owed once the offer is raised", script: [edit("src/add.js"), text()], prompts: ["change it"], answer: () => "No",
-    want: (r) => statuses(r).at(-1) === "tsp: ask" },
+    // The line must show the debt while the offer is open; answering No clears it, so the check is that it showed.
+    want: (r) => statuses(r).includes("tsp: ask") },
   { name: "/tsp run starts a TSP run from the command line of the session", dirty: { "src/add.js": "export const add = (a, b) => a + b // earlier work\n" },
     script: [text("tsp ran"), ...fillers], prompts: ["/tsp run"], answer: () => "No", want: (r) => tspRuns(r) === 1 && offers(r).length === 0 },
   { name: "no second offer for edits made during the TSP run itself", script: [edit("src/add.js"), text(), edit("src/other.js"), text(), ...fillers],
@@ -65,6 +79,12 @@ const CASES = [
     script: [text("nothing to change")], prompts: ["explain it"], answer: () => "No", want: (r) => offers(r).length === 0 && checks(r) === 0 },
   { name: "a required verdict without a UI asks the model to run TSP, once", mode: "json", files: { ".tsp.json": '{"gate":"always"}\n' },
     script: [edit("src/add.js"), text(), ...fillers], prompts: ["change it"], want: (r) => tspAsked(r) === 1 },
+  // A run that wrote a test and recorded no finding loses it: the plan is what every later reader sees (#398).
+  { name: "a TSP run that pinned a test and recorded nothing is asked to record it",
+    files: { "docs/testing/test-plan.md": PLAN_WITHOUT_FINDINGS },
+    script: [edit("src/add.test.js"), text(), ...fillers], prompts: ["haz el TSP"], answer: () => "No",
+    want: (r) => r.users.filter((u) => u.includes("tsp plan add-finding")).length === 1 },
+
 ];
 
 function sandbox(c) {
@@ -73,7 +93,7 @@ function sandbox(c) {
   for (const d of [repo, agent, bin, join(dir, "xdg"), join(repo, "src")]) mkdirSync(d, { recursive: true });
   writeFileSync(join(repo, "src/add.js"), "export const add = (a, b) => a + b\n");
   writeFileSync(join(repo, "package.json"), '{"name":"x","scripts":{"test":"echo ok"}}\n');
-  for (const [name, body] of Object.entries(c.files ?? {})) writeFileSync(join(repo, name), body);
+  for (const [name, body] of Object.entries(c.files ?? {})) { mkdirSync(dirname(join(repo, name)), { recursive: true }); writeFileSync(join(repo, name), body); }
   const git = (...a) => execFileSync("git", ["-C", repo, ...a], { stdio: "ignore" });
   git("init", "-q"); git("config", "user.email", "live@example.test"); git("config", "user.name", "live");
   git("add", "-A"); git("commit", "-qm", "init");
@@ -174,6 +194,7 @@ for (const c of CASES.filter((x) => !filter || x.name.includes(filter))) {
   const verdict = !ran ? "FAIL (no run or no change)" : c.gap ? (wanted ? "GAP CLOSED, remove the marker" : `known gap ${c.gap}`) : wanted ? "pass" : "FAIL";
   if (verdict.startsWith("FAIL") || verdict.startsWith("GAP CLOSED")) failed++;
   console.log(`${verdict.padEnd(14)} ${c.name}`);
+  console.log(`               statuses=${JSON.stringify(statuses(r))}`);
   console.log(`               offers=${offers(r).length} tsp-runs=${tspRuns(r)} check-calls=${checks(r)} settled=${r.settled} changed=${JSON.stringify(r.changed.split("\n").filter(Boolean).map((l) => l.slice(3)).join(","))} aborted=${JSON.stringify(r.aborted)} users=${JSON.stringify(r.users.map((u) => u.slice(0, 24)))}`);
   r.events.forEach((e) => seenEvents.add(e));
   r.ui.forEach((u) => { seenMethods.add(u.method); Object.keys(u).forEach((k) => seenUiKeys.add(k)); });
