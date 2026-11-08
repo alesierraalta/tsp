@@ -199,7 +199,7 @@ const errorVerdict = (reason) => ({ stdout: JSON.stringify({ decision: "error", 
 // chat when the repository left that to the human; "Sí" sends the identity prompt "haz el TSP" as if the user typed
 // it. Every collaborator is faked: no Pi, no files, no git.
 function offerHarness(opts = {}) {
-  const { hasUI = true, optedOut = false, env = {}, findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), probe, entries = [], feedback } = opts;
+  const { hasUI = true, optedOut = false, env = {}, findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), status, probe, entries = [], feedback } = opts;
   const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
   const asked = [], sent = [], calls = [], notes = [], statuses = [], widgets = [];
   // findings maps a findings subcommand to the child it answers with; a missing one answers exit 0, no output.
@@ -210,6 +210,7 @@ function offerHarness(opts = {}) {
     const fallback = argv[0] === "feedback" ? feedback ?? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
     const outcome = argv[0] === "check" && argv[1] === "--cwd"
       ? (typeof check === "function" ? check(calls.length) : check)
+      : argv[0] === "status" ? status ?? fallback
       : findings[argv[1]] ?? fallback;
     if (outcome instanceof Error) throw outcome;
     return outcome;
@@ -1125,4 +1126,25 @@ test("a findings review longer than the toast limit is readable in full", async 
   const shown = h.widgets.filter((w) => w.lines !== undefined).at(-1).lines.join("\n");
   for (const line of lines) assert.ok(shown.includes(line), "every finding line is readable");
   assert.ok(h.notes.at(-1).message.length < 300, "the toast is a pointer, not the report");
+});
+
+test("with the automatic run switched off a required verdict asks, and the question is the evidence", async () => {
+  const h = offerHarness({
+    check: requiredVerdict("no test was added or changed with it"),
+    status: { stdout: JSON.stringify({ features: [{ id: "feedback", enabled: false }, { id: "auto-run", enabled: false }] }), stderr: "", code: 0 },
+  });
+  await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+  assert.equal(h.asked.length, 1, "the debt is still owed: switching the toggle off moves the decision, not the debt");
+  assert.deepEqual(h.asked[0].options, ["Sí", "No"]);
+  assert.match(h.asked[0].title, /no test was added or changed with it/);
+  assert.deepEqual(h.notes, [{ message: "TSP required: a verified Gentle session is active: TSP is required · automatic run disabled (tsp feature enable auto-run)", type: "warning" }]);
+  assert.deepEqual(h.sent, ["haz el TSP"], "Sí still runs it: only the automatic send is off");
+  assert.deepEqual(h.calls[1], { argv: ["status", "--json"], cwd: "/repo" }, "the toggle is read from status --json, not guessed");
+});
+
+test("an unreadable status keeps the automatic run, so a broken status call never silently stops TSP", async () => {
+  const h = offerHarness({ check: requiredVerdict("no test was added or changed with it"), status: { stdout: "not json", stderr: "", code: 0 } });
+  await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+  assert.deepEqual(h.asked, [], "nothing is asked: the shipped behaviour is preserved");
+  assert.deepEqual(h.sent, ["haz el TSP"]);
 });
