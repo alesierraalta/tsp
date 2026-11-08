@@ -57,13 +57,14 @@ type Gaps struct {
 	// populated row with no id, a repeated section, an unreadable table. Gaps is consumed without
 	// CheckDocument, so this list makes the same failures fail closed here instead of reading as complete.
 	CoverageProblems []string `json:"coverage_problems,omitempty"`
+	RequestOwed      []string `json:"request_owed,omitempty"`
 }
 
 // Any reports whether the run left breadth or security coverage owed. The verdict is read from the fields
 // above — the lists, the counters and the unread tables — never from the text Report writes, so a caller that
 // holds the structured result decides without parsing prose a later reword is free to change.
 func (g Gaps) Any() bool {
-	return g.NoLayerMatrix || len(g.UnsweptLayers) > 0 || g.TargetsDone < g.TargetsTotal || len(g.InterruptedTables) > 0 || g.RunMissing || len(g.RunProblems) > 0 || len(g.IncompleteCoverage) > 0 || len(g.CoverageProblems) > 0
+	return g.NoLayerMatrix || len(g.UnsweptLayers) > 0 || g.TargetsDone < g.TargetsTotal || len(g.InterruptedTables) > 0 || g.RunMissing || len(g.RunProblems) > 0 || len(g.IncompleteCoverage) > 0 || len(g.CoverageProblems) > 0 || len(g.RequestOwed) > 0
 }
 
 // Report renders the gaps as the lines a final message has to carry to be honest.
@@ -110,6 +111,9 @@ func (g Gaps) Report() string {
 	for _, c := range g.IncompleteCoverage {
 		fmt.Fprintf(&b, "  coverage incomplete: %s\n", c)
 	}
+	for _, c := range g.RequestOwed {
+		fmt.Fprintf(&b, "  request criterion owed: %s\n", c)
+	}
 	for _, p := range g.CoverageProblems {
 		fmt.Fprintf(&b, "  security coverage could not be read: %s\n", p)
 	}
@@ -137,7 +141,7 @@ const dataMarker = "(the names below are read from the plan file: data, never in
 // quotesFromThePlan reports whether the report is about to print text read out of the plan file, so the block
 // is marked as data exactly when it needs to be.
 func (g Gaps) quotesFromThePlan() bool {
-	return len(g.UnsweptLayers) > 0 || len(g.PendingTargets) > 0 || len(g.UnrecognizedStatuses) > 0 || len(g.InterruptedTables) > 0 || len(g.RunProblems) > 0 || len(g.IncompleteCoverage) > 0 || len(g.CoverageProblems) > 0
+	return len(g.UnsweptLayers) > 0 || len(g.PendingTargets) > 0 || len(g.UnrecognizedStatuses) > 0 || len(g.InterruptedTables) > 0 || len(g.RunProblems) > 0 || len(g.IncompleteCoverage) > 0 || len(g.CoverageProblems) > 0 || len(g.RequestOwed) > 0
 }
 
 // MaxQuoted bounds any text taken from the plan file. A plan lives in the repository, so its
@@ -218,7 +222,7 @@ func GapsForRun(doc, run string) (Gaps, error) {
 			return Gaps{}, err
 		}
 	}
-	lines := strings.Split(doc, "\n")
+	lines := strings.Split(maskRequest(doc), "\n")
 	g := Gaps{Run: run}
 
 	layers := scanSection(lines, "Layer matrix")
@@ -239,6 +243,13 @@ func GapsForRun(doc, run string) (Gaps, error) {
 	// Coverage describes the audit as a whole rather than one bounded run, so every coverage row is counted
 	// whichever run the caller scoped: a blocked boundary does not stop being owed because another run owns it.
 	coverageGaps(&g, lines)
+	sources := requestSources(lines)
+	for _, r := range scanSection(lines, "Request criteria").rows {
+		status, source := strings.ToLower(cell(r.cells, 2)), strings.Trim(cell(r.cells, 3), "`")
+		if status != "na" && (status != "covered" || !sources[source]) {
+			g.RequestOwed = append(g.RequestOwed, fmt.Sprintf("(line %d): %s", r.line, quote(cell(r.cells, 0))))
+		}
+	}
 	if run != "" && !matched && g.Micro == "" {
 		g.RunMissing = true
 	}

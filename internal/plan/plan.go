@@ -55,6 +55,19 @@ func InitMicro(path, shown string, force bool) error {
 const templateHeaderPath = "Plan path: `" + DefaultPath + "`"
 
 func initFrom(path, shown, template string, force bool) error {
+	return initFromRequest(path, shown, template, force, nil)
+}
+
+// InitRequest writes a skeleton with the supplied request, including an empty request.
+func InitRequest(path, shown string, force, micro bool, request []byte) error {
+	template := TemplatePath
+	if micro {
+		template = MicroTemplatePath
+	}
+	return initFromRequest(path, shown, template, force, request)
+}
+
+func initFromRequest(path, shown, template string, force bool, request []byte) error {
 	if _, err := os.Stat(path); err == nil && !force {
 		return fmt.Errorf("%s already exists; pass --force to replace it", path)
 	}
@@ -64,6 +77,18 @@ func initFrom(path, shown, template string, force bool) error {
 	}
 	if shown != "" {
 		body = strings.Replace(body, templateHeaderPath, "Plan path: `"+shown+"`", 1)
+	}
+	if request != nil {
+		fence := "```"
+		for strings.Contains(string(request), fence) {
+			fence += "`"
+		}
+		section := "\n## Request\n\n" + fence + "\n" + string(request) + "\n" + fence + "\n\n## Request criteria\n\n<!-- Write one row per acceptance criterion. Disposition: covered, blocked, or na. -->\n<!-- Covered names a Finding or Evidence id in Source; blocked/na require a Reason. -->\n\n| Id | Criterion (one line) | Disposition | Source | Reason |\n|---|---|---|---|---|\n"
+		if i := strings.Index(body, "\n## "); i >= 0 {
+			body = body[:i] + "\n" + section + body[i:]
+		} else {
+			body += section
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -133,12 +158,14 @@ func Check(path string) ([]string, error) {
 // CheckDocument is Check on the document itself, so the rules can be read against a document that has
 // never been written to disk. The rules live in one place because a second copy would drift.
 func CheckDocument(doc string) []string {
+	doc = maskRequest(doc)
 	lines := strings.Split(doc, "\n")
 
 	// Every table is measured against its own header before anything is said about its rows: a row that
 	// lost a cell moves every column to its right, so the reader refuses the row by count rather than read
 	// a machine column out of the cell beside it.
 	problems := tableProblems(doc)
+	problems = append(problems, requestProblems(lines)...)
 
 	heading, end := sectionRegion(lines, "Findings")
 	if heading < 0 {
@@ -1158,13 +1185,14 @@ func tableUnderSubheading(lines []string, start, end int) (resumed int, opens bo
 
 // fenceMarker returns the marker a line opens a code fence with — three backticks or three tildes — or "".
 func fenceMarker(t string) string {
-	switch {
-	case strings.HasPrefix(t, "```"):
-		return "```"
-	case strings.HasPrefix(t, "~~~"):
-		return "~~~"
+	if !strings.HasPrefix(t, "```") && !strings.HasPrefix(t, "~~~") {
+		return ""
 	}
-	return ""
+	i := 0
+	for i < len(t) && t[i] == t[0] {
+		i++
+	}
+	return t[:i]
 }
 
 // interruptedTable renders the breach a region leaves when part of it was never read, and the line to report

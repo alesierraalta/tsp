@@ -955,6 +955,11 @@ and run bound to the exact session, and stays silent without a valid binding.
 
 ```
 tsp plan init                # write the skeleton, tables and all; never overwrites silently
+# Freeze a request from a file or stdin (issue URLs are not fetched):
+tsp plan init --spec request.txt
+gh issue view 123 | tsp plan init --spec -
+# Fill one Request criteria row per acceptance criterion: covered cites a Finding or Evidence id;
+# blocked and na require a reason. plan check validates the citations.
 tsp plan check               # exit 1 and name every breach of the contract
 tsp plan check --report r.md # also exit 1 for each production path:line the report cites that no Findings row records
 tsp plan check --pins        # also exit 1 for each settled row whose named test passes on this code
