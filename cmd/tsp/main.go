@@ -183,7 +183,8 @@ bench adjudicate --run <results>/<case>/<run> [--plan <path>] (--show | --pendin
            nobody decided stays pending and is never counted as a false positive. A score applies a
            record only when --adjudication names it: the workspace the subject wrote must not be able
            to supply the verdicts about its own findings)
-plan init [--path <path>] [--force] [--micro]
+plan init [--path <path>] [--force] [--micro] [--spec <file|->]
+          (--spec reads a file or stdin; issue URLs are not fetched: gh issue view 123 | tsp plan init --spec -)
           (--micro writes the micro skeleton: header, Findings and Evidence ledger, for one small function)
 plan count [--path <path>] [--json]
            (prints {"findings":N,"evidence":M} for the plan: how much of it a run recorded)
@@ -1524,6 +1525,7 @@ func runPlan(args []string) int {
 	all := fs.Bool("all", false, "count every row (gaps only)")
 	force := fs.Bool("force", false, "replace an existing plan (init only)")
 	micro := fs.Bool("micro", false, "write the micro plan skeleton for one small function (init only)")
+	spec := fs.String("spec", "", "request file or - for stdin (init only); issue URLs are not fetched: gh issue view 123 | tsp plan init --spec -")
 	id := fs.String("id", "", "row id for add-finding and add-evidence; omitted, the next free F or E number is taken")
 	location := fs.String("location", "", "the `path:line` the finding cites (add-finding)")
 	severity := fs.String("severity", "", "consequence class (add-finding)")
@@ -1559,6 +1561,10 @@ func runPlan(args []string) int {
 	commit := fs.String("commit", "", "commit the export covers; the default is the short HEAD of the repository (export only)")
 	if code, ok := parseFlags(fs, args[1:]); !ok {
 		return code
+	}
+	if flagSet(fs, "spec") && args[0] != "init" {
+		fmt.Fprintln(os.Stderr, "plan: --spec is only valid with init")
+		return 2
 	}
 	if *all && flagSet(fs, "run") {
 		fmt.Fprintln(os.Stderr, "plan gaps: --run and --all cannot combine")
@@ -1650,7 +1656,24 @@ func runPlan(args []string) int {
 		if rel, err := filepath.Rel(root, effectivePath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			shown = filepath.ToSlash(rel)
 		}
-		if err := initPlan(effectivePath, shown, *force); err != nil {
+		var initErr error
+		if flagSet(fs, "spec") {
+			var data []byte
+			if *spec == "-" {
+				data, initErr = io.ReadAll(os.Stdin)
+			} else {
+				data, initErr = os.ReadFile(*spec)
+			}
+			if initErr == nil {
+				if data == nil {
+					data = []byte{}
+				}
+				initErr = plan.InitRequest(effectivePath, shown, *force, *micro, data)
+			}
+		} else {
+			initErr = initPlan(effectivePath, shown, *force)
+		}
+		if err := initErr; err != nil {
 			fmt.Fprintln(os.Stderr, "plan init:", err)
 			return 1
 		}
@@ -1692,6 +1715,11 @@ func runPlan(args []string) int {
 		}
 		if *baseRef != "" {
 			problems = append(problems, causalityProblems(effectivePath, *baseRef)...)
+		}
+		if data, readErr := os.ReadFile(effectivePath); readErr == nil {
+			if notice := plan.RequestNotice(string(data)); notice != "" {
+				fmt.Println(notice)
+			}
 		}
 		if len(problems) == 0 {
 			fmt.Printf("%s: well formed\n", effectivePath)

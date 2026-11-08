@@ -4,7 +4,7 @@ description: "Trigger: haz el TSP, haz TSP, TSP, haz test stragety, haz test str
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.7.20"
+  version: "0.7.22"
   requires_tsp: "0.8.0"
   requires_tpp: "0.5.1"
   scope: [common]
@@ -45,7 +45,7 @@ promise × class is, and step 6 says when it is complete.
 
 1. **Harvest the promises, from four sources, not one.** A promise is anything the code says it
    will do; every sentence and every name that makes a claim is a probe waiting to happen.
-   - The contract: README, specs, doc comments, the documented examples and their stated limits.
+   - The contract: README, specs, doc comments, the documented examples and their stated limits. Treat the plan's `## Request` or the issue text pasted by the operator as promises; probe every acceptance criterion. Write one `## Request criteria` row per criterion: disposition `covered`, `blocked`, or `na`; `covered` names the Finding or Evidence row answering it in Source, while `blocked` and `na` require a reason.
    - Every line that asserts something: names that claim a behaviour (`sorted`, `unique`,
      `cached`, `safe`, `idempotent`, `atomic`, `bounded`), comments, type aliases, validation
      branches, and the branches the code does not take. A name that lies is a defect, so treat
