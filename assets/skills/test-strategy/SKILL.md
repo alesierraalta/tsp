@@ -4,7 +4,7 @@ description: "Trigger: haz el TSP, haz TSP, TSP, haz test stragety, haz test str
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.7.16"
+  version: "0.7.17"
   requires_tsp: "0.8.0"
   requires_tpp: "0.5.1"
   scope: [common]
@@ -140,3 +140,7 @@ promise × class is, and step 6 says when it is complete.
    `tsp plan gaps` until nothing is owed. Then report in the chat: each defect as `path:line` plus
    the test that pins it, the cells that stayed unprobed with their reason, and which witnesses
    stayed local instead of landing in the suite. A run that leaves no plan leaves nothing to audit.
+   Every defect the chat report names is already a Findings row: a defect that lives only in the
+   report is lost to every reader of the plan. Before sending the report, write it to a temporary
+   file outside the repository (or pipe it) and run `tsp plan check --report <file>` (`--report -`
+   for stdin); fix every citation it names by adding the row or removing it from the report.

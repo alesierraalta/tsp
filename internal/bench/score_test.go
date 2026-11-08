@@ -2,6 +2,7 @@ package bench
 
 import (
 	"fmt"
+	"github.com/alesierraalta/tsp/internal/citation"
 	"os"
 	"path/filepath"
 	"strings"
@@ -602,8 +603,8 @@ func TestSamePath(t *testing.T) {
 		{"src/render.jsx", "src/render.js", false},
 	}
 	for _, tc := range cases {
-		if got := samePath(tc.cited, tc.key); got != tc.want {
-			t.Errorf("samePath(%q, %q) = %v, want %v", tc.cited, tc.key, got, tc.want)
+		if got := citation.SamePath(tc.cited, tc.key); got != tc.want {
+			t.Errorf("citation.SamePath(%q, %q) = %v, want %v", tc.cited, tc.key, got, tc.want)
 		}
 	}
 }
