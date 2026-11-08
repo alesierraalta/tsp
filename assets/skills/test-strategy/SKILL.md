@@ -4,7 +4,7 @@ description: "Trigger: haz el TSP, haz TSP, TSP, haz test stragety, haz test str
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.7.18"
+  version: "0.7.19"
   requires_tsp: "0.8.0"
   requires_tpp: "0.5.1"
   scope: [common]
@@ -55,6 +55,11 @@ promise × class is, and step 6 says when it is complete.
    - The evidence this session already has: the diff, the bug report, the log line that started
      the work. A change is a promise list: everything the changed code touches inherits its
      promises, including the callers nobody named.
+   When the branch or the working tree has a change against its base, **read that diff first**, before any
+   sweep: `git diff --stat origin/main...HEAD` (or the repository's base branch) and `git diff HEAD` for work
+   not committed yet. A defect this work introduced sits on a changed line or in what the change calls, so
+   the changed files and their direct callers are probed first and the rest of the surface is swept after
+   them. Record which base you read, and if git cannot answer for the workspace, say so and sweep as usual.
    Keep the list as `path:line — promise` while you work; the plan records what you concluded,
    not the narration of how you got there.
 
