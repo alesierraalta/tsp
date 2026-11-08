@@ -140,3 +140,36 @@ changes a measure or the decision rule:
 
 The first analysis printed before these corrections ("RDD better at detection" on 15 cases) used an
 incomplete, non-random subset and is not a result.
+
+**D4 (2026-11-07, before the rerun of #388).** After the report, arm B was found contaminated: the claude runner
+kept the operator's `HOME`, so 11 of 66 change-condition runs loaded the operator's `branch-isolation` skill and
+wrote their tests in a worktree the bench never reads (#390, erratum in the report). The rerun keeps everything
+registered above (cases, controls, model, 3 runs, measures, analysis, decision rule) and changes only:
+
+1. Arm B is rerun in both conditions with a `tsp` binary built from a clean `main` that includes #391 (claude
+   runs get a HOME of their own) and #389 (`tsp plan check --report`, and the `test-strategy` 0.7.17 instruction
+   to record every reported defect and run that check). The rerun therefore measures TSP as it ships after the
+   recording fix, which is the question #388 asks.
+2. Arm A is not rerun: its reviewers run with `--setting-sources ""` and no tools, so the contamination did not
+   reach them. Its 72 change-condition runs from the first study are reused unchanged.
+3. Each rerun case-run is checked for contamination before the analysis: a transcript that names any operator
+   skill other than `test-strategy`, or a run whose tests sit outside the workspace, is reported and excluded
+   from both arms for that case and run index.
+
+The first study's TSP numbers are reported beside the rerun as "before"; the verdict is the rerun's.
+
+**D5 (2026-11-07, before the rerun is relaunched).** The first rerun attempt was stopped after 11 case-runs:
+transcripts still referred to the operator's branch-isolation rule. Claude Code loads every ancestor's
+`CLAUDE.md`, so a workspace under the operator's home received the operator's 754-line `~/.claude/CLAUDE.md`
+whatever `HOME` said (#392). This reached every arm B run of the first study as well, not only the 11 that showed
+it; the arm A reviewers run with `--setting-sources ""` and did not get it. The rerun is relaunched from scratch
+with a binary that includes #393 (`--setting-sources user` for runs with their own config); the 11 stopped
+case-runs are discarded and not reported. D4's contamination check is extended: a transcript that names any
+operator instruction (branch-isolation, rtk, engram, codegraph) is excluded.
+
+**D6 (2026-11-08, exploratory arm).** The maintainer replaced the model with `openai-codex/gpt-6-luna` after the
+Claude Code session expired mid-study (`OAuth session expired and could not be refreshed`), which invalidated 74
+arm B case-runs of the first rerun attempt. RDD cannot run on Luna (gentle-ai reviews through Claude Code, whose
+models are Claude's), so the rerun runs **arm B only**, in both conditions, with `--runner pi --model
+openai-codex/gpt-6-luna` on a binary from `main` at 3135e1b. It is reported as an exploratory arm with no verdict
+against arm A; the registered comparison needs the Claude session and is not made here.

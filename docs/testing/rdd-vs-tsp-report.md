@@ -35,6 +35,11 @@ tests there, where the bench never looks. Arm A was not affected: Gentle AI star
 In the audit condition 25 of 66 runs were contaminated (8 detected); the 41 clean ones detected 37. Four of the
 six change-condition control runs were contaminated too; the two clean ones raised one finding between them.
 
+A second leak was found while rerunning (#392): Claude Code also loads every ancestor's `CLAUDE.md`, and every
+study workspace sat under the operator's home, so **every** arm B run carried the operator's 754-line
+`~/.claude/CLAUDE.md` (tooling and git-workflow instructions), not only the 11 that showed it. Arm A's reviewers did
+not. This plausibly accounts for part of arm B's higher cost as well. Fixed in #393.
+
 What this changes: the registered verdict above is kept as computed, but **it does not measure the method**: arm B
 was handicapped by a bench defect arm A did not have. The clean subset is not a valid replacement either: which
 runs loaded the skill was the agent's choice, not random, so a rate over the clean runs is post hoc. The bench is
@@ -169,3 +174,34 @@ found two thirds of the defects with no diff to read, where RDD cannot review at
 pin: RDD on every high-risk change, TSP to turn what RDD reports, or what a change touches, into failing
 tests. Whether TSP given RDD's findings pins more defects than either alone is the next measurement; this
 study did not test it.
+
+## Addendum (2026-11-08): TSP alone, on openai-codex/gpt-6-luna
+
+The Claude Code session expired mid-rerun (`OAuth session expired`), which invalidated 74 case-runs, and RDD
+cannot run on another vendor's model (gentle-ai reviews through Claude Code). By maintainer decision the TSP arm
+was rerun alone on `openai-codex/gpt-6-luna` through Pi, in both conditions, on a binary from `main` at 3135e1b
+that includes #389, #391 and #393. Protocol deviation D6. **No verdict against RDD**: arm A has no run on this
+model.
+
+| TSP on Luna | Change condition | Audit condition |
+|---|---|---|
+| Valid case-runs | 72/72 (0 failed, 0 invalid) | 72/72 |
+| Detected | 8/66 (0.121) | 5/66 (0.076) |
+| Pinned by a test | 48/66 (0.727) | 48/66 |
+| Runs that wrote no plan | 58/66 | 59/66 |
+| Findings rows per run | 0.1 | 0.1 |
+| False positives per control run | 0.00 | 0.00 |
+| Cost per case-run (US$) | 0.0039 | 0.0041 |
+| Turns / seconds per run | 10 / 52 | 11 / 51 |
+| Operator-instruction leaks in transcripts | 0 | 0 |
+
+Reading: the leak fixes hold — no run carried the operator's skills or `CLAUDE.md`, which is what #391 and #393
+were for. Luna is cheap (a sixteenth of Claude's cost per run) and pins defects at about the same rate as Haiku
+(0.727 vs 0.818 on the first study), but it **does not write the plan**: 58 of 66 runs wrote no Findings row at
+all, so its detection reads 0.12 where the test it wrote is often the evidence that it found the defect. The
+bottleneck for this model is the reporting discipline, not the finding.
+
+That is the same failure #384 addressed, one layer deeper: `tsp plan check --report` refuses a report that names an
+unrecorded defect, but a model that writes no plan at all still exits clean, because the skill's instruction is
+prose to it. Closing it for good means enforcing the plan at the runner (the bench, and the Stop hook where the
+host has one) rather than asking the model, which is what #385 and #386 now need.
