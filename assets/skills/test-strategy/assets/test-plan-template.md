@@ -87,6 +87,57 @@ Statuses: open · confirmed · fixed · gap-closed · rejected · wontfix.
 `gap-closed` is a behaviour that was correct but untested, now held by the promoted test it names; like
 `confirmed` and `fixed` it owes that test.
 
+## Security candidates
+
+This optional table records security dispositions separately from Findings statuses; older plans do not
+need it. Name the actor, their effective authority, resource, action and boundary. For `confirmed`,
+record the observed boundary violation and cite an executed, observed Evidence ledger row. For `blocked`,
+record the missing fact and a safe validation step; do not assign a confirmed severity. For `rejected`,
+cite the executed, observed ledger row that refutes the claim. Use `-` for inapplicable fields. A plan
+check validates the recorded structure and references, not whether an observation is truthful or proves
+an actual violation. Use one Security candidates section with one table and a distinct ID for each populated
+row. Promote actionable findings to Findings using its existing statuses and evidence.
+
+| Id | Actor | Authority | Resource | Action | Boundary | Evidence id | Disposition | Observed boundary violation | Missing fact | Safe validation step | Refuting evidence id |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+
+## Candidate reviews
+
+Optional, and separate from `Security candidates`: a candidate row's `Disposition` is its author's claim,
+while a review is a second answer to it. One row per review of an existing candidate, naming its
+`Candidate id`. `Reviewer` names who did the review, and `Independence attestation` is the literal
+`attested`, recording that the reviewer states they did not produce the candidate. `Refutation attempt`
+records a real attempt to refute the claimed path, and `Effective controls` records the controls found to
+prevent it. `Outcome` is `confirmed`, `rejected` or `blocked`. A `confirmed` or `rejected` review cites an
+executed, observed Evidence ledger row that is decisive; a `blocked` review names the specific `Blocker`
+that still has to be resolved. Use `-` for inapplicable cells. A candidate keeps its own disposition
+whether or not it is reviewed, and a review confirmation never replaces the author's disposition.
+
+`plan check` validates the recorded structure and references, not whether the reviewer was truly
+independent or whether the cited evidence proves the claim: an attestation and a table cannot mechanically
+prove identity or truth. Test verification is a different instrument: `tsp verify` freezes the candidate
+in a read-only worktree and asks a second session for a verdict document, publishing `.tsp-verify.json`,
+while a review row is a plan record a human reads. Use one section with one table and a distinct review
+id; duplicate sections or ids, malformed tables, dangling candidate or evidence references, and an
+outcome without its required evidence are refused.
+
+| Id | Candidate id | Reviewer | Independence attestation | Refutation attempt | Effective controls | Outcome | Decisive evidence id | Blocker |
+|---|---|---|---|---|---|---|---|---|
+
+## Security coverage
+
+Optional, and separate from both Findings and Security candidates: one row per surface, boundary,
+subsystem or attack class the security audit considered. `Source` is the `path:line` that locates the
+work, so a coverage claim can be checked against the code it names; `Kind` is `surface`, `boundary`,
+`subsystem` or `attack class`. A `covered` row cites an executed, observed Evidence ledger row, and
+coverage without observed evidence is refused rather than counted. `blocked` and `deferred` state why
+the work is not covered and stay owed in `plan gaps`; `excluded` states why the item is not
+applicable, so a reasoned exclusion leaves the denominator the way an `n/a` layer does. Use `-` for
+inapplicable cells. Plans without this section remain valid.
+
+| Id | Source | Kind | Subject | Disposition | Reason | Evidence id |
+|---|---|---|---|---|---|---|
+
 ## Evidence ledger
 
 One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under

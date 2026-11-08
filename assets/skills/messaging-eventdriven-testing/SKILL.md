@@ -27,6 +27,7 @@ NOT for synchronous request/response only. Boundaries, do not duplicate: `SKIP L
 7. **Rebalance and backpressure.** Trigger a consumer-group rebalance mid-batch: uncommitted offsets are redelivered, so Rule 1 applies. Flood a slow consumer: memory and in-flight counts must stay bounded (prefetch limit, bounded buffer), not grow without limit.
 8. **Convergence is asserted with bounded polling.** Eventual consistency is checked by polling for the final state with a deadline and a clear timeout failure, never a fixed sleep.
 9. **Prove with a deterministic seam and a re-run.** Use an in-memory broker fake the project already has, or a real broker in a throwaway container (`docker-test-containers`). Record the failing seed or delivery order, the observed side-effect count, fix, and re-run green. A test that never fails on the defective code is not evidence.
+10. **Provenance is authenticated, not asserted.** The consumer verifies who produced a message, and under which authority, from broker-authenticated metadata or a signature over the canonical payload, never from a body field, a client-supplied header, or a topic name. Replay a message from another tenant, publish with a forged producer identity, and publish outside the authorized topic. Expect rejection or quarantine. Stale or unsigned provenance is a lead; the violation is an accepted effect from an unauthorized producer. Validate deployment facts: broker ACLs and mTLS, topic-level publish and subscribe grants, signature key distribution and rotation, and whether the relay preserves the original producer.
 
 ## Decision Gates
 
@@ -39,11 +40,12 @@ NOT for synchronous request/response only. Boundaries, do not duplicate: `SKIP L
 | Handler slower than visibility or ack timeout | Slow handler past the timeout | Two consumers process one message |
 | DB write plus publish | Crash between them | State changed with no event, or event with no state |
 | Consumer group or unbounded buffer | Rebalance mid-batch; flood a slow consumer | Duplicate effect; memory grows |
+| Event crosses a service or tenant boundary | Forge producer identity; publish on an unauthorized topic or tenant | Effect applied from an unverified producer |
 | Synchronous request/response only | Stop; record why the gate does not apply | none |
 
 ## Execution Steps
 
-1. List every consumer, its ack point, its effect, its dedupe key, its retry and dead-letter policy, and every publish site.
+1. List every consumer, its ack point, its effect, its dedupe key, its retry and dead-letter policy, every publish site, and where producer identity is established.
 2. Find or add the seam: a broker abstraction with `redeliver` or `restart` and injectable ack failure. Tool facts to `verify` before relying on them: SQS visibility-timeout and redrive-policy behavior, Kafka offset commit and rebalance semantics, RabbitMQ prefetch and requeue behavior, broker-native dedupe windows.
 3. Run the matrix per consumer; keep each failing delivery order as a regression test with its seed.
 4. Fix, re-run the same order, and show the side-effect count and final state now correct.

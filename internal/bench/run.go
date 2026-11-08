@@ -64,14 +64,14 @@ const (
 
 // KnownRunner reports whether name selects a runner the bench can spawn; empty means the default.
 func KnownRunner(name string) bool {
-	return name == "" || name == RunnerClaude || name == RunnerPi || name == RunnerCodex || name == RunnerAgy
+	return name == "" || name == RunnerClaude || name == RunnerPi || name == RunnerCodex || name == RunnerAgy || name == RunnerGentleReview
 }
 
 // DefaultModel is the model a runner uses when the operator does not name one: the free Pi model the
 // readings run on, and the cheapest Claude model for the last-resort alternative.
 func DefaultModel(runner string) string {
 	switch runner {
-	case RunnerClaude:
+	case RunnerClaude, RunnerGentleReview:
 		return "haiku"
 	case RunnerAgy:
 		return "gemini-3.8-flash-low"
@@ -91,6 +91,8 @@ func runnerAgent(runner string) Agent {
 		return agyAgent
 	case RunnerCodex:
 		return codexAgent
+	case RunnerGentleReview:
+		return gentleReviewAgent
 	}
 	return claudeAgent
 }
@@ -115,7 +117,13 @@ type Options struct {
 	Rounds   int
 	Sessions int
 	Runner   string // which CLI spawns the agent: RunnerClaude (default), RunnerPi, RunnerCodex, or RunnerAgy
-	Runs     int
+	// AsChange presents every case as a change: a base commit with the fixed code and a candidate commit with the
+	// fixture, so an arm that reviews a diff and an arm that writes tests read the same repository.
+	AsChange bool
+	// EmptyBase, with AsChange, commits a base with no files, so the whole fixture is the change and a defect has to be
+	// found in the code rather than read off a diff of its own.
+	EmptyBase bool
+	Runs      int
 	// Prompt replaces the bare instruction for every arm of a reading, so a bare agent can be asked to hunt
 	// defects instead of rerunning the suite; empty keeps the bench prompt.
 	Prompt string
@@ -485,8 +493,13 @@ func runUnits(units []unit, opts Options) ([]Result, []bool) {
 			return Result{}
 		}
 		res := runOnce(u.caseDir, u.key, u.run, opts)
-		logf("[%s #%d] reported %d/%d pinned %d caught %d/%d fp %d cost $%.3f turns %d%s%s\n",
-			name, u.run, res.Found, res.Total, res.ClaimedPinned, res.Caught, res.Total, res.FalsePositives, res.CostUSD, res.Turns, invalidTag(res), noPlanTag(res))
+		if opts.Runner == RunnerGentleReview {
+			logf("[%s #%d] review detected %d/%d unmatched %d cost $%.3f reviewers %d%s\n",
+				name, u.run, res.Detected, res.Total, res.UnmatchedFindings, res.CostUSD, res.Turns, invalidTag(res))
+		} else {
+			logf("[%s #%d] reported %d/%d detected %d pinned %d caught %d/%d fp %d cost $%.3f turns %d%s%s\n",
+				name, u.run, res.Found, res.Total, res.Detected, res.ClaimedPinned, res.Caught, res.Total, res.FalsePositives, res.CostUSD, res.Turns, invalidTag(res), noPlanTag(res))
+		}
 		spentMu.Lock()
 		spent += res.CostUSD
 		spentMu.Unlock()
@@ -699,7 +712,13 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	name := filepath.Base(caseDir)
 	ws := filepath.Join(opts.Out, name, fmt.Sprint(run), "ws")
 	res := Result{Case: name, Run: run, Family: key.Family, Total: len(key.Defects), Workspace: ws}
-	suite, err := Scaffold(caseDir, ws, key, opts.SuiteTimeout)
+	scaffold := Scaffold
+	if opts.AsChange {
+		scaffold = func(caseDir, ws string, key Key, timeout time.Duration) (SuiteResult, error) {
+			return ScaffoldAsChangeFrom(caseDir, ws, key, timeout, opts.EmptyBase)
+		}
+	}
+	suite, err := scaffold(caseDir, ws, key, opts.SuiteTimeout)
 	res.Suite = suite
 	if err != nil {
 		res.Invalid, res.InvalidReason = true, err.Error()
@@ -783,7 +802,15 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	}
 	res.Seconds = time.Since(started).Seconds()
 	res.FinalMessage = clipFinalMessage(ar.Result)
+	if opts.Runner == RunnerGentleReview {
+		// A review writes no plan and no test: its findings are scored with the plan matcher, and no catch is run,
+		// because a test the arm never meant to write is not a miss of the review.
+		res = merge(res, ScoreReview(ar.Transcript, key))
+		res.Misses = Diagnose(res, key)
+		return finish(res, opts, res.Detected < res.Total)
+	}
 	res = merge(res, ScoreWorkspace(ws, key))
+	res.Detected = DetectedDefects(res)
 	res.Catch = Discriminate(caseDir, ws, key, opts.SuiteTimeout)
 	res.Caught = res.Catch.Count()
 	if opts.Rounds > 1 {
@@ -1153,20 +1180,30 @@ func yesNo(b bool) string {
 }
 
 // claudeAgent spawns the real CLI with the run's prompt and reads its stream-json.
-func claudeAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
-	args := []string{"-p", agentPrompt(key, opts), "--output-format", "stream-json", "--verbose",
+// claudeArgs is the claude command line for one run. A run with a config of its own reads settings and memory from
+// that config alone (--setting-sources user): Claude Code also loads every ancestor's CLAUDE.md, so a workspace
+// under the operator's home would otherwise receive the operator's ~/.claude/CLAUDE.md whatever HOME says (#392).
+func claudeArgs(prompt string, opts Options) []string {
+	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose",
 		"--max-turns", fmt.Sprint(opts.MaxTurns), "--permission-mode", "bypassPermissions"}
+	if opts.ConfigDir != "" {
+		args = append(args, "--setting-sources", "user")
+	}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}
-	cmd := exec.CommandContext(ctx, "claude", args...)
-	boundProcessTree(cmd)
+	return args
+}
+
+func claudeAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+	cmd := exec.CommandContext(ctx, "claude", claudeArgs(agentPrompt(key, opts), opts)...)
 	cmd.Dir = ws
 	cmd.Env = agentEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
+	boundProcessTree(cmd)
 	cmd.Stdin = strings.NewReader("")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
-	err := cmd.Run()
+	err := runBounded(cmd)
 	ar := ParseStream(bytes.NewReader(out.Bytes()))
 	ar.Raw = tail(out.String(), 64*1024) + "\n--- stderr ---\n" + tail(errb.String(), 4*1024)
 	ar.Transcript = out.Bytes()

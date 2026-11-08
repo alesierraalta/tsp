@@ -933,6 +933,22 @@ An explicit `--sandbox-image` still wins over the declaration, and the declarati
 default. The sandbox itself is the same whatever the image: read-only root, a tmpfs at `/tmp` where
 `HOME` and `XDG_CACHE_HOME` point, and no network.
 
+Every sandboxed observation is also bounded: 4 GiB of memory with no swap, 2 CPUs, 1024 processes,
+4096 open files, 64 MiB of shared memory, a 1 GiB `/tmp` and 8 MiB of combined output. The tmpfs
+mounts are memory, so they count against the 4 GiB. Before the row's command starts, the container
+reads its own cgroup v2 limits, mounts and tmpfs sizes and prints them on one line, which is removed
+from the output before it is digested, so existing pins still match. A limit the runtime did not apply
+(no cgroup v2, a memory or cpu controller missing, a rootless setup without delegation) refuses the row
+as `sandbox-bounds-unverified` and names the limit; the command never runs. Output above the bound
+refuses it as `sandbox-output-limit`. A run that hits the output bound or `--timeout` has its
+container removed by name, so nothing keeps running after the row is over.
+
+A replay no longer writes to a bind mount of the staged copy: the copy is mounted read-only at `/src`
+and each run works on its own 2 GiB tmpfs copy at `/w`. Each of the two runs starts from the staged
+tree, so the run after the edit is put back no longer sees files the run under the edit wrote. A
+staged tree that does not fit in the workspace is refused as `sandbox-bounds-unverified`. These bounds
+apply to `tsp plan admit --sandbox` only; they do not sandbox `tsp scan` or agent activity.
+
 A malformed, unreadable or unusable declaration fails closed for these manual commands; it never
 silently falls back to the default. The Stop-hook gate ignores `.tpp.json`: it audits only the plan
 and run bound to the exact session, and stays silent without a valid binding.
@@ -940,6 +956,8 @@ and run bound to the exact session, and stays silent without a valid binding.
 ```
 tsp plan init                # write the skeleton, tables and all; never overwrites silently
 tsp plan check               # exit 1 and name every breach of the contract
+tsp plan check --report r.md # also exit 1 for each production path:line the report cites that no Findings row records
+tsp plan check --pins        # also exit 1 for each settled row whose named test passes on this code
 tsp plan add-evidence ...    # write one Evidence ledger row; Digest and Mode stay for plan admit --record
 tsp plan add-finding ...     # write one Findings row; refuses a row the checker would reject
 ```
@@ -949,6 +967,33 @@ finding citing an evidence id that is not in the ledger, a settled finding that 
 test, a `razonado` row sitting in the evidence ledger, and an `n/a` layer row without a reason in
 its `Scope` cell when the plan declares `Light:`. It says nothing about whether the testing was
 good; it says the plan can be located, honoured, and re-scored.
+
+A plan may also include the template's `Security candidates` table. Its dispositions are separate
+from Findings statuses: `confirmed` requires a recorded boundary violation and observed ledger
+evidence; `blocked` requires a missing fact and a safe validation step; `rejected` cites observed
+refuting evidence. `plan check` validates the record and references, not whether an observation
+actually proves the claim. Existing plans without this table remain valid.
+
+A candidate's disposition is its author's claim, so the template carries a separate, optional
+`Candidate reviews` table: one row per review of an existing candidate, naming the reviewer and an
+explicit `attested` independence declaration, the refutation attempt and the effective controls that
+were evaluated. A `confirmed` or `rejected` review cites an executed, observed Evidence ledger row
+that is decisive; a `blocked` review names the specific blocker still to be resolved. A candidate
+keeps its own disposition whether or not it is reviewed, and a review confirmation never replaces
+the author's disposition. `plan check` validates the recorded structure and references — duplicate
+sections or ids, malformed tables, dangling candidate or evidence references, and an outcome without
+its required evidence are refused — but an attestation and a table cannot mechanically prove that
+the reviewer was independent or that the evidence proves the claim. Test verification is a different
+instrument: `tsp verify` freezes the candidate and asks a second session for a verdict artifact,
+whereas a review row is a plan record a human reads.
+
+A plan may also carry the template's optional `Security coverage` table, one row per surface,
+boundary, subsystem or attack class the audit considered. `Source` is the `path:line` that locates
+the work, and `Disposition` is `covered`, `blocked`, `excluded` or `deferred`. A `covered` row cites
+an executed, observed Evidence ledger row: coverage without observed evidence is refused rather than
+counted. `blocked` and `deferred` state why the work is not covered and stay owed in `plan gaps`;
+`excluded` states why the item is not applicable, so a reasoned exclusion leaves the denominator the
+way an `n/a` layer does. The section is optional, and existing plans without it keep their behaviour.
 
 A plan may declare itself scoped. A bounded change — one target inside one or two files, touching
 none of the classes the skill's boundary list forbids — plans its blast radius instead of the whole
@@ -1006,7 +1051,7 @@ on top is knowing what THIS session did, which the repository cannot tell you.
 | Claude Code | verified: `sync` wires the Stop hook, `gate` reads its payload and answers in its schema, `doctor` runs the wired command and requires exit zero |
 | Anything that runs a command | verified: `check`, `plan init`, `plan check`, `plan gaps` need no host at all |
 | Gemini CLI | verified on this machine: `sync` wires the gate onto `AfterAgent` in `~/.gemini/settings.json` (the same payload shape as Claude's `Stop`), leaving other hooks untouched, and `doctor` reports it as `wired: AfterAgent hook in settings.json`. Its output schema is not exercised here: the gate writes what the host reads, and nothing has watched `AfterAgent` fire |
-| Pi | opt-in extension: `tsp sync --hosts pi` installs it and Pi exposes a native `/tsp` command with `/tpp` compatibility alias (`check`, `feedback --summary`, `doctor`); its dispatch and the TSP offer are tested in CI (`assets/hosts/pi/tsp.test.mjs`), and the offer was watched in a live Pi 1.3.0 session. The native Pi Stop hook is **not verified** — payload contract read from the pi-hooks package, never watched firing |
+| Pi | opt-in extension: `tsp sync --hosts pi` installs it and Pi exposes a native `/tsp` command with `/tpp` compatibility alias (`check`, `feedback --summary`, `doctor`); its dispatch and the TSP offer are tested in CI (`assets/hosts/pi/tsp.test.mjs`), and the offer is exercised against a live Pi 1.5.0 session by `assets/hosts/pi/live/run.mjs` ([docs/pi-live-proof.md](docs/pi-live-proof.md)). The native Pi Stop hook is **not verified** — payload contract read from the pi-hooks package, never watched firing |
 | Anti-Gravity (`agy`) | skills only: `sync` installs into `~/.gemini/antigravity/skills`, which is where `agy` reads them; no Stop hook is wired, because `agy` reads hooks from `~/.gemini/antigravity-cli/hooks` and TSP does not write them yet |
 | Codex CLI | written, not yet trusted: `sync` adds the gate to `Stop` in `~/.codex/hooks.json` beside the hooks already there, and `doctor` says so. The Codex CLI records a `trusted_hash` per hook and runs nothing it has not trusted, so the entry fires only after you approve it there; TSP does not synthesise the hash |
 | OpenCode | skills only: the plugin is installed and inert on purpose — its `session.idle` path ran an unbound repository-wide check, so it stays quiet until a session-scoped binding exists. Manual `tsp check` from a shell is unaffected |
@@ -1034,7 +1079,10 @@ tsp plan gaps                # exit 1 and name every layer still owed, with its 
 `plan gaps` reads the layer matrix's status cells. A row counts as swept when its status reads
 `done`, `fixed` or `closed`, and `n/a`, `na`, `none` and `skipped` leave the denominator entirely:
 marking a layer out of scope is a decision the plan records, not a silent omission. The `Skill`
-cell only labels the rows still owed, so a row with no owner still has to be swept.
+cell only labels the rows still owed, so a row with no owner still has to be swept. When the plan
+carries a `Security coverage` table, the same report adds its ratio and names every blocked or
+deferred row, and it refuses to read a malformed table (a population without an id, a row without its
+`path:line` source) as complete, so an incomplete security audit cannot exit as complete.
 
 Nothing verifies that an assigned sibling was really invoked — the cell is what the check has, and
 that is deliberate, because the check must run with no host and no transcript. So the routing
@@ -1260,6 +1308,23 @@ Antigravity can exit zero on authentication failure, so its streamed result stat
 just the exit code, determines success. Completed tool steps count as turns. It reports
 no price and has no turn cap: neither `--max-cost-usd` nor `--max-turns` applies; use `--timeout`.
 
+The Gentle AI review runner (`--runner gentle-review`) is Gentle AI's native review (RDD) as an arm: it
+writes no test, it reviews the case as a change. It needs `--as-change`, which presents every case as a
+base commit holding the fixed code (the fixture with `fix/all` over it) and a candidate commit holding the
+fixture with its defects; the workspace still ends on the fixture, so any arm run with `--as-change` reads
+the same repository and the same history. The runner drives `gentle-ai review` headless: it starts the
+review of `HEAD~1..HEAD` with consent granted for that exact candidate and all four lenses (risk,
+resilience, readability, reliability), captures every reviewer through Claude Code, and stops once the
+reviewer results are in. Gentle AI picks a model per lens; the bench puts its own binary on `PATH` as
+`claude`, so every reviewer runs on `--model` (default `haiku`), answers in JSON, and its cost counts toward
+`--max-cost-usd`. Each run keeps `reviewers.jsonl` beside the workspace: per reviewer, the model Gentle AI
+asked for, the model that answered, the cost, and the findings. `gentle-ai` and `claude` must be on `PATH`,
+and `gentle-ai review status` must be able to offer a START.
+
+`--empty-base` (with `--as-change`) commits a base with no files instead of the fixed code, so the whole
+fixture is the change: a defect has to be found in the code rather than read off a diff of its own. A clean
+control, which has no `fix/all`, always gets the empty base, so every finding on it is a false positive.
+
 Comparing arms:
 
 ```
@@ -1268,6 +1333,7 @@ tsp bench run --runner agy --agent-config bench --cases 'bench/cases/*'    # agy
 tsp bench run --runner codex --cases 'bench/cases/*'                       # codex, nothing
 tsp bench run --runner pi --agent-config none --cases 'bench/cases/*'      # pi, nothing
 tsp bench run --runner pi --agent-config bench --cases 'bench/cases/*'     # pi with the tsp skills
+tsp bench run --runner gentle-review --as-change --cases 'bench/cases/*'   # Gentle AI native review
 ```
 
 `--agent-config bench-all` (Pi only) is the same isolated config with every embedded skill instead of

@@ -89,16 +89,20 @@ const (
 	ReasonTimeout           = "timeout"
 	ReasonEmptyOutput       = "empty-output"
 	// A test that was skipped, or a filter that left nothing to run, exits zero with output that reads like a pass.
-	ReasonTestsNotRun       = "tests-not-run"
-	ReasonDigestMismatch    = "digest-mismatch"
-	ReasonDigestMissing     = "digest-missing"
-	ReasonModeMismatch      = "mode-mismatch"
-	ReasonSandboxReadOnly   = "sandbox-read-only"
-	ReasonMisconfigured     = "sandbox-misconfigured"
-	ReasonNoNetwork         = "network-unavailable"
-	ReasonMutationNotReplay = "mutation-not-replayed"
-	ReasonMutationNotRed    = "mutation-not-red"
-	ReasonMutationNotGreen  = "mutation-not-green"
+	ReasonTestsNotRun     = "tests-not-run"
+	ReasonDigestMismatch  = "digest-mismatch"
+	ReasonDigestMissing   = "digest-missing"
+	ReasonModeMismatch    = "mode-mismatch"
+	ReasonSandboxReadOnly = "sandbox-read-only"
+	ReasonMisconfigured   = "sandbox-misconfigured"
+	ReasonNoNetwork       = "network-unavailable"
+	// A sandbox whose resource or storage bounds could not be confirmed from inside the container, and a
+	// command whose output outgrew the bound the sandbox holds it to.
+	ReasonSandboxBoundsUnverified = "sandbox-bounds-unverified"
+	ReasonSandboxOutputLimit      = "sandbox-output-limit"
+	ReasonMutationNotReplay       = "mutation-not-replayed"
+	ReasonMutationNotRed          = "mutation-not-red"
+	ReasonMutationNotGreen        = "mutation-not-green"
 	// An edit the row declares equivalent (`~ `) under which the command went red: a test told it apart after all.
 	ReasonMutationNotEquivalent = "mutation-not-equivalent"
 	// An Expect cell that is neither pass nor fail, an expected failure beside a Mutate cell that already

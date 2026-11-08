@@ -178,6 +178,11 @@ func CheckDocument(doc string) []string {
 	ledgerIDs, ledgerIssues := ledgerProblems(ledger)
 	problems = append(problems, ledgerIssues...)
 	problems = append(problems, findingProblems(findings, ledgerIDs)...)
+	problems = append(problems, securityCandidateProblems(lines, ledger)...)
+	// A candidate's Disposition is its author's claim; the review section is a second answer to it, so the two
+	// contracts are checked independently and neither makes the other optional.
+	problems = append(problems, securityReviewProblems(lines, ledger)...)
+	problems = append(problems, securityCoverageProblems(lines, ledger)...)
 	if lightProblems, declared := lightReport(lines); declared {
 		problems = append(problems, lightProblems...)
 	}

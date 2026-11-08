@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -183,7 +184,11 @@ bench adjudicate --run <results>/<case>/<run> [--plan <path>] (--show | --pendin
            to supply the verdicts about its own findings)
 plan init [--path <path>] [--force] [--micro]
           (--micro writes the micro skeleton: header, Findings and Evidence ledger, for one small function)
-plan check [--path <path>]
+plan check [--path <path>] [--report <file|->] [--pins]
+           (--pins: run the test each settled Findings row names as its witness; a witness that
+            passes on this code pins nothing, so the row is refused)
+           (--report: every production path:line the final report cites must be a Findings row; a defect
+            named only in the report is lost to every reader of the plan)
 plan gaps [--run <slug>] [--all] [--path <path>]
 plan upgrade [--run <slug>] [--path <path>]
 plan export [--path <path>] [--commit <sha>]
@@ -232,6 +237,10 @@ func defaultConfigDir() string {
 }
 
 func main() {
+	// A gentle-review bench run puts this binary on PATH as `claude`; as that shim it runs the real claude.
+	if code, ok := bench.RunClaudeShim(); ok {
+		os.Exit(code)
+	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -1526,6 +1535,8 @@ func runPlan(args []string) int {
 	admitCommand := fs.String("admit", "", "the one bare command plan admit runs for this row (add-evidence)")
 	inputs := fs.String("inputs", "", "inputs and parameters (add-evidence)")
 	observedText := fs.String("observed", "", "what was observed (add-evidence)")
+	report := fs.String("report", "", "a final report to compare with the Findings table, or - for stdin (check only): every production path:line it cites must be a Findings row")
+	pins := fs.Bool("pins", false, "run the test each settled Findings row names as its witness (check only): a witness that passes on this code pins nothing and is refused")
 	normalize := fs.String("normalize", "", "Go regexp for the part of the output that moves, such as a time (add-evidence)")
 	mutate := fs.String("mutate", "", "falsifiability claim: '<old> => <new> @ <path>:<line>' (add-evidence)")
 	expect := fs.String("expect", "", "pass (default) or fail for a test observed red (add-evidence)")
@@ -1536,7 +1547,7 @@ func runPlan(args []string) int {
 	timeout := fs.Duration("timeout", 120*time.Second, "bound one command; 0 leaves it unbounded (admit only)")
 	only := fs.String("only", "", "comma-separated evidence ids to admit; empty means every row (admit only)")
 	record := fs.String("record", "", "comma-separated evidence ids whose freshly observed digest is written into the plan (admit only; requires --execute)")
-	sandbox := fs.Bool("sandbox", false, "observe each command inside a container instead of on this machine (admit only; requires --execute and docker)")
+	sandbox := fs.Bool("sandbox", false, "observe each command inside a container instead of on this machine, with memory, cpu, process, storage and output bounds the container must confirm (admit only; requires --execute, docker and cgroup v2)")
 	sandboxImage := fs.String("sandbox-image", sandboxImageDefault, "image the sandbox runs in (admit only; see --sandbox); sandboxImage in the repository declaration overrides this default, which is pulled on first use")
 	commit := fs.String("commit", "", "commit the export covers; the default is the short HEAD of the repository (export only)")
 	if code, ok := parseFlags(fs, args[1:]); !ok {
@@ -1660,6 +1671,17 @@ func runPlan(args []string) int {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "plan check:", err)
 			return 1
+		}
+		if *report != "" {
+			unrecorded, err := unrecordedReportCitations(effectivePath, *report)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "plan check:", err)
+				return 1
+			}
+			problems = append(problems, unrecorded...)
+		}
+		if *pins {
+			problems = append(problems, pinProblems(effectivePath)...)
 		}
 		if len(problems) == 0 {
 			fmt.Printf("%s: well formed\n", effectivePath)
@@ -1935,12 +1957,14 @@ func configModeFor(runner, agentConfig string) string {
 func runBenchRun(args []string) int {
 	fs := flag.NewFlagSet("bench run", flag.ContinueOnError)
 	cases := fs.String("cases", "bench/cases/*", "glob of case directories (each with fixture/ and KEY.json)")
-	runner := fs.String("runner", bench.RunnerPi, "agent runner: pi (default), codex (bare baseline only), agy, or claude (last resort)")
+	runner := fs.String("runner", bench.RunnerPi, "agent runner: pi (default), codex (bare baseline only), agy, claude (last resort), or gentle-review (Gentle AI native review of the change; needs --as-change)")
 	model := fs.String("model", "", "model for the agent runs; empty uses the runner's default ("+
 		bench.DefaultModel(bench.RunnerPi)+" for pi, "+bench.DefaultModel(bench.RunnerAgy)+" for agy, "+bench.DefaultModel(bench.RunnerClaude)+" for claude)")
 	escalateModel := fs.String("escalate-model", "", "rerun a case with this model, from a fresh workspace, when the first run left no new test failing on the unmodified code (tsp redcheck found no witness); cost and turns count both attempts; recorded in the provenance")
 	runs := fs.Int("runs", 1, "runs per case")
 	families := fs.String("families", "", "comma-separated failure families to run, aiming the budget at the kinds earlier readings missed (boundary, concurrency, contract, input-domain, numeric, performance, resilience-io, security, state-logic, time); empty runs every case")
+	emptyBase := fs.Bool("empty-base", false, "with --as-change, commit an empty base so the whole fixture is the change and a defect is found in the code rather than read off its own diff; a clean control always gets an empty base")
+	asChange := fs.Bool("as-change", false, "present every case as a change: a base commit with the fixed code (fixture plus fix/all) and a candidate commit with the fixture, so a review arm and a test arm read the same repository; required by --runner gentle-review")
 	rounds := fs.Int("rounds", 1, "rounds per run: the agent runs again in the same workspace up to N times, every later round told the tests earlier rounds left failing on the unmodified code and asked for defects they do not cover; each round is recorded, and the provenance records the rounds")
 	sessions := fs.Int("sessions", 1, "independent review sessions per run; apply reference fixes for caught defects between sessions, retaining tests")
 	fixLoop := fs.Bool("fix-loop", false, "measure the loop a user runs: round 1, then the agent fixes what round 1's tests pinned (test files it touches restored, source committed), then round 2 runs twice from the same fixed workspace, once plain and once told what `tsp findings check` reports")
@@ -2106,8 +2130,16 @@ func runBenchRun(args []string) int {
 			prior = append(prior, bench.Prior{Name: c.Name, Count: c.Count})
 		}
 	}
+	if *emptyBase && !*asChange {
+		fmt.Fprintln(os.Stderr, "bench run: --empty-base shapes the change --as-change presents, so it needs --as-change")
+		return 2
+	}
+	if *runner == bench.RunnerGentleReview && !*asChange {
+		fmt.Fprintln(os.Stderr, "bench run: --runner gentle-review reviews a change, so it needs --as-change")
+		return 2
+	}
 	_, code := bench.Run(bench.Options{
-		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, FixLoop: *fixLoop, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
+		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, FixLoop: *fixLoop, AsChange: *asChange, EmptyBase: *emptyBase, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
 		Families:     commaList(*families),
 		Prior:        prior,
 		Timeout:      *timeout,
@@ -2635,26 +2667,13 @@ const sandboxImageDefault = "golang:1.26-alpine"
 //
 // `--read-only` and `--network none` do not change whether a command passes; they are exactly the isolation this
 // mode claims, so they are asserted here rather than relied on to make anything work.
+//
+// Every observation also runs under sandboxDefaults: memory, cpu, pids, open files, shared memory, /tmp and
+// a replay's workspace are bounded, the container confirms those bounds before the row's command starts, and
+// output above the bound or a passed deadline stops the run and removes its container (sandbox_bounds.go).
 func sandboxRunner(image, mount string) admit.Runner {
 	return func(ctx context.Context, dir, command string) (string, error) {
-		args, err := sandboxArgs(dir, image, mount, command)
-		if err != nil {
-			return "", err
-		}
-		cmd := exec.CommandContext(ctx, "docker", args...)
-		var buf bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &buf, &buf
-		err = cmd.Run()
-		output := buf.String()
-		if err == nil {
-			return output, nil
-		}
-		// The caller's deadline must stay recognisable to the admission, so it is returned as it is rather
-		// than wrapped in a refusal about the sandbox.
-		if ctx.Err() != nil {
-			return output, ctx.Err()
-		}
-		return output, sandboxRefusal(image, output, err)
+		return runSandboxWithin(ctx, dir, image, mount, command, sandboxDefaults, sandboxContainerPaths, "docker")
 	}
 }
 
@@ -2663,31 +2682,7 @@ func sandboxRunner(image, mount string) admit.Runner {
 // the sandbox is a property of this vector alone. A dir that is not absolute is refused here, before
 // docker starts, because the mount path is the tree the container is given.
 func sandboxArgs(dir, image, mount, command string) ([]string, error) {
-	if !filepath.IsAbs(dir) {
-		return nil, evidence.Refusal{
-			Reason: evidence.ReasonMisconfigured,
-			Detail: fmt.Sprintf("the sandbox mounts the working directory by absolute path, and %q is not one", dir),
-		}
-	}
-	return []string{
-		"run", "--rm", "--quiet",
-		"--network", "none",
-		"--read-only",
-		"--tmpfs", "/tmp:exec",
-		"-v", dir + ":/w:" + mount,
-		"-w", "/w",
-		"-e", "GOCACHE=/tmp/gocache",
-		"-e", "HOME=/tmp/home",
-		"-e", "XDG_CACHE_HOME=/tmp/xdg",
-		image, "sh", "-c", sandboxScript(command),
-	}, nil
-}
-
-// sandboxScript is the row's command with the writable user directories created first: the container's
-// root is read-only, so nothing under /tmp exists until something makes it. mkdir is silent, and it
-// cannot change the command's own exit status, which is what the admission reads.
-func sandboxScript(command string) string {
-	return "mkdir -p /tmp/home /tmp/xdg\n" + command
+	return sandboxArgsWithin(dir, image, mount, command, sandboxDefaults, sandboxContainerPaths, sandboxContainerName())
 }
 
 // sandboxRefusal names why a sandboxed command produced no observation. Three of these are about the sandbox
@@ -2812,4 +2807,110 @@ func parseGateArgs(args []string) (bench.Gate, string, error) {
 		return gate, "", errors.New("needs a results directory: [--baseline <dir>] [--min-recall <f>] [--max-regression <f>] [--max-cost-usd <f>] [--skill-versions] <results>")
 	}
 	return gate, results, nil
+}
+
+// unrecordedReportCitations reads the report (a file, or - for stdin) and the plan, and names every production
+// path:line the report cites that no Findings row records.
+func unrecordedReportCitations(planPath, reportPath string) ([]string, error) {
+	var data []byte
+	var err error
+	if reportPath == "-" {
+		data, err = io.ReadAll(os.Stdin)
+	} else {
+		data, err = os.ReadFile(reportPath)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read report: %w", err)
+	}
+	planText, err := os.ReadFile(planPath)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, c := range plan.UnrecordedCitations(string(planText), string(data)) {
+		out = append(out, fmt.Sprintf("report cites %s:%d, which no Findings row records: add it with tsp plan add-finding or drop it from the report", c.Path, c.First))
+	}
+	return out, nil
+}
+
+// pinProblems runs the test each settled Findings row names as its witness and refuses the row whose test passes:
+// a pinning test that passes on the defective code is a check of nothing, and a row that claims one claims more
+// than it has (#385). A witness that cannot be run is named rather than counted as red.
+func pinProblems(planPath string) []string {
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		return []string{"read the plan: " + err.Error()}
+	}
+	header, rows := plan.Table(string(data), "Findings")
+	testCol, statusCol := findingsColumn(header, "pinning test"), findingsColumn(header, "status")
+	if testCol < 0 || statusCol < 0 {
+		return nil
+	}
+	root := filepath.Dir(planPath)
+	var problems []string
+	for _, r := range rows {
+		if len(r) <= testCol || len(r) <= statusCol {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(r[statusCol]))
+		if status != "confirmed" && status != "fixed" {
+			continue
+		}
+		cell := strings.Trim(strings.TrimSpace(r[testCol]), "`")
+		if cell == "" || cell == "-" || cell == "—" {
+			continue
+		}
+		id := ""
+		if len(r) > 0 {
+			id = strings.Trim(strings.TrimSpace(r[0]), "`")
+		}
+		argv, err := witnessCommand(root, cell)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("finding %s names the witness %s, which cannot be run: %v", id, cell, err))
+			continue
+		}
+		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			problems = append(problems, fmt.Sprintf("finding %s claims %s as its witness, but it passes on this code, so it pins nothing: make it fail for the reason the finding names, or report the defect as unconfirmed", id, cell))
+		} else if strings.Contains(string(out), "build failed") || strings.Contains(string(out), "cannot find package") || strings.Contains(string(out), "no such file") {
+			problems = append(problems, fmt.Sprintf("finding %s names the witness %s, which cannot be run: %s", id, cell, firstLine(string(out))))
+		}
+	}
+	return problems
+}
+
+// findingsColumn finds a Findings column by its header, so a row can be read without depending on its position.
+func findingsColumn(header []string, name string) int {
+	for i, h := range header {
+		lower := strings.ToLower(strings.TrimSpace(h))
+		if lower == name || strings.HasPrefix(lower, name+" ") || strings.HasPrefix(lower, name+" (") {
+			return i
+		}
+	}
+	return -1
+}
+
+// witnessCommand is the argument vector that runs one witness named as "<test file> :: <test name>". The test name
+// travels as one argument, never through a shell.
+func witnessCommand(root, cell string) ([]string, error) {
+	parts := strings.Split(cell, "::")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("a witness is written as <test file> :: <test name>")
+	}
+	path := strings.Trim(strings.TrimSpace(parts[0]), "`")
+	name := strings.Trim(strings.TrimSpace(parts[1]), "`")
+	if _, err := os.Stat(filepath.Join(root, path)); err != nil {
+		return nil, fmt.Errorf("no such file")
+	}
+	switch filepath.Ext(path) {
+	case ".go":
+		return []string{"go", "test", "-count=1", "-timeout", "120s", "-run", "^" + regexp.QuoteMeta(name) + "$", "./" + filepath.ToSlash(filepath.Dir(path))}, nil
+	case ".py":
+		return []string{"python3", "-m", "pytest", "-q", path + "::" + name}, nil
+	case ".js", ".mjs", ".cjs", ".ts":
+		return []string{"node", "--test", "--test-name-pattern", name, path}, nil
+	}
+	return nil, fmt.Errorf("no known runner for %s", filepath.Ext(path))
 }

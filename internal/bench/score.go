@@ -2,10 +2,10 @@ package bench
 
 import (
 	"fmt"
+	"github.com/alesierraalta/tsp/internal/citation"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 
 	plancheck "github.com/alesierraalta/tsp/internal/plan"
@@ -33,8 +33,11 @@ type DefectResult struct {
 
 // Result is the score of one workspace against its key.
 type Result struct {
-	Case string `json:"case"`
-	Run  int    `json:"run"`
+	// Detected counts the defects a claim names, linked to observed evidence or not: the measure a review arm, which
+	// executes nothing, and a test arm share. Found stays the evidence-backed count.
+	Detected int    `json:"detected,omitempty"`
+	Case     string `json:"case"`
+	Run      int    `json:"run"`
 	// Family is the key's declared failure kind, copied here so a reading can group caught over
 	// defects per family without reopening every KEY.json. Empty on a case that predates families.
 	Family         string         `json:"family,omitempty"`
@@ -99,15 +102,7 @@ type Result struct {
 var (
 	// A cell that means "no rows yet" rather than data.
 	placeholderRe = regexp.MustCompile(`^(?i)(|-|—|n/?a|none|\(none\)|tbd)$`)
-	// A path with an extension, optionally followed by :line or :first-last.
-	citationRe = regexp.MustCompile(`([A-Za-z0-9_./\\-]+\.[A-Za-z][A-Za-z0-9]*)(?::(\d+)(?:-(\d+))?)?`)
 )
-
-type citation struct {
-	path  string
-	first int
-	last  int
-}
 
 type planPathResolution struct {
 	refusalNote  string
@@ -368,7 +363,7 @@ func attribution(rows [][]string, key Key, ledgerByID map[string]string) rowClai
 		// The evidence rows a finding cites are part of its claim: the file is often named there while the
 		// finding itself names the symbol.
 		claims.linked[i] = strings.Join(linkedLedgerText(row, ledgerByID), " | ")
-		if len(citations(text)) == 0 && len(citations(claims.linked[i])) == 0 {
+		if len(citation.Extract(text)) == 0 && len(citation.Extract(claims.linked[i])) == 0 {
 			claims.withoutPath++
 		}
 		claims.credited[i], claims.matched[i] = claimed(text, claims.linked[i], key.Defects)
@@ -410,21 +405,21 @@ type defectMatch struct {
 // the file and line; only the row itself may supply a keyword, so a shared ledger row cannot
 // hand one defect's name to another.
 func matchDefect(rowText, evidenceText string, d Defect) defectMatch {
-	cites := append(citations(rowText), citations(evidenceText)...)
+	cites := append(citation.Extract(rowText), citation.Extract(evidenceText)...)
 	fileCited, lineHit, best := false, false, 0
 	for _, c := range cites {
-		if !samePath(c.path, d.File) {
+		if !citation.SamePath(c.Path, d.File) {
 			continue
 		}
 		fileCited = true
-		if c.first <= 0 || d.Line < c.first-LineTolerance || d.Line > c.last+LineTolerance {
+		if c.First <= 0 || d.Line < c.First-LineTolerance || d.Line > c.Last+LineTolerance {
 			continue
 		}
 		dist := 0
-		if d.Line < c.first {
-			dist = c.first - d.Line
-		} else if d.Line > c.last {
-			dist = d.Line - c.last
+		if d.Line < c.First {
+			dist = c.First - d.Line
+		} else if d.Line > c.Last {
+			dist = d.Line - c.Last
 		}
 		if !lineHit || dist < best {
 			lineHit, best = true, dist
@@ -458,32 +453,6 @@ func defectByID(key Key, id string) Defect {
 		}
 	}
 	return Defect{}
-}
-
-// samePath matches by suffix: "render.js" or "fixture/src/render.js" both name "src/render.js".
-func samePath(cited, key string) bool {
-	c := strings.TrimPrefix(filepath.ToSlash(cited), "./")
-	k := strings.TrimPrefix(filepath.ToSlash(key), "./")
-	if c == k {
-		return true
-	}
-	return strings.HasSuffix(c, "/"+k) || strings.HasSuffix(k, "/"+c)
-}
-
-func citations(text string) []citation {
-	var out []citation
-	for _, m := range citationRe.FindAllStringSubmatch(text, -1) {
-		c := citation{path: m[1]}
-		if m[2] != "" {
-			c.first, _ = strconv.Atoi(m[2])
-			c.last = c.first
-			if m[3] != "" {
-				c.last, _ = strconv.Atoi(m[3])
-			}
-		}
-		out = append(out, c)
-	}
-	return out
 }
 
 // citedEvidenceIDs reads the ids in a finding row's evidence cell ("E1, E2", "E1/E3").

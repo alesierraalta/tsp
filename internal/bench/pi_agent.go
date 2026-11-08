@@ -19,14 +19,14 @@ import (
 // enforces; --max-turns applies to the claude runner alone.
 func piAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 	cmd := exec.CommandContext(ctx, "pi", piArgs(key, opts)...)
-	boundProcessTree(cmd)
 	cmd.Dir = ws
 	cmd.Env = piEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
+	boundProcessTree(cmd)
 	cmd.Stdin = strings.NewReader("")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	started := time.Now()
-	err := cmd.Run()
+	err := runBounded(cmd)
 	ar := ParsePiStream(bytes.NewReader(out.Bytes()))
 	// Pi's stream carries no duration; the run's own clock is the only measure of it.
 	ar.DurationMS = time.Since(started).Milliseconds()

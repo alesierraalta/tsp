@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -300,5 +301,65 @@ func TestPiBenchAllConfigHoldsEveryEmbeddedSkill(t *testing.T) {
 	}
 	if err := VerifyBenchAllSkills(cfg); err == nil {
 		t.Fatal("VerifyBenchAllSkills must refuse a changed sibling")
+	}
+}
+
+// Claude Code reads skills and instructions from HOME (~/.claude/skills, ~/.claude/CLAUDE.md) whatever
+// CLAUDE_CONFIG_DIR says. In the RDD vs TSP study (#372, #390) 11 of 66 TSP runs loaded the operator's own
+// branch-isolation skill that way, wrote their tests in a worktree the bench never reads, and scored 4/11. A run
+// with the bench config gets a HOME of its own, so only the skill under test reaches it.
+func TestClaudeBenchRunsGetAHomeOfTheirOwn(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, CredentialsFile), []byte(`{"token":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(dir, "cfg")
+	if err := WriteBenchConfig(cfg, real); err != nil {
+		t.Fatal(err)
+	}
+	operator := filepath.Join(dir, "operator")
+	env := agentEnv([]string{"HOME=" + operator, "XDG_CONFIG_HOME=" + operator + "/.config", "PATH=/usr/bin"}, cfg, "")
+	if got := envValues(env, "HOME"); !reflect.DeepEqual(got, []string{filepath.Join(cfg, IsolatedHomeDir)}) {
+		t.Fatalf("HOME = %v, want only the config's own home", got)
+	}
+	if got := envValues(env, "XDG_CONFIG_HOME"); len(got) != 0 {
+		t.Fatalf("XDG_CONFIG_HOME = %v, want the operator's dropped", got)
+	}
+	if got := envValues(env, ClaudeConfigEnv); !reflect.DeepEqual(got, []string{cfg}) {
+		t.Fatalf("%s = %v, want the bench config", ClaudeConfigEnv, got)
+	}
+	if entries, err := os.ReadDir(filepath.Join(cfg, IsolatedHomeDir)); err != nil || len(entries) != 0 {
+		t.Fatalf("the isolated home must exist and be empty: %v %v", entries, err)
+	}
+}
+
+// A run that inherits the operator's configuration keeps the operator's HOME: isolating it is what the bench
+// config is for, not what an inherited run asked for.
+func TestClaudeInheritedRunsKeepTheOperatorsHome(t *testing.T) {
+	if env := agentEnv([]string{"HOME=/home/op"}, "", ""); env != nil {
+		t.Fatalf("inherited env = %v, want the process environment untouched (nil)", env)
+	}
+}
+
+// Claude Code loads every ancestor's CLAUDE.md, so a workspace under the operator's home receives the operator's
+// ~/.claude/CLAUDE.md whatever HOME says (#392). A run with its own config reads settings and memory from that
+// config alone; a run that inherits the operator's configuration keeps every source.
+func TestClaudeArgsKeepAnIsolatedRunToItsOwnConfig(t *testing.T) {
+	isolated := strings.Join(claudeArgs("prompt", Options{ConfigDir: "/cfg", MaxTurns: 5, Model: "haiku"}), " ")
+	if !strings.Contains(isolated, "--setting-sources user") {
+		t.Fatalf("isolated args = %q, want --setting-sources user", isolated)
+	}
+	inherited := strings.Join(claudeArgs("prompt", Options{MaxTurns: 5}), " ")
+	if strings.Contains(inherited, "--setting-sources") {
+		t.Fatalf("inherited args = %q, want no setting-sources restriction", inherited)
+	}
+	for _, want := range []string{"-p prompt", "--output-format stream-json", "--max-turns 5", "--permission-mode bypassPermissions"} {
+		if !strings.Contains(inherited, want) {
+			t.Fatalf("args = %q, want %q", inherited, want)
+		}
 	}
 }

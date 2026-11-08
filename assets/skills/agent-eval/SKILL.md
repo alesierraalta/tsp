@@ -29,6 +29,7 @@ NOT for: judge validation and eval statistics (`llm-eval-design`); injection, ex
 7. **Read transcripts.** Sample failing and passing runs and attribute each failure to the first upstream error (wrong tool, bad argument, misread state, environment bug). An eval that never fails is not challenging enough.
 8. **Multi-turn user simulation** only where the task needs dialogue; pin the simulator model ID and check the simulator itself for drift or leaking the answer.
 9. **Structured outputs:** validate schema conformance strictly (reject extra fields), and separately check correctness of the values, truncation and refusals.
+10. **Authority binding is part of the trajectory.** Run at least one multi-principal task: principal B asks the agent for principal A's resource, and the graded final state must show no cross-principal read or write. For MCP or tool surfaces, grade the scope the executor actually used, not the tool names offered. A cross-principal effect is an appsec finding; record it and hand the deterministic probe to `appsec-adversarial-auditor`.
 
 ## Decision Gates
 
@@ -40,11 +41,12 @@ NOT for: judge validation and eval statistics (`llm-eval-design`); injection, ex
 | Regression or release gate | pass^k on a stable suite |
 | Agent can write files it is graded on | Rule 6 controls before any score |
 | Destructive or paid tools | Rule 5 probes with sandboxed effects |
+| Several principals or delegated credentials | Rule 10 multi-principal probes; inspect executor scopes |
 
 ## Execution Steps
 
 1. List tasks from real failures (20-50 to start) and define each goal state.
-2. Build a resettable sandbox; put graders outside the agent's write scope.
+2. Build a resettable sandbox; put graders outside the agent's write scope. Record the scopes and credentials the deployed agent receives; a wider test credential does not prove production behavior.
 3. Run N trials per task; record versions and settings.
 4. Grade final state, then side effects, then tool-call diagnostics and loop signals.
 5. Compute pass@k and pass^k with `assets/pass-k.py`; read failing transcripts.
