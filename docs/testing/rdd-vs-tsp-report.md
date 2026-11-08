@@ -18,6 +18,29 @@ complementary at detection: every defect TSP detected, RDD detected too (union â
 complementary at what each produces: TSP leaves a failing test that pins the defect in 82% of runs and raised
 no finding on clean code, while RDD pins nothing and raised 6.8 findings per clean-control run.
 
+## Erratum (2026-11-07): the TSP arm was contaminated
+
+After the report was merged, the TSP misses were read case by case (#385). Arm B ran Claude Code with
+`--agent-config bench`, which isolated `CLAUDE_CONFIG_DIR` but kept the operator's `HOME`, so Claude Code also
+loaded the operator's own skills from `~/.claude/skills` (#390). In 11 of the 66 change-condition runs the agent
+loaded the operator's `branch-isolation` skill, created a separate `git worktree` as it instructs, and wrote its
+tests there, where the bench never looks. Arm A was not affected: Gentle AI starts its reviewers with
+`--setting-sources ""` and no tools.
+
+| TSP, change condition | Runs | Detected | Pinned | US$ per run | Turns |
+|---|---|---|---|---|---|
+| Contaminated (loaded `branch-isolation`) | 11 | 4 | 4 | 0.098 | 30 |
+| Clean | 55 | 53 (0.964) | 50 (0.909) | 0.050 | 23 |
+
+In the audit condition 25 of 66 runs were contaminated (8 detected); the 41 clean ones detected 37. Four of the
+six change-condition control runs were contaminated too; the two clean ones raised one finding between them.
+
+What this changes: the registered verdict above is kept as computed, but **it does not measure the method**: arm B
+was handicapped by a bench defect arm A did not have. The clean subset is not a valid replacement either: which
+runs loaded the skill was the agent's choice, not random, so a rate over the clean runs is post hoc. The bench is
+fixed in #390, and the comparison is rerun with the same protocol in #388; until then the defensible reading is
+"RDD detects at least as well on a change, at lower cost; the size of its lead is unknown".
+
 ## Setup
 
 - Binary: `tsp` 0.8.0 (cd14d69), built from a clean commit of `main` (`-ldflags -X buildinfo.Commit=<sha>`).

@@ -30,6 +30,11 @@ func WriteBenchConfig(dir, credentialsFrom string) error {
 	if err := writeEmbeddedSkills(dir); err != nil {
 		return err
 	}
+	// Claude Code also reads skills and instructions from HOME (~/.claude/skills, ~/.claude/CLAUDE.md) whatever
+	// CLAUDE_CONFIG_DIR says, so the run gets an empty HOME of its own (#390).
+	if err := os.MkdirAll(filepath.Join(dir, IsolatedHomeDir), 0o700); err != nil {
+		return err
+	}
 	settings, err := json.MarshalIndent(map[string]any{"includeCoAuthoredBy": false}, "", "  ")
 	if err != nil {
 		return err
@@ -219,7 +224,7 @@ const (
 // replacing any inherited value, and binDir first on PATH so the flow finds the binary under
 // test. Empty cfgDir and binDir mean "inherit unchanged".
 func agentEnv(base []string, cfgDir, binDir string) []string {
-	return agentEnvWith(base, ClaudeConfigEnv, cfgDir, binDir)
+	return isolateHome(agentEnvWith(base, ClaudeConfigEnv, cfgDir, binDir), cfgDir)
 }
 
 // piEnv is the same contract for Pi: PI_CODING_AGENT_DIR is the agent directory it loads settings,
