@@ -35,6 +35,8 @@ type Finding struct {
 	VerdictBy   string
 	Reason      string
 	Fingerprint string
+	// Causality says whether the defect came with the change or was already there; empty is unknown.
+	Causality string
 }
 
 // AddFinding writes one Findings row into the plan at path and returns the 1-based line it landed on. Every
@@ -231,7 +233,7 @@ func (f Finding) values() []field {
 		{"id", f.ID, true}, {"location", f.Location, true}, {"severity", f.Severity, true},
 		{"data-safe", f.DataSafe, true}, {"evidence", f.Evidence, true}, {"test", f.Test, false},
 		{"status", f.Status, false}, {"verdict-by", f.VerdictBy, true}, {"reason", f.Reason, true},
-		{"fingerprint", f.Fingerprint, false},
+		{"fingerprint", f.Fingerprint, false}, {"causality", f.Causality, false},
 	}
 }
 
@@ -297,6 +299,9 @@ func (f Finding) row(header []string, status string) (string, error) {
 		{"Verdict by", f.VerdictBy, true},
 		{"Reason", f.Reason, true},
 		{"Fingerprint", f.Fingerprint, !placeholder.MatchString(strings.TrimSpace(f.Fingerprint))},
+		// Optional: a table written before the column existed does not grow one, and a row that names no causality
+		// leaves the cell empty, which the checker reads as unknown (#402).
+		{"Causality", f.Causality, !placeholder.MatchString(strings.TrimSpace(f.Causality))},
 	}
 	for _, c := range columns {
 		at := columnIndex(header, c.name)

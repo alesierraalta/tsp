@@ -80,8 +80,8 @@ test and says so in its name. A finding that never got a test stays `open`, reas
 The fingerprint cell holds the `assets/fingerprint.sh` output, one or more git SHAs, `-` when none
 is recorded, or `pending` while the value is owed; `plan check` refuses anything else.
 
-| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |
-|---|---|---|---|---|---|---|---|---|---|
+| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict | Causality (`introduced` / `pre-existing` / `unknown`) |
+|---|---|---|---|---|---|---|---|---|---|---|
 
 Statuses: open · confirmed · fixed · gap-closed · rejected · wontfix.
 `gap-closed` is a behaviour that was correct but untested, now held by the promoted test it names; like

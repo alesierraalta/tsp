@@ -241,6 +241,7 @@ type findingColumns struct {
 	pin         int
 	status      int
 	fingerprint int
+	causality   int
 }
 
 func columnsOf(header []string) findingColumns {
@@ -250,6 +251,7 @@ func columnsOf(header []string) findingColumns {
 		pin:         columnIndex(header, "pinning test"),
 		status:      columnIndex(header, "status"),
 		fingerprint: columnIndex(header, "fingerprint"),
+		causality:   columnIndex(header, "causality"),
 	}
 }
 
@@ -285,6 +287,15 @@ func findingRowProblems(r row, id string, cols findingColumns, ledgerIDs map[str
 	}
 	if settledStatus.MatchString(status) && (cols.pin < 0 || placeholder.MatchString(cell(r.cells, cols.pin))) {
 		problems = append(problems, fmt.Sprintf("line %d: finding %s is settled but names no pinning test", r.line, id))
+	}
+	if cols.causality >= 0 {
+		// A defect the change introduced is what blocks a merge; one that was already there does not. The cell is
+		// optional and defaults to unknown, so a plan written before it existed stays valid.
+		switch raw := strings.ToLower(strings.Trim(strings.TrimSpace(cell(r.cells, cols.causality)), "`")); raw {
+		case "", "-", "—", "unknown", "introduced", "pre-existing":
+		default:
+			problems = append(problems, fmt.Sprintf("line %d: finding %s causality must be introduced, pre-existing, or unknown, not %s", r.line, id, quote(raw)))
+		}
 	}
 	if cols.fingerprint >= 0 {
 		if raw := cell(r.cells, cols.fingerprint); !ValidFindingFingerprint(raw) {

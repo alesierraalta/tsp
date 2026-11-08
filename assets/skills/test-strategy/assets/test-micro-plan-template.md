@@ -19,8 +19,8 @@ A finding is a row whose cell opens with `path:line` and one line of finding. A 
 finding names the promoted test that asserts the promised behaviour; a finding that never got a test stays
 `open`, reason `not pinned`.
 
-| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |
-|---|---|---|---|---|---|---|---|---|---|
+| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict | Causality (`introduced` / `pre-existing` / `unknown`) |
+|---|---|---|---|---|---|---|---|---|---|---|
 
 Statuses: open · confirmed · fixed · gap-closed · rejected · wontfix.
 
