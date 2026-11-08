@@ -140,3 +140,20 @@ changes a measure or the decision rule:
 
 The first analysis printed before these corrections ("RDD better at detection" on 15 cases) used an
 incomplete, non-random subset and is not a result.
+
+**D4 (2026-11-07, before the rerun of #388).** After the report, arm B was found contaminated: the claude runner
+kept the operator's `HOME`, so 11 of 66 change-condition runs loaded the operator's `branch-isolation` skill and
+wrote their tests in a worktree the bench never reads (#390, erratum in the report). The rerun keeps everything
+registered above (cases, controls, model, 3 runs, measures, analysis, decision rule) and changes only:
+
+1. Arm B is rerun in both conditions with a `tsp` binary built from a clean `main` that includes #391 (claude
+   runs get a HOME of their own) and #389 (`tsp plan check --report`, and the `test-strategy` 0.7.17 instruction
+   to record every reported defect and run that check). The rerun therefore measures TSP as it ships after the
+   recording fix, which is the question #388 asks.
+2. Arm A is not rerun: its reviewers run with `--setting-sources ""` and no tools, so the contamination did not
+   reach them. Its 72 change-condition runs from the first study are reused unchanged.
+3. Each rerun case-run is checked for contamination before the analysis: a transcript that names any operator
+   skill other than `test-strategy`, or a run whose tests sit outside the workspace, is reported and excluded
+   from both arms for that case and run index.
+
+The first study's TSP numbers are reported beside the rerun as "before"; the verdict is the rerun's.
