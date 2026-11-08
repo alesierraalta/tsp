@@ -123,7 +123,11 @@ func Check(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return CheckDocument(string(raw)), nil
+	problems := CheckDocument(string(raw))
+	// A pin names the test that guards the defect, and that test has to exist where the plan lives: the document
+	// alone cannot say, so the check that holds a path adds it.
+	problems = append(problems, pinningProblems(string(raw), filepath.Dir(path))...)
+	return problems, nil
 }
 
 // CheckDocument is Check on the document itself, so the rules can be read against a document that has
@@ -183,6 +187,9 @@ func CheckDocument(doc string) []string {
 	// contracts are checked independently and neither makes the other optional.
 	problems = append(problems, securityReviewProblems(lines, ledger)...)
 	problems = append(problems, securityCoverageProblems(lines, ledger)...)
+	// The Pinning section records what a run did with findings another reviewer produced, so it is held to its own
+	// vocabulary and to the tests it names (#401).
+	problems = append(problems, pinningProblems(doc, "")...)
 	if lightProblems, declared := lightReport(lines); declared {
 		problems = append(problems, lightProblems...)
 	}

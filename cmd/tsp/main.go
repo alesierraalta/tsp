@@ -185,6 +185,15 @@ bench adjudicate --run <results>/<case>/<run> [--plan <path>] (--show | --pendin
            to supply the verdicts about its own findings)
 plan init [--path <path>] [--force] [--micro]
           (--micro writes the micro skeleton: header, Findings and Evidence ledger, for one small function)
+pin [--path <path>] --findings <file>
+           (one Pinning row per finding another reviewer produced, from a gentle-ai review artifact,
+            the bench reviewers array, or a Findings table; the same review twice does not double it)
+pin [--path <path>] --record <id> --test '<suite path> :: <test name>' [--timeout 5m]
+pin [--path <path>] --block|--refute <id> --reason '<why>'
+pin [--path <path>]
+           (--record runs that test and refuses one that passes, because a witness that passes pins
+            nothing; --block and --refute say why nothing was pinned; no action prints each pin and a
+            summary line)
 plan count [--path <path>] [--json]
            (prints {"findings":N,"evidence":M} for the plan: how much of it a run recorded)
 plan check [--path <path>] [--report <file|->] [--pins] [--base <ref>] [--replay] [--replay-timeout <duration>]
@@ -271,6 +280,8 @@ func main() {
 		os.Exit(runDoctor(os.Args[2:]))
 	case "bench":
 		os.Exit(runBench(os.Args[2:]))
+	case "pin":
+		os.Exit(runPin(os.Args[2:]))
 	case "plan":
 		os.Exit(runPlan(os.Args[2:]))
 	case "check":
