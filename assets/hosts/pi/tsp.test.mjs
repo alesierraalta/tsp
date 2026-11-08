@@ -21,6 +21,7 @@ import tppExtension, {
   isSourcePath,
   cwdPath,
   repoProbe as gitProbe,
+  unrecordedRunNotice,
 } from "./tsp.ts";
 
 // The literals internal/mode pins on the Go side: the shared protocol, spelled out on both shores.
@@ -552,6 +553,7 @@ test("a TSP run ends by recording its witnesses, then shows the review of every 
       { argv: ["findings", "record", "--cwd", "/repo"], cwd: "/repo" },
       { argv: ["findings", "next", "--cwd", "/repo", "--json"], cwd: "/repo" },
       { argv: ["findings", "check", "--cwd", "/repo"], cwd: "/repo" },
+      { argv: ["plan", "count", "--json"], cwd: "/repo" },
       { argv: ["feedback", "--template"], cwd: "/repo" },
     ]);
     assert.deepEqual(h.notes, [{ message: review.trim(), type }], `check exit ${code}`);
@@ -562,15 +564,15 @@ test("a TSP run ends by recording its witnesses, then shows the review of every 
 test("a TSP run that pinned nothing still shows the review; a record that cannot run stops before check", async () => {
   const none = offerHarness({ findings: { record: { stdout: "no new witness\n", stderr: "", code: 1 }, next: LEGACY_NEXT, check: { stdout: "no finding recorded on feat/x\n", stderr: "", code: 0 } } });
   await none.run("haz el TSP", []);
-  assert.deepEqual(none.calls.map((c) => c.argv[1]), ["record", "next", "check", "--template"]);
+  assert.deepEqual(none.calls.map((c) => c.argv[1]), ["record", "next", "check", "count", "--template"]);
   assert.deepEqual(none.notes, [{ message: "no finding recorded on feat/x", type: "info" }]);
   const detached = offerHarness({ findings: { record: { stdout: "", stderr: "tsp findings: detached HEAD\n", code: 2 } } });
   await detached.run("haz el TSP", []);
-  assert.deepEqual(detached.calls.map((c) => c.argv[1]), ["record", "--template"], "a registry that cannot record still leaves the run's feedback to ask for");
+  assert.deepEqual(detached.calls.map((c) => c.argv[1]), ["record", "count", "--template"], "a registry that cannot record still leaves the run's feedback to ask for");
   assert.deepEqual(detached.notes, [{ message: "tsp findings: detached HEAD", type: "error" }]);
   const missing = offerHarness({ findings: { record: new Error("spawn tsp ENOENT") } });
   await missing.run("haz el TSP", []);
-  assert.deepEqual(missing.calls.map((c) => c.argv[1]), ["record", "--template"], "a record that throws still leaves the feedback template to ask for");
+  assert.deepEqual(missing.calls.map((c) => c.argv[1]), ["record", "count", "--template"], "a record that throws still leaves the feedback template to ask for");
   assert.equal(missing.notes[0].message, "tsp: spawn tsp ENOENT");
 });
 
@@ -595,7 +597,7 @@ test("a next that cannot judge is surfaced instead of read as an old binary", as
 test("an old binary's usage answer still shows the plain review", async () => {
   const h = offerHarness({ findings: { record: { stdout: "F1 recorded a_test.go TestA\n", stderr: "", code: 0 }, next: LEGACY_NEXT, check: { stdout: "review 4\n", stderr: "", code: 1 } } });
   await h.run("haz el TSP", []);
-  assert.deepEqual(h.calls.map((c) => c.argv[1]), ["record", "next", "check", "--template"]);
+  assert.deepEqual(h.calls.map((c) => c.argv[1]), ["record", "next", "check", "count", "--template"]);
   assert.deepEqual(h.notes, [{ message: "review 4", type: "warning" }], "compatibility is not a failure: check's exit still sets the type");
   assert.deepEqual(h.sent, []);
 });
@@ -619,7 +621,7 @@ test("a TSP loop fix waits for feedback before sending the fix", async () => {
   const next = { stdout: JSON.stringify({ next: "fix", review: "review line", reason: "one open", message: "settle F1" }), stderr: "", code: 1 };
   const h = offerHarness({ findings: { next, "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
   await h.run("haz el TSP", [["edit", "a.go"]]);
-  assert.deepEqual(h.calls.map(c => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["feedback", "--template"]]);
+  assert.deepEqual(h.calls.map(c => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["plan", "count", "--json"], ["feedback", "--template"]]);
   assert.deepEqual(h.notes, [{ message: "review line\none open", type: "info" }]);
   assert.equal(h.sent.length, 1);
   const feedback = h.sent[0];
@@ -633,7 +635,7 @@ test("with feedback off the loop message follows the TSP run at once, and a stop
   const fix = { stdout: JSON.stringify({ next: "fix", review: "review 1", reason: "round 1 of 5 left 1 item unsettled", message: "F1 open a_test.go TestA" }), stderr: "", code: 1 };
   const off = offerHarness({ findings: { next: fix } });
   await off.run("haz el TSP", []);
-  assert.deepEqual(off.calls.map((c) => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["feedback", "--template"]]);
+  assert.deepEqual(off.calls.map((c) => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["plan", "count", "--json"], ["feedback", "--template"]]);
   assert.deepEqual(off.notes, [{ message: "review 1\nround 1 of 5 left 1 item unsettled", type: "info" }]);
   assert.deepEqual(off.sent, ["The TSP loop found defects to settle.\n\nF1 open a_test.go TestA"]);
   const stop = { stdout: JSON.stringify({ next: "stop", review: "review 9", reason: "no progress", message: "no progress — the loop needs the user's decision" }), stderr: "", code: 3 };
@@ -675,7 +677,7 @@ test("a fix run that changes nothing ends the loop instead of sending the same f
   await h.run("haz el TSP", []);
   await h.run(sent, [["edit", "a.go"]]);
   await h.run(sent, []);
-  assert.deepEqual(h.calls.map((c) => c.argv[1]), ["record", "next", "--template", "next", "next"]);
+  assert.deepEqual(h.calls.map((c) => c.argv[1]), ["record", "next", "count", "--template", "next", "next"]);
   assert.deepEqual(h.sent, [sent, sent], "the same fix over the same tree is never sent again");
   assert.deepEqual(h.notes.at(-1), { message: "the fix run changed nothing tsp findings next can see: the TSP loop stops here and needs your decision", type: "warning" });
   assert.deepEqual(h.asked, []);
@@ -719,7 +721,7 @@ test("a round prompt the loop sent records a new round and a user interruption o
     await h.run(round, []);
     const feedback = h.sent[2];
     await h.run(interruption === "user" ? "stop" : feedback, [], { aborted: interruption === "abort" });
-    assert.deepEqual(h.calls.slice(calls).map(c => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["feedback", "--template"]]);
+    assert.deepEqual(h.calls.slice(calls).map(c => c.argv), [["findings", "record", "--cwd", "/repo"], ["findings", "next", "--cwd", "/repo", "--json"], ["plan", "count", "--json"], ["feedback", "--template"]]);
     assert.deepEqual(h.notes.slice(notes), [{ message: "review\nreason", type: "info" }]);
     assert.deepEqual(h.sent.slice(2), [feedback]);
     assert.deepEqual(h.asked, []);
@@ -1126,6 +1128,16 @@ test("a findings review longer than the toast limit is readable in full", async 
   const shown = h.widgets.filter((w) => w.lines !== undefined).at(-1).lines.join("\n");
   for (const line of lines) assert.ok(shown.includes(line), "every finding line is readable");
   assert.ok(h.notes.at(-1).message.length < 300, "the toast is a pointer, not the report");
+});
+
+// A TSP run that wrote a test and no Findings row loses the finding: the plan is what every later reader sees
+// (#398). The run is told once, in the same session, to record what it pinned.
+test("a run that pinned a test without recording a finding is told to record it", () => {
+  assert.match(unrecordedRunNotice(0, ["internal/x/x_test.go"]), /record/);
+  assert.match(unrecordedRunNotice(0, ["internal/x/x_test.go"]), /tsp plan add-finding/);
+  assert.equal(unrecordedRunNotice(2, ["internal/x/x_test.go"]), "", "a plan with findings owes no notice");
+  assert.equal(unrecordedRunNotice(0, ["internal/x/x.go", "README.md"]), "", "no test changed, nothing to record");
+  assert.equal(unrecordedRunNotice(0, []), "");
 });
 
 test("with the automatic run switched off a required verdict asks, and the question is the evidence", async () => {

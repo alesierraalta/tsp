@@ -105,3 +105,23 @@ func TestPlanCheckPinsNamesAWitnessItCannotRun(t *testing.T) {
 		t.Fatalf("missing witness = %d %s", code, out)
 	}
 }
+
+// The hosts ask the CLI how much of the plan a run recorded, so the answer is machine-readable and counts what
+// the plan holds (#398).
+func TestPlanCountReportsTheRowsARunRecorded(t *testing.T) {
+	bin := buildCLI(t)
+	dir := pinRepo(t)
+	plan := filepath.Join(dir, "plan.md")
+	out, code := runCLI(t, bin, "plan", "count", "--path", plan, "--json")
+	if code != 0 || strings.TrimSpace(out) != `{"evidence":0,"findings":0}` {
+		t.Fatalf("empty plan count = %d %q", code, out)
+	}
+	addRow(t, bin, dir, "calc/red_test.go :: TestAddFails")
+	out, code = runCLI(t, bin, "plan", "count", "--path", plan, "--json")
+	if code != 0 || strings.TrimSpace(out) != `{"evidence":1,"findings":1}` {
+		t.Fatalf("counted plan = %d %q", code, out)
+	}
+	if human, code := runCLI(t, bin, "plan", "count", "--path", plan); code != 0 || !strings.Contains(human, "1 finding(s), 1 evidence row(s)") {
+		t.Fatalf("human count = %d %q", code, human)
+	}
+}

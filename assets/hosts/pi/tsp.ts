@@ -204,6 +204,17 @@ export const ROUND_LEAD = `${TSP_PROMPT} — `;
 const SOURCE_EXT = /\.(go|ts|tsx|js|jsx|mjs|cjs|py|rs|java|kt|rb|php|cs|c|cc|cpp|h|hpp|swift|scala|sh)$/;
 const TEST_PATH = /(^|\/)(tests?|__tests__|testdata|e2e|spec)\/|_test\.(go|py)$|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$/;
 
+/**
+ * What a TSP run owes the plan when it wrote tests and recorded no finding (#398). The plan is the only thing a
+ * later reader sees, so a run that pinned a defect and left no Findings row loses it; the notice asks for the row
+ * once, and names the check that proves the witness fails on this code.
+ */
+export function unrecordedRunNotice(findings: number, changed: readonly string[]): string {
+  if (findings > 0) return "";
+  if (!changed.some((path) => TEST_PATH.test(path))) return "";
+  return "This TSP run added or changed a test file and the plan has no Findings row for what it found, so the finding is lost to every reader of the plan: record each defect with `tsp plan add-finding` (its `path:line`, severity, evidence and the test that fails on this code) and confirm the witness with `tsp plan check --pins`.";
+}
+
 /** True for a source file the agent may have changed behaviour in; tests, docs and config are not. */
 export function isSourcePath(path: string): boolean {
   const p = path.replace(/\\/g, "/");
@@ -227,7 +238,7 @@ const FILE_READER = /^\s*(cat|head|tail|less|more|bat|sed)\s/;
 const isTspRequest = (prompt: string | undefined): boolean =>
   SKILL_BLOCK.test(prompt ?? "") || (prompt ?? "").trim().toLowerCase() === TSP_PROMPT.toLowerCase();
 /** Which of its own messages the extension last sent: only that exact text is a feedback run, a fix run or a round. */
-type OwnMessage = { prompt: string; kind: "feedback" | "fix" | "round" };
+type OwnMessage = { prompt: string; kind: "feedback" | "fix" | "round" | "record" };
 const loopKind = (message: string): OwnMessage["kind"] => (message.startsWith(FIX_LEAD) ? "fix" : "round");
 function isLoadedSkill(path: string, cwd: string): boolean {
   if (!SKILL_FILE.test(path)) return false;
@@ -481,6 +492,16 @@ const NO_STEP: LoopStep = { message: "", fix: "" };
  * shows the user the review, the answer and its notes, and returns the step the agent is sent next. A tsp without
  * `findings next` gets today's review instead and the loop stays manual.
  */
+/** How many Findings rows the repository's plan holds, or undefined when it cannot say. */
+export async function planFindingCount(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp): Promise<number | undefined> {
+  try {
+    const r = await exec(["plan", "count", "--json"], { cwd, env: { ...env } });
+    if (r.code !== 0) return undefined;
+    const parsed = JSON.parse(r.stdout.trim()) as { findings?: unknown };
+    return typeof parsed.findings === "number" ? parsed.findings : undefined;
+  } catch { return undefined; }
+}
+
 export async function reviewFindings(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, notify: Notify, record = true, show?: (text: string | undefined) => void): Promise<LoopStep> {
   const run = (sub: string, args: string[] = []) => exec(["findings", sub, "--cwd", cwd, ...args], { cwd, env: { ...env } });
   const shown = (r: ExecResult) => notice(r.stdout.trim() || r.stderr.trim() || `tsp findings: exited ${r.code}`);
@@ -582,7 +603,8 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   let pending = "";
   let lastFix = ""; // the fix answer the agent was last sent: the same one again after its fix run means it changed nothing
   let ran = false; // a TSP run already happened on this branch: one run per branch, never one per turn
-  let continued = false; // a headless run already asked for its continuation, and this run has only one
+  let continued = false;
+  let recordNudged = false; // the run that pinned a test was already asked to record it: once per session
   let decision: string | undefined; // the debt the last check named, for the status line
   let loop: LoopStatus | undefined; // the loop the branch is in, for the status line
   // A user's message that merely starts like one of the extension's own is the user's: it never runs the loop.
@@ -716,6 +738,18 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       }
       lastFix = step.fix;
       persist();
+      // The run that just ended may have pinned a defect and recorded nothing: the plan is what every later
+      // reader sees, so the session is asked once to record it (#398).
+      if (tspRun && !recordNudged) {
+        const count = await planFindingCount(ctx.cwd, env, exec);
+        const noticeText = count === undefined ? "" : unrecordedRunNotice(count, fresh);
+        if (noticeText !== "" && step.message === "" && feedbackGiven) {
+          recordNudged = true;
+          notify(notice("this TSP run pinned a test and recorded no finding: recording it"), "warning");
+          send(noticeText, "record");
+          return;
+        }
+      }
       const request = tspRun && !feedbackGiven ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
       if (request !== "") { pending = step.message; persist(); send(request, "feedback"); }
       else if (step.message !== "") send(step.message, loopKind(step.message));

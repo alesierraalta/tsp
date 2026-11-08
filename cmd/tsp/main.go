@@ -184,6 +184,8 @@ bench adjudicate --run <results>/<case>/<run> [--plan <path>] (--show | --pendin
            to supply the verdicts about its own findings)
 plan init [--path <path>] [--force] [--micro]
           (--micro writes the micro skeleton: header, Findings and Evidence ledger, for one small function)
+plan count [--path <path>] [--json]
+           (prints {"findings":N,"evidence":M} for the plan: how much of it a run recorded)
 plan check [--path <path>] [--report <file|->] [--pins]
            (--pins: run the test each settled Findings row names as its witness; a witness that
             passes on this code pins nothing, so the row is refused)
@@ -1536,6 +1538,7 @@ func runPlan(args []string) int {
 	inputs := fs.String("inputs", "", "inputs and parameters (add-evidence)")
 	observedText := fs.String("observed", "", "what was observed (add-evidence)")
 	report := fs.String("report", "", "a final report to compare with the Findings table, or - for stdin (check only): every production path:line it cites must be a Findings row")
+	jsonOut := fs.Bool("json", false, "machine-readable output (count only)")
 	pins := fs.Bool("pins", false, "run the test each settled Findings row names as its witness (check only): a witness that passes on this code pins nothing and is refused")
 	normalize := fs.String("normalize", "", "Go regexp for the part of the output that moves, such as a time (add-evidence)")
 	mutate := fs.String("mutate", "", "falsifiability claim: '<old> => <new> @ <path>:<line>' (add-evidence)")
@@ -1691,6 +1694,23 @@ func runPlan(args []string) int {
 			fmt.Fprintf(os.Stderr, "%s: %s\n", effectivePath, p)
 		}
 		return 1
+	case "count":
+		// A machine-readable count of the plan's rows, for the hosts that ask whether a run recorded anything
+		// (#398): the plan is what every later reader sees.
+		data, err := os.ReadFile(effectivePath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plan count:", err)
+			return 1
+		}
+		_, findingsRows := plan.Table(string(data), "Findings")
+		_, evidenceRows := plan.Table(string(data), "Evidence ledger")
+		if *jsonOut {
+			out, _ := json.Marshal(map[string]int{"findings": len(findingsRows), "evidence": len(evidenceRows)})
+			fmt.Println(string(out))
+			return 0
+		}
+		fmt.Printf("%d finding(s), %d evidence row(s)\n", len(findingsRows), len(evidenceRows))
+		return 0
 	case "add-finding":
 		// A flag the row cannot be built without is a usage error, not a plan-side refusal: nothing has
 		// been read yet, and the operator still holds the whole command on the line. --test is conditional
