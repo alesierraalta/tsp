@@ -1,0 +1,107 @@
+package main
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// pinRepo writes a Go module whose one package holds a test that fails while the defect is present, and the same
+// package with a test that passes, so a row can claim either.
+func pinRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":       "module m\n\ngo 1.21\n",
+		"calc/calc.go": "package calc\n\nfunc Add(a, b int) int { return a - b }\n",
+		"calc/red_test.go": `package calc
+
+import "testing"
+
+func TestAddFails(t *testing.T) {
+	if Add(2, 1) != 3 {
+		t.Fatalf("Add(2, 1) = %d, want 3", Add(2, 1))
+	}
+}
+`,
+		"calc/green_test.go": `package calc
+
+import "testing"
+
+func TestAddPassesForZero(t *testing.T) {
+	if Add(0, 0) != 0 {
+		t.Fatal("Add(0, 0) must be 0")
+	}
+}
+`,
+	}
+	for name, body := range files {
+		full := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"}} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if out, code := runCLI(t, buildCLI(t), "plan", "init", "--micro", "--path", filepath.Join(dir, "plan.md")); code != 0 {
+		t.Fatalf("plan init = %d %s", code, out)
+	}
+	return dir
+}
+
+func addRow(t *testing.T, bin, dir, test string) {
+	t.Helper()
+	plan := filepath.Join(dir, "plan.md")
+	if out, code := runCLI(t, bin, "plan", "add-evidence", "--path", plan, "--claim", "c", "--executed", "e", "--admit", "go test ./calc", "--inputs", "i", "--observed", "o", "--label", "observado"); code != 0 {
+		t.Fatalf("add-evidence = %d %s", code, out)
+	}
+	if out, code := runCLI(t, bin, "plan", "add-finding", "--path", plan, "--location", "calc/calc.go:3", "--severity", "silently wrong answer",
+		"--data-safe", "yes", "--evidence", "E1", "--status", "confirmed", "--test", test, "--verdict-by", "t / 2026-11-08", "--reason", "r"); code != 0 {
+		t.Fatalf("add-finding = %d %s", code, out)
+	}
+}
+
+// A row that names a test as its witness claims that test fails while the defect is there. --pins runs each such
+// test and refuses the row whose test passes, which is a check that checks nothing.
+func TestPlanCheckPinsRefusesATestThatPasses(t *testing.T) {
+	bin := buildCLI(t)
+	dir := pinRepo(t)
+	plan := filepath.Join(dir, "plan.md")
+	addRow(t, bin, dir, "calc/red_test.go :: TestAddFails")
+
+	out, code := runCLI(t, bin, "plan", "check", "--path", plan, "--pins")
+	if code != 0 || !strings.Contains(out, "well formed") {
+		t.Fatalf("a failing witness must pass: %d %s", code, out)
+	}
+
+	dir2 := pinRepo(t)
+	plan2 := filepath.Join(dir2, "plan.md")
+	addRow(t, bin, dir2, "calc/green_test.go :: TestAddPassesForZero")
+	out, code = runCLI(t, bin, "plan", "check", "--path", plan2, "--pins")
+	if code != 1 || !strings.Contains(out, "passes on this code, so it pins nothing") {
+		t.Fatalf("a passing witness must be refused: %d %s", code, out)
+	}
+	if plain, code := runCLI(t, bin, "plan", "check", "--path", plan2); code != 0 || !strings.Contains(plain, "well formed") {
+		t.Fatalf("without --pins nothing changes: %d %s", code, plain)
+	}
+}
+
+// A witness naming a file the repository does not have cannot be run, so the check says so instead of passing.
+func TestPlanCheckPinsNamesAWitnessItCannotRun(t *testing.T) {
+	bin := buildCLI(t)
+	dir := pinRepo(t)
+	plan := filepath.Join(dir, "plan.md")
+	addRow(t, bin, dir, "calc/missing_test.go :: TestGone")
+	out, code := runCLI(t, bin, "plan", "check", "--path", plan, "--pins")
+	if code != 1 || !strings.Contains(out, "cannot be run") {
+		t.Fatalf("missing witness = %d %s", code, out)
+	}
+}
