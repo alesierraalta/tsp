@@ -436,14 +436,16 @@ export const repoProbe: RepoProbe = {
       // A rename or copy carries the source path in the next field, which is not a change of its own.
       if (status[0] === "R" || status[0] === "C") i++;
       const path = cwdPath(prefix.trim(), entry.slice(3));
-      if (path !== undefined && isSourcePath(path)) files.set(path, digest(join(cwd, path)));
+      // Every changed path is kept, tests included: the offer filters source paths itself, and a test the turn wrote
+      // is what a finding has to be recorded for (#398).
+      if (path !== undefined) files.set(path, digest(join(cwd, path)));
     }
     return { head: headAt(cwd), files };
   },
   committed(cwd, from, to) {
     const out = gitOut(cwd, ["diff", "--name-only", "--relative", `${from}..${to}`]);
     if (out === undefined) return [];
-    return out.split("\n").map((line) => line.trim()).filter((path) => path !== "" && isSourcePath(path));
+    return out.split("\n").map((line) => line.trim()).filter((path) => path !== "");
   },
 };
 
@@ -605,6 +607,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   let ran = false; // a TSP run already happened on this branch: one run per branch, never one per turn
   let continued = false;
   let recordNudged = false; // the run that pinned a test was already asked to record it: once per session
+  let pendingRecord = ""; // the recording notice waiting for a turn of its own (#398)
   let decision: string | undefined; // the debt the last check named, for the status line
   let loop: LoopStatus | undefined; // the loop the branch is in, for the status line
   // A user's message that merely starts like one of the extension's own is the user's: it never runs the loop.
@@ -672,10 +675,10 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     if (!feedbackRun && !fixRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) tspRun = true;
     if (!event.isError && submitsFeedback(event.toolName, event.input, event.content)) feedbackGiven = true;
     const path = (event.input as { path?: unknown }).path;
-    if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string" && isSourcePath(path)) edited.add(path);
+    if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string") edited.add(path);
   });
   /** The source paths this run changed, from the edit tools and the working tree it opened; never filtered by a decline. */
-  const collect = (cwd: string): string[] => {
+  const collectAll = (cwd: string): string[] => {
     const fresh = new Set(edited);
     if (opened !== undefined) {
       const now = probe.state(cwd);
@@ -687,8 +690,10 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
         }
       }
     }
-    return [...fresh].filter(isSourcePath);
+    return [...fresh];
   };
+  /** The source paths this run changed, which is what the offer answers. */
+  const collect = (cwd: string): string[] => collectAll(cwd).filter(isSourcePath);
   pi.on("agent_before_settle", async (event, ctx) => {
     // Without a UI nobody can answer the offer's question, so only the repository's own requirement runs, and it
     // reaches the agent as one continuation: an aborted run never fires this boundary, a child has nobody to run
@@ -709,9 +714,17 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     // The paths this turn changed, unfiltered: what the repository requires is read before a remembered
     // decline is applied, because a decline answers one question and cannot silence a later policy.
     const fresh = collect(ctx.cwd);
+    // A test the turn wrote is what a finding has to be recorded for, and collect() keeps only source paths.
+    const freshTests = collectAll(ctx.cwd).filter((p) => TEST_PATH.test(p));
     edited.clear();
     opened = undefined;
     if (event.aborted || child || optedOut(ctx.cwd)) { pending = ""; return; }
+    if (pendingRecord !== "" && !tspRun && !fixRun) {
+      // The notice waits for a turn of its own: sent beside the loop's message, it would read as one instruction.
+      const text = pendingRecord;
+      pendingRecord = "";
+      if (ctx.hasUI) { ctx.ui.notify(notice("this TSP run pinned a test and recorded no finding, so the plan does not hold it"), "warning"); send(text, "record"); return; }
+    }
     if (!ctx.hasUI) {
       // The boundary requested the run; a TSP run that did happen still marks the branch, so it is not requested twice.
       if (tspRun) { ran = true; persist(); }
@@ -742,17 +755,20 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       // reader sees, so the session is asked once to record it (#398).
       if (tspRun && !recordNudged) {
         const count = await planFindingCount(ctx.cwd, env, exec);
-        const noticeText = count === undefined ? "" : unrecordedRunNotice(count, fresh);
-        if (noticeText !== "" && step.message === "" && feedbackGiven) {
-          recordNudged = true;
-          notify(notice("this TSP run pinned a test and recorded no finding: recording it"), "warning");
-          send(noticeText, "record");
-          return;
-        }
+        const noticeText = count === undefined ? "" : unrecordedRunNotice(count, freshTests);
+        if (noticeText !== "") { recordNudged = true; pendingRecord = noticeText; }
       }
       const request = tspRun && !feedbackGiven ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
-      if (request !== "") { pending = step.message; persist(); send(request, "feedback"); }
-      else if (step.message !== "") send(step.message, loopKind(step.message));
+      if (request !== "") { pending = step.message; persist(); send(request, "feedback"); return; }
+      if (step.message !== "") { send(step.message, loopKind(step.message)); return; }
+      // Nothing else is owed this turn, so the recording notice goes now rather than waiting for a turn that may
+      // never come; when the loop did send its message, it went out on the next settle instead.
+      if (pendingRecord !== "") {
+        const text = pendingRecord;
+        pendingRecord = "";
+        notify(notice("this TSP run pinned a test and recorded no finding, so the plan does not hold it"), "warning");
+        send(text, "record");
+      }
       return;
     }
     const paths = fresh;
