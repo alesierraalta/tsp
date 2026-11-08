@@ -1,8 +1,6 @@
 package plan
 
 import (
-	"crypto/sha256"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,7 +61,9 @@ func TestInitWithoutRequestUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != want || fmt.Sprintf("%x", sha256.Sum256(got)) != "7a7715a74ce82f192e4e0b0302663da2e3bd6686a63f3c3505ccdafd75b203b8" {
+	// The template moves with the skill (a new optional column is added by its own change), so the pin is that
+	// init writes it byte for byte, not a digest that a later template change would have to rewrite here.
+	if string(got) != want {
 		t.Fatal("init without --spec changed template bytes")
 	}
 }

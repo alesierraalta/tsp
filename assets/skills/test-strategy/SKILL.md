@@ -149,6 +149,9 @@ promise × class is, and step 6 says when it is complete.
    report is lost to every reader of the plan. Before sending the report, write it to a temporary
    file outside the repository (or pipe it) and run `tsp plan check --report <file>` (`--report -`
    for stdin); fix every citation it names by adding the row or removing it from the report.
+   Attach a bare, single-line `--reproduction` command to every confirmed finding; it must fail
+   on the code exhibiting the defect. Run `tsp plan check --replay` before reporting, and resolve
+   every refused reproduction. Rows without one are reported as unproven.
    A row that names a `Pinning test` claims that test fails on this code: `tsp plan check --pins`
    runs each one and refuses a row whose test passes, because a witness that passes pins nothing.
    On a change, say whether each defect came with it: `--causality introduced` for a line this work
