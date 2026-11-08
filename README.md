@@ -958,10 +958,12 @@ tsp plan init                # write the skeleton, tables and all; never overwri
 tsp plan check               # exit 1 and name every breach of the contract
 tsp plan check --report r.md # also exit 1 for each production path:line the report cites that no Findings row records
 tsp plan check --pins        # also exit 1 for each settled row whose named test passes on this code
+tsp plan check --replay      # run reproduction commands in the plan directory; passing commands are refused
+tsp plan check --replay --replay-timeout 30s # bound each reproduction (default 60s)
 tsp plan count --json        # {"findings":N,"evidence":M}: how much of the plan a run recorded
 tsp plan check --base main    # also exit 1 for a finding that says introduced on a file the change does not touch
 tsp plan add-evidence ...    # write one Evidence ledger row; Digest and Mode stay for plan admit --record
-tsp plan add-finding ...     # write one Findings row; refuses a row the checker would reject
+tsp plan add-finding ... --reproduction 'go test ./...' # optional single-line command that fails on the defect
 ```
 
 `check` reports a Findings section that is not a table, a finding that cites no `path:line`, a

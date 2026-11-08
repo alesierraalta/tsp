@@ -20,6 +20,36 @@ func addPlan(rows ...string) string {
 }
 
 // openFinding is a row the checker accepts as it stands, so each test varies exactly one thing.
+func TestAddFindingWritesReproduction(t *testing.T) {
+	body, err := embeddedTemplate(MicroTemplatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = strings.Replace(body, "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|", "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n| E1 | claim | run | | input | observed | | | | | | control | repro | observado |", 1)
+	p := write(t, t.TempDir(), "plan.md", body)
+	f := openFinding()
+	f.Reproduction = "false"
+	if _, err := AddFinding(p, f); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "| false |") {
+		t.Fatalf("missing reproduction: %s", got)
+	}
+}
+
+func TestReproductionRejectsNewline(t *testing.T) {
+	p := write(t, t.TempDir(), "plan.md", addPlan())
+	f := openFinding()
+	f.Reproduction = "false\ntrue"
+	if _, err := AddFinding(p, f); err == nil || !strings.Contains(err.Error(), "newline") {
+		t.Fatalf("expected newline refusal, got %v", err)
+	}
+}
+
 func openFinding() Finding {
 	return Finding{
 		ID: "F1", Location: "src/a.js:5", Severity: "data loss", DataSafe: "yes", Evidence: "E1",

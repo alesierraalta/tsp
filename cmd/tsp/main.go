@@ -187,7 +187,8 @@ plan init [--path <path>] [--force] [--micro]
           (--micro writes the micro skeleton: header, Findings and Evidence ledger, for one small function)
 plan count [--path <path>] [--json]
            (prints {"findings":N,"evidence":M} for the plan: how much of it a run recorded)
-plan check [--path <path>] [--report <file|->] [--pins] [--base <ref>]
+plan check [--path <path>] [--report <file|->] [--pins] [--base <ref>] [--replay] [--replay-timeout <duration>]
+           (--replay: run finding reproductions in the plan directory; a passing command is refused)
            (--base: a row that says introduced must cite a file the change against <ref> touches)
            (--pins: run the test each settled Findings row names as its witness; a witness that
             passes on this code pins nothing, so the row is refused)
@@ -200,7 +201,7 @@ plan export [--path <path>] [--commit <sha>]
             default the short HEAD, and the plan's base name; it never posts anything)
 plan add-finding --id <id> --location <path:line> --severity <class> --data-safe <yes|no> --evidence <ids>
            --status <open|confirmed|fixed|gap-closed|rejected|wontfix> [--test <suite :: name>] --verdict-by <who / date>
-           --reason <why> [--fingerprint <digest>] [--path <path>]
+           --reason <why> [--fingerprint <digest>] [--reproduction <command>] [--path <path>]
            (writes one Findings row; refuses a row plan check would reject, and never writes an
             evidence row. A bad value exits 2; a plan that refuses the row exits 1)
            (swept = status done, fixed or closed; n/a, na, none and skipped leave the denominator)
@@ -1543,12 +1544,14 @@ func runPlan(args []string) int {
 	report := fs.String("report", "", "a final report to compare with the Findings table, or - for stdin (check only): every production path:line it cites must be a Findings row")
 	jsonOut := fs.Bool("json", false, "machine-readable output (count only)")
 	baseRef := fs.String("base", "", "check only: a finding that says introduced must cite a file this change against <ref> touches")
+	replay := fs.Bool("replay", false, "run finding reproductions (check only)")
+	replayTimeout := fs.Duration("replay-timeout", 60*time.Second, "timeout for each reproduction (check only)")
 	pins := fs.Bool("pins", false, "run the test each settled Findings row names as its witness (check only): a witness that passes on this code pins nothing and is refused")
 	normalize := fs.String("normalize", "", "Go regexp for the part of the output that moves, such as a time (add-evidence)")
 	mutate := fs.String("mutate", "", "falsifiability claim: '<old> => <new> @ <path>:<line>' (add-evidence)")
 	expect := fs.String("expect", "", "pass (default) or fail for a test observed red (add-evidence)")
 	control := fs.String("control", "", "mutation or negative control and its result, as prose (add-evidence)")
-	reproduction := fs.String("reproduction", "", "how to reproduce the observation (add-evidence)")
+	reproduction := fs.String("reproduction", "", "reproduction command (add-finding) or how to reproduce the observation (add-evidence)")
 	label := fs.String("label", "observado", "the row's label; the ledger holds only observado rows (add-evidence)")
 	execute := fs.Bool("execute", false, "run each admitted command; the default is a dry run (admit only)")
 	timeout := fs.Duration("timeout", 120*time.Second, "bound one command; 0 leaves it unbounded (admit only)")
@@ -1693,14 +1696,27 @@ func runPlan(args []string) int {
 		if *baseRef != "" {
 			problems = append(problems, causalityProblems(effectivePath, *baseRef)...)
 		}
-		if len(problems) == 0 {
-			fmt.Printf("%s: well formed\n", effectivePath)
-			return 0
+		var unproven []string
+		if *replay {
+			if *replayTimeout <= 0 {
+				fmt.Fprintln(os.Stderr, "plan check: --replay-timeout must be positive")
+				return 2
+			}
+			replayProblems, reports := replayFindings(effectivePath, *replayTimeout)
+			problems = append(problems, replayProblems...)
+			unproven = reports
 		}
 		for _, p := range problems {
 			fmt.Fprintf(os.Stderr, "%s: %s\n", effectivePath, p)
 		}
-		return 1
+		for _, p := range unproven {
+			fmt.Printf("%s: %s\n", effectivePath, p)
+		}
+		if len(problems) != 0 {
+			return 1
+		}
+		fmt.Printf("%s: well formed\n", effectivePath)
+		return 0
 	case "count":
 		// A machine-readable count of the plan's rows, for the hosts that ask whether a run recorded anything
 		// (#398): the plan is what every later reader sees.
@@ -1738,7 +1754,7 @@ func runPlan(args []string) int {
 		line, rowID, err := plan.AddFindingID(effectivePath, plan.Finding{
 			ID: *id, Location: *location, Severity: *severity, DataSafe: *dataSafe,
 			Evidence: *evidence, Test: *test, Status: *status, VerdictBy: *verdictBy,
-			Reason: *reason, Fingerprint: *fingerprint, Causality: *causality,
+			Reason: *reason, Fingerprint: *fingerprint, Causality: *causality, Reproduction: *reproduction,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "plan add-finding:", err)
@@ -2940,6 +2956,55 @@ func witnessCommand(root, cell string) ([]string, error) {
 		return []string{"node", "--test", "--test-name-pattern", name, path}, nil
 	}
 	return nil, fmt.Errorf("no known runner for %s", filepath.Ext(path))
+}
+
+func replayFindings(path string, timeout time.Duration) (problems, unproven []string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return []string{"read the plan: " + err.Error()}, nil
+	}
+	header, rows := plan.Table(string(data), "Findings")
+	reproCol, statusCol := findingsColumn(header, "reproduction"), findingsColumn(header, "status")
+	for _, row := range rows {
+		if len(row) == 0 {
+			continue
+		}
+		id := strings.Trim(strings.TrimSpace(row[0]), "`")
+		command := ""
+		if reproCol >= 0 && reproCol < len(row) {
+			command = strings.TrimSpace(strings.Trim(strings.TrimSpace(row[reproCol]), "`"))
+		}
+		if command == "" || command == "-" || command == "—" {
+			if statusCol >= 0 && statusCol < len(row) {
+				switch strings.ToLower(strings.TrimSpace(row[statusCol])) {
+				case "confirmed", "fixed", "gap-closed":
+					unproven = append(unproven, fmt.Sprintf("finding %s has no reproduction, so its claim is unproven", id))
+				}
+			}
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		cmd := exec.CommandContext(ctx, "sh", "-c", command)
+		cmd.Dir = filepath.Dir(path)
+		// The reproduction runs what a row claims, so its deadline ends the whole group it started: a descendant
+		// holding the output open would otherwise outlive the check.
+		processGroup(cmd)
+		err := cmd.Run()
+		timedOut := ctx.Err() != nil
+		cancel()
+		switch {
+		case timedOut:
+			problems = append(problems, fmt.Sprintf("finding %s reproduction timed out: %s", id, command))
+		case err == nil:
+			problems = append(problems, fmt.Sprintf("finding %s reproduction passes, so its claim is not demonstrated: %s", id, command))
+		default:
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() == 127 {
+				problems = append(problems, fmt.Sprintf("finding %s reproduction could not start %q: %v", id, command, err))
+			}
+		}
+	}
+	return
 }
 
 // causalityProblems reads every row that claims its defect came with the change and refuses the one whose file the
