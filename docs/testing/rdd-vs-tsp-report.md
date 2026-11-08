@@ -174,3 +174,34 @@ found two thirds of the defects with no diff to read, where RDD cannot review at
 pin: RDD on every high-risk change, TSP to turn what RDD reports, or what a change touches, into failing
 tests. Whether TSP given RDD's findings pins more defects than either alone is the next measurement; this
 study did not test it.
+
+## Addendum (2026-11-08): TSP alone, on openai-codex/gpt-6-luna
+
+The Claude Code session expired mid-rerun (`OAuth session expired`), which invalidated 74 case-runs, and RDD
+cannot run on another vendor's model (gentle-ai reviews through Claude Code). By maintainer decision the TSP arm
+was rerun alone on `openai-codex/gpt-6-luna` through Pi, in both conditions, on a binary from `main` at 3135e1b
+that includes #389, #391 and #393. Protocol deviation D6. **No verdict against RDD**: arm A has no run on this
+model.
+
+| TSP on Luna | Change condition | Audit condition |
+|---|---|---|
+| Valid case-runs | 72/72 (0 failed, 0 invalid) | 72/72 |
+| Detected | 8/66 (0.121) | 5/66 (0.076) |
+| Pinned by a test | 48/66 (0.727) | 48/66 |
+| Runs that wrote no plan | 58/66 | 59/66 |
+| Findings rows per run | 0.1 | 0.1 |
+| False positives per control run | 0.00 | 0.00 |
+| Cost per case-run (US$) | 0.0039 | 0.0041 |
+| Turns / seconds per run | 10 / 52 | 11 / 51 |
+| Operator-instruction leaks in transcripts | 0 | 0 |
+
+Reading: the leak fixes hold — no run carried the operator's skills or `CLAUDE.md`, which is what #391 and #393
+were for. Luna is cheap (a sixteenth of Claude's cost per run) and pins defects at about the same rate as Haiku
+(0.727 vs 0.818 on the first study), but it **does not write the plan**: 58 of 66 runs wrote no Findings row at
+all, so its detection reads 0.12 where the test it wrote is often the evidence that it found the defect. The
+bottleneck for this model is the reporting discipline, not the finding.
+
+That is the same failure #384 addressed, one layer deeper: `tsp plan check --report` refuses a report that names an
+unrecorded defect, but a model that writes no plan at all still exits clean, because the skill's instruction is
+prose to it. Closing it for good means enforcing the plan at the runner (the bench, and the Stop hook where the
+host has one) rather than asking the model, which is what #385 and #386 now need.

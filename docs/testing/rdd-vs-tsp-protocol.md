@@ -166,3 +166,10 @@ it; the arm A reviewers run with `--setting-sources ""` and did not get it. The 
 with a binary that includes #393 (`--setting-sources user` for runs with their own config); the 11 stopped
 case-runs are discarded and not reported. D4's contamination check is extended: a transcript that names any
 operator instruction (branch-isolation, rtk, engram, codegraph) is excluded.
+
+**D6 (2026-11-08, exploratory arm).** The maintainer replaced the model with `openai-codex/gpt-6-luna` after the
+Claude Code session expired mid-study (`OAuth session expired and could not be refreshed`), which invalidated 74
+arm B case-runs of the first rerun attempt. RDD cannot run on Luna (gentle-ai reviews through Claude Code, whose
+models are Claude's), so the rerun runs **arm B only**, in both conditions, with `--runner pi --model
+openai-codex/gpt-6-luna` on a binary from `main` at 3135e1b. It is reported as an exploratory arm with no verdict
+against arm A; the registered comparison needs the Claude session and is not made here.
