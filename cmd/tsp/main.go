@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -173,7 +174,9 @@ bench adjudicate --run <results>/<case>/<run> [--plan <path>] (--show | --pendin
            to supply the verdicts about its own findings)
 plan init [--path <path>] [--force] [--micro]
           (--micro writes the micro skeleton: header, Findings and Evidence ledger, for one small function)
-plan check [--path <path>] [--report <file|->]
+plan check [--path <path>] [--report <file|->] [--pins]
+           (--pins: run the test each settled Findings row names as its witness; a witness that
+            passes on this code pins nothing, so the row is refused)
            (--report: every production path:line the final report cites must be a Findings row; a defect
             named only in the report is lost to every reader of the plan)
 plan gaps [--run <slug>] [--all] [--path <path>]
@@ -1520,6 +1523,7 @@ func runPlan(args []string) int {
 	inputs := fs.String("inputs", "", "inputs and parameters (add-evidence)")
 	observedText := fs.String("observed", "", "what was observed (add-evidence)")
 	report := fs.String("report", "", "a final report to compare with the Findings table, or - for stdin (check only): every production path:line it cites must be a Findings row")
+	pins := fs.Bool("pins", false, "run the test each settled Findings row names as its witness (check only): a witness that passes on this code pins nothing and is refused")
 	normalize := fs.String("normalize", "", "Go regexp for the part of the output that moves, such as a time (add-evidence)")
 	mutate := fs.String("mutate", "", "falsifiability claim: '<old> => <new> @ <path>:<line>' (add-evidence)")
 	expect := fs.String("expect", "", "pass (default) or fail for a test observed red (add-evidence)")
@@ -1662,6 +1666,9 @@ func runPlan(args []string) int {
 				return 1
 			}
 			problems = append(problems, unrecorded...)
+		}
+		if *pins {
+			problems = append(problems, pinProblems(effectivePath)...)
 		}
 		if len(problems) == 0 {
 			fmt.Printf("%s: well formed\n", effectivePath)
@@ -2809,4 +2816,86 @@ func unrecordedReportCitations(planPath, reportPath string) ([]string, error) {
 		out = append(out, fmt.Sprintf("report cites %s:%d, which no Findings row records: add it with tsp plan add-finding or drop it from the report", c.Path, c.First))
 	}
 	return out, nil
+}
+
+// pinProblems runs the test each settled Findings row names as its witness and refuses the row whose test passes:
+// a pinning test that passes on the defective code is a check of nothing, and a row that claims one claims more
+// than it has (#385). A witness that cannot be run is named rather than counted as red.
+func pinProblems(planPath string) []string {
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		return []string{"read the plan: " + err.Error()}
+	}
+	header, rows := plan.Table(string(data), "Findings")
+	testCol, statusCol := findingsColumn(header, "pinning test"), findingsColumn(header, "status")
+	if testCol < 0 || statusCol < 0 {
+		return nil
+	}
+	root := filepath.Dir(planPath)
+	var problems []string
+	for _, r := range rows {
+		if len(r) <= testCol || len(r) <= statusCol {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(r[statusCol]))
+		if status != "confirmed" && status != "fixed" {
+			continue
+		}
+		cell := strings.Trim(strings.TrimSpace(r[testCol]), "`")
+		if cell == "" || cell == "-" || cell == "—" {
+			continue
+		}
+		id := ""
+		if len(r) > 0 {
+			id = strings.Trim(strings.TrimSpace(r[0]), "`")
+		}
+		argv, err := witnessCommand(root, cell)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("finding %s names the witness %s, which cannot be run: %v", id, cell, err))
+			continue
+		}
+		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			problems = append(problems, fmt.Sprintf("finding %s claims %s as its witness, but it passes on this code, so it pins nothing: make it fail for the reason the finding names, or report the defect as unconfirmed", id, cell))
+		} else if strings.Contains(string(out), "build failed") || strings.Contains(string(out), "cannot find package") || strings.Contains(string(out), "no such file") {
+			problems = append(problems, fmt.Sprintf("finding %s names the witness %s, which cannot be run: %s", id, cell, firstLine(string(out))))
+		}
+	}
+	return problems
+}
+
+// findingsColumn finds a Findings column by its header, so a row can be read without depending on its position.
+func findingsColumn(header []string, name string) int {
+	for i, h := range header {
+		lower := strings.ToLower(strings.TrimSpace(h))
+		if lower == name || strings.HasPrefix(lower, name+" ") || strings.HasPrefix(lower, name+" (") {
+			return i
+		}
+	}
+	return -1
+}
+
+// witnessCommand is the argument vector that runs one witness named as "<test file> :: <test name>". The test name
+// travels as one argument, never through a shell.
+func witnessCommand(root, cell string) ([]string, error) {
+	parts := strings.Split(cell, "::")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("a witness is written as <test file> :: <test name>")
+	}
+	path := strings.Trim(strings.TrimSpace(parts[0]), "`")
+	name := strings.Trim(strings.TrimSpace(parts[1]), "`")
+	if _, err := os.Stat(filepath.Join(root, path)); err != nil {
+		return nil, fmt.Errorf("no such file")
+	}
+	switch filepath.Ext(path) {
+	case ".go":
+		return []string{"go", "test", "-count=1", "-timeout", "120s", "-run", "^" + regexp.QuoteMeta(name) + "$", "./" + filepath.ToSlash(filepath.Dir(path))}, nil
+	case ".py":
+		return []string{"python3", "-m", "pytest", "-q", path + "::" + name}, nil
+	case ".js", ".mjs", ".cjs", ".ts":
+		return []string{"node", "--test", "--test-name-pattern", name, path}, nil
+	}
+	return nil, fmt.Errorf("no known runner for %s", filepath.Ext(path))
 }
