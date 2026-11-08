@@ -15,6 +15,7 @@ type Feature struct {
 	Title   string // "Feedback"
 	Prompt  string // the exact question shown during install/configure
 	Help    string // one line under the question
+	Preview string // what turning it on does, shown before the toggle moves
 	Default bool   // false: opt-in
 }
 
@@ -24,7 +25,16 @@ var declarations = []Feature{
 		Title:   "Feedback",
 		Prompt:  "¿Quieres activar el feedback para ayudar a mejorar la herramienta?",
 		Help:    "Records are anonymized and kept in two local files that are never publishable.",
+		Preview: "Feedback records are anonymized in two local files (run-feedback.jsonl and run-feedback.md); both files are never publishable.",
 		Default: false,
+	},
+	{
+		ID:      "auto-run",
+		Title:   "Automatic TSP run",
+		Prompt:  "¿Quieres que una sesión donde el repositorio exige TSP lo ejecute sin preguntar?",
+		Help:    "On, a required verdict starts the run; off, it asks first. A repository that leaves the decision to you is never affected.",
+		Preview: "With the automatic run off, a required verdict asks the same question a repository that leaves the decision to you asks: Sí runs TSP, No declines it for that file.",
+		Default: true,
 	},
 }
 
@@ -94,10 +104,11 @@ func Set(id string, enabled bool) (string, error) {
 
 // Preview shows what turning the feature on would do, without turning it on.
 func Preview(id string) (string, error) {
-	if _, ok := Get(id); !ok {
+	declaration, ok := Get(id)
+	if !ok {
 		return "", unknownFeature(id)
 	}
-	return "Feedback records are anonymized in two local files (run-feedback.jsonl and run-feedback.md); both files are never publishable.", nil
+	return declaration.Preview, nil
 }
 
 func unknownFeature(id string) error {

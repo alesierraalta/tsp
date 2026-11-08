@@ -309,6 +309,28 @@ async function checkVerdict(cwd: string, env: Readonly<Record<string, string | u
 // What a tsp that predates `check --json` prints instead of a verdict: the flag parser's own words, never a check's.
 const STALE_CHECK = /flag provided but not defined|unknown flag|invalid option/i;
 
+// The automatic run is a toggle, not a verdict: `required` names the debt, and this says whether the
+// extension may act on it without asking. An unreadable answer keeps the shipped behaviour (act).
+const AUTO_RUN_FEATURE = "auto-run";
+async function autoRunEnabled(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp): Promise<boolean> {
+  let result: ExecResult;
+  try {
+    result = await exec(["status", "--json"], { cwd, env: { ...env } });
+  } catch {
+    return true;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout.trim());
+  } catch {
+    return true;
+  }
+  const report = (parsed ?? {}) as { features?: unknown };
+  if (!Array.isArray(report.features)) return true;
+  const entry = report.features.find((item) => (item as { id?: unknown }).id === AUTO_RUN_FEATURE) as { enabled?: unknown } | undefined;
+  return entry === undefined ? true : entry.enabled === true;
+}
+
 export interface Verdict {
   decision: typeof DECISION_NONE | typeof DECISION_ASK | typeof DECISION_REQUIRED | typeof DECISION_ERROR;
   named: boolean; // the verdict named a debt at all
@@ -762,13 +784,18 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     if (verdict.decision === DECISION_NONE) { decision = DECISION_NONE; return; }
     if (verdict.decision === DECISION_REQUIRED) {
       decision = DECISION_REQUIRED;
-      // The repository decided this run happens; asking would be a question whose answer is already known.
-      declined.clear();
-      persist();
       const why = verdict.reason === "" ? "the repository requires it" : verdict.reason;
-      ctx.ui.notify(notice(`TSP required: ${why}`), "info");
-      pi.sendUserMessage(TSP_PROMPT);
-      return;
+      // The verdict names the debt; the toggle decides who acts on it. Off, the human still answers: the
+      // repository is not overruled, only the automatic send is.
+      if (await autoRunEnabled(ctx.cwd, env, exec)) {
+        // The repository decided this run happens; asking would be a question whose answer is already known.
+        declined.clear();
+        persist();
+        ctx.ui.notify(notice(`TSP required: ${why}`), "info");
+        pi.sendUserMessage(TSP_PROMPT);
+        return;
+      }
+      ctx.ui.notify(notice(`TSP required: ${why} · automatic run disabled (tsp feature enable auto-run)`), "warning");
     }
     const undecided = paths.filter((p) => !declined.has(p));
     if (undecided.length === 0) return;
