@@ -157,3 +157,12 @@ registered above (cases, controls, model, 3 runs, measures, analysis, decision r
    from both arms for that case and run index.
 
 The first study's TSP numbers are reported beside the rerun as "before"; the verdict is the rerun's.
+
+**D5 (2026-11-07, before the rerun is relaunched).** The first rerun attempt was stopped after 11 case-runs:
+transcripts still referred to the operator's branch-isolation rule. Claude Code loads every ancestor's
+`CLAUDE.md`, so a workspace under the operator's home received the operator's 754-line `~/.claude/CLAUDE.md`
+whatever `HOME` said (#392). This reached every arm B run of the first study as well, not only the 11 that showed
+it; the arm A reviewers run with `--setting-sources ""` and did not get it. The rerun is relaunched from scratch
+with a binary that includes #393 (`--setting-sources user` for runs with their own config); the 11 stopped
+case-runs are discarded and not reported. D4's contamination check is extended: a transcript that names any
+operator instruction (branch-isolation, rtk, engram, codegraph) is excluded.

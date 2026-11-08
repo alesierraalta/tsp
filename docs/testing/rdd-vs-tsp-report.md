@@ -35,6 +35,11 @@ tests there, where the bench never looks. Arm A was not affected: Gentle AI star
 In the audit condition 25 of 66 runs were contaminated (8 detected); the 41 clean ones detected 37. Four of the
 six change-condition control runs were contaminated too; the two clean ones raised one finding between them.
 
+A second leak was found while rerunning (#392): Claude Code also loads every ancestor's `CLAUDE.md`, and every
+study workspace sat under the operator's home, so **every** arm B run carried the operator's 754-line
+`~/.claude/CLAUDE.md` (tooling and git-workflow instructions), not only the 11 that showed it. Arm A's reviewers did
+not. This plausibly accounts for part of arm B's higher cost as well. Fixed in #393.
+
 What this changes: the registered verdict above is kept as computed, but **it does not measure the method**: arm B
 was handicapped by a bench defect arm A did not have. The clean subset is not a valid replacement either: which
 runs loaded the skill was the agent's choice, not random, so a rate over the clean runs is post hoc. The bench is
