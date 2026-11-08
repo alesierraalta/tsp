@@ -9,20 +9,50 @@ import (
 	"github.com/alesierraalta/tsp/internal/state"
 )
 
-func TestAllReturnsOneOptInFeature(t *testing.T) {
+func TestAllDeclaresBothFeaturesWithTheirDefaults(t *testing.T) {
 	features := All()
-	if len(features) != 1 {
-		t.Fatalf("All returned %d features, want 1", len(features))
+	if len(features) != 2 {
+		t.Fatalf("All returned %d features, want 2", len(features))
 	}
-	feature := features[0]
-	if feature.ID != "feedback" || feature.Title != "Feedback" || feature.Default {
-		t.Fatalf("feature = %+v, want feedback with opt-in default", feature)
+	feedback := features[0]
+	if feedback.ID != "feedback" || feedback.Title != "Feedback" || feedback.Default {
+		t.Fatalf("feature = %+v, want feedback with opt-in default", feedback)
 	}
-	if feature.Prompt != "¿Quieres activar el feedback para ayudar a mejorar la herramienta?" {
-		t.Fatalf("prompt = %q", feature.Prompt)
+	if feedback.Prompt != "¿Quieres activar el feedback para ayudar a mejorar la herramienta?" {
+		t.Fatalf("prompt = %q", feedback.Prompt)
 	}
-	if !strings.Contains(feature.Help, "anonymized") || !strings.Contains(feature.Help, "two local files") {
-		t.Fatalf("help = %q, want anonymization and local-file safety", feature.Help)
+	if !strings.Contains(feedback.Help, "anonymized") || !strings.Contains(feedback.Help, "two local files") {
+		t.Fatalf("help = %q, want anonymization and local-file safety", feedback.Help)
+	}
+	autoRun := features[1]
+	if autoRun.ID != "auto-run" || autoRun.Title != "Automatic TSP run" || !autoRun.Default {
+		t.Fatalf("feature = %+v, want auto-run on by default so an existing session keeps behaving as before", autoRun)
+	}
+	if autoRun.Prompt == "" || autoRun.Help == "" || autoRun.Preview == "" {
+		t.Fatalf("auto-run is missing its prompt, help or preview: %+v", autoRun)
+	}
+}
+
+func TestAutoRunIsOnWithoutAnEntryAndOffAfterSet(t *testing.T) {
+	t.Setenv("TPP_HOME", t.TempDir())
+
+	enabled, err := Enabled("auto-run")
+	if err != nil {
+		t.Fatalf("Enabled: %v", err)
+	}
+	if !enabled {
+		t.Fatal("auto-run is off without a persisted entry, which would change the behaviour of every existing session")
+	}
+
+	if _, err := Set("auto-run", false); err != nil {
+		t.Fatalf("Set false: %v", err)
+	}
+	enabled, err = Enabled("auto-run")
+	if err != nil {
+		t.Fatalf("Enabled after false: %v", err)
+	}
+	if enabled {
+		t.Fatal("auto-run did not round-trip as disabled")
 	}
 }
 

@@ -112,6 +112,16 @@ commands:
            (--template | --file <path> | --summary | --pending | --mark-reviewed <token>)
   version  print the version
 
+  killmatrix  revert each production hunk the change added and report the hunks no test kills.
+           The instrument is pr-review's kill-matrix.py; the harness owns the scope, the exit code
+           and the JSON it reads back. It measures pytest suites only: it appends its own junit
+           flags to --test-cmd, so a Go, JS or Rust test command produces no report and exits 2.
+           Exit 0 every hunk killed, 1 uncovered hunks, 2 cannot run,
+           3 the matrix did not finish
+           (--base <ref>, --src <path> (repeatable), --test-cmd <cmd>, --tests <path>... (repeatable),
+           --timeout <sec>, --jobs <n>, --budget <min>, --json <path>, --instrument <path>,
+           --python <exe>).
+
   mutate   mutate the production source the change touched and report the mutants no test kills.
            The engine is external (gremlins for Go, mutmut for Python, Stryker for JavaScript);
            the harness owns the scope, the budget and the gate. Exit 0 no survivor at the threshold,
@@ -272,6 +282,8 @@ func main() {
 		os.Exit(runFindings(os.Args[2:]))
 	case "status":
 		os.Exit(runStatus(os.Args[2:]))
+	case "killmatrix":
+		os.Exit(runKillmatrix(os.Args[2:]))
 	case "update":
 		os.Exit(runUpdate(os.Args[2:]))
 	case "feature":
@@ -575,6 +587,7 @@ func runUpdate(args []string) int {
 	}
 	err = update.RunInstall(result.Latest, exec.LookPath, func(name string, argv ...string) error {
 		fmt.Printf("go found; running: GOBIN=%s %s\n", gobin, strings.Join(append([]string{name}, argv...), " "))
+		// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- the tool's own argv, from a release the update check validated
 		cmd := exec.Command(name, argv...)
 		cmd.Env = append(os.Environ(), "GOBIN="+gobin)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
@@ -1849,6 +1862,7 @@ const waitDelayAfterKill = 2 * time.Second
 // deadline is classified first, so a command killed by its own timeout is reported as a timeout and
 // never as a generic command failure.
 func runShell(ctx context.Context, dir, command string) (string, error) {
+	// pi-lens-ignore: go-command-injection -- running the operator's command is this function's purpose, and the dry run is the default
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = dir
 	processGroup(cmd)
@@ -1882,6 +1896,7 @@ func probeHook(command string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- the command is the one the host's own settings file wires
 	cmd := exec.CommandContext(ctx, fields[0], fields[1:]...)
 	cmd.Stdin = strings.NewReader("{}")
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
