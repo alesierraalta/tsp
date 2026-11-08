@@ -137,6 +137,13 @@ promise × class is, and step 6 says when it is complete.
    input, the operation has no state). A green suite is not evidence of coverage: it only says the
    tests you wrote pass. When a class is left unprobed, say so instead of calling the work done.
 
+6b. **Chaining: pin what another reviewer found.** When a reviewer produced findings (a native review,
+   another agent, a bug report), hand them to the plan and try to pin each with a test that fails now:
+   `tsp pin --findings <the review's findings file>` adds one row per finding, `tsp pin --record <id>
+   --test '<suite path> :: <test name>'` records the test and **runs it** — it is refused when the test
+   passes, so a pin is only a pin when it fails on this code — and `tsp pin --block <id> --reason` or
+   `--refute <id> --reason` says why one could not be pinned. Never report a pin you did not record.
+
 7. **Finish by writing the plan, then the short list.** The plan is the record a later reviewer and
    `tsp plan gaps` read, so it is written before the chat summary: `tsp plan init` when the
    repository has none (`--micro` for a single function), one `tsp plan add-finding` row per

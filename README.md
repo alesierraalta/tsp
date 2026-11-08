@@ -966,6 +966,9 @@ tsp plan check --pins        # also exit 1 for each settled row whose named test
 tsp plan check --replay      # run reproduction commands in the plan directory; passing commands are refused
 tsp plan check --replay --replay-timeout 30s # bound each reproduction (default 60s)
 tsp plan count --json        # {"findings":N,"evidence":M}: how much of the plan a run recorded
+tsp pin --findings review.json # one Pinning row per finding another reviewer produced
+tsp pin --record P1 --test 'x_test.go :: TestX'  # runs it; a test that passes pins nothing and is refused
+tsp pin --block P2 --reason 'needs a fixture this repository does not have'
 tsp plan check --base main    # also exit 1 for a finding that says introduced on a file the change does not touch
 tsp plan add-evidence ...    # write one Evidence ledger row; Digest and Mode stay for plan admit --record
 tsp plan add-finding ... --reproduction 'go test ./...' # optional single-line command that fails on the defect
