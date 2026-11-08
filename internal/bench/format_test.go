@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"github.com/alesierraalta/tsp/internal/citation"
 	"strings"
 	"testing"
 )
@@ -71,11 +72,11 @@ func TestFindingsWithoutAPathAreReported(t *testing.T) {
 
 // A decimal number is not a file. Reading "1.005" as a path made every row look located.
 func TestCitationsIgnoreNumbers(t *testing.T) {
-	got := citations("`formatCents` rounds `1.005 * 100` to 100.49999999999999 in src/ledger.js:11")
-	if len(got) != 1 || got[0].path != "src/ledger.js" || got[0].first != 11 {
+	got := citation.Extract("`formatCents` rounds `1.005 * 100` to 100.49999999999999 in src/ledger.js:11")
+	if len(got) != 1 || got[0].Path != "src/ledger.js" || got[0].First != 11 {
 		t.Fatalf("citations = %+v", got)
 	}
-	if c := citations("rounds 1.005 to 1.00"); len(c) != 0 {
+	if c := citation.Extract("rounds 1.005 to 1.00"); len(c) != 0 {
 		t.Fatalf("numbers read as paths: %+v", c)
 	}
 }

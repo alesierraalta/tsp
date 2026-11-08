@@ -173,7 +173,9 @@ bench adjudicate --run <results>/<case>/<run> [--plan <path>] (--show | --pendin
            to supply the verdicts about its own findings)
 plan init [--path <path>] [--force] [--micro]
           (--micro writes the micro skeleton: header, Findings and Evidence ledger, for one small function)
-plan check [--path <path>]
+plan check [--path <path>] [--report <file|->]
+           (--report: every production path:line the final report cites must be a Findings row; a defect
+            named only in the report is lost to every reader of the plan)
 plan gaps [--run <slug>] [--all] [--path <path>]
 plan upgrade [--run <slug>] [--path <path>]
 plan export [--path <path>] [--commit <sha>]
@@ -1517,6 +1519,7 @@ func runPlan(args []string) int {
 	admitCommand := fs.String("admit", "", "the one bare command plan admit runs for this row (add-evidence)")
 	inputs := fs.String("inputs", "", "inputs and parameters (add-evidence)")
 	observedText := fs.String("observed", "", "what was observed (add-evidence)")
+	report := fs.String("report", "", "a final report to compare with the Findings table, or - for stdin (check only): every production path:line it cites must be a Findings row")
 	normalize := fs.String("normalize", "", "Go regexp for the part of the output that moves, such as a time (add-evidence)")
 	mutate := fs.String("mutate", "", "falsifiability claim: '<old> => <new> @ <path>:<line>' (add-evidence)")
 	expect := fs.String("expect", "", "pass (default) or fail for a test observed red (add-evidence)")
@@ -1651,6 +1654,14 @@ func runPlan(args []string) int {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "plan check:", err)
 			return 1
+		}
+		if *report != "" {
+			unrecorded, err := unrecordedReportCitations(effectivePath, *report)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "plan check:", err)
+				return 1
+			}
+			problems = append(problems, unrecorded...)
 		}
 		if len(problems) == 0 {
 			fmt.Printf("%s: well formed\n", effectivePath)
@@ -2774,4 +2785,28 @@ func parseGateArgs(args []string) (bench.Gate, string, error) {
 		return gate, "", errors.New("needs a results directory: [--baseline <dir>] [--min-recall <f>] [--max-regression <f>] [--max-cost-usd <f>] [--skill-versions] <results>")
 	}
 	return gate, results, nil
+}
+
+// unrecordedReportCitations reads the report (a file, or - for stdin) and the plan, and names every production
+// path:line the report cites that no Findings row records.
+func unrecordedReportCitations(planPath, reportPath string) ([]string, error) {
+	var data []byte
+	var err error
+	if reportPath == "-" {
+		data, err = io.ReadAll(os.Stdin)
+	} else {
+		data, err = os.ReadFile(reportPath)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read report: %w", err)
+	}
+	planText, err := os.ReadFile(planPath)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, c := range plan.UnrecordedCitations(string(planText), string(data)) {
+		out = append(out, fmt.Sprintf("report cites %s:%d, which no Findings row records: add it with tsp plan add-finding or drop it from the report", c.Path, c.First))
+	}
+	return out, nil
 }
