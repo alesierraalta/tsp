@@ -125,3 +125,41 @@ func TestPlanCountReportsTheRowsARunRecorded(t *testing.T) {
 		t.Fatalf("human count = %d %q", code, human)
 	}
 }
+
+// A row that says its defect came with the change must cite a file the change touches: a defect on an untouched
+// file was already there, and claiming otherwise blocks a merge for something this change did not do (#402).
+func TestPlanCheckBaseRefusesAnIntroducedFindingOnAnUntouchedFile(t *testing.T) {
+	bin := buildCLI(t)
+	dir := pinRepo(t)
+	if out, err := exec.Command("git", "-C", dir, "branch", "-m", "main").CombinedOutput(); err != nil {
+		t.Fatalf("branch main: %v %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", dir, "checkout", "-q", "-b", "change").CombinedOutput(); err != nil {
+		t.Fatalf("branch: %v %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "calc/calc.go"), []byte("package calc\n\nfunc Add(a, b int) int { return a + b }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "fix").CombinedOutput(); err != nil {
+		t.Fatalf("commit: %v %s", err, out)
+	}
+	plan := filepath.Join(dir, "plan.md")
+	if out, code := runCLI(t, bin, "plan", "add-evidence", "--path", plan, "--claim", "c", "--executed", "e", "--admit", "go test ./calc", "--inputs", "i", "--observed", "o", "--label", "observado"); code != 0 {
+		t.Fatalf("add-evidence = %d %s", code, out)
+	}
+	add := func(location, causality string) {
+		if out, code := runCLI(t, bin, "plan", "add-finding", "--path", plan, "--location", location, "--severity", "silently wrong answer",
+			"--data-safe", "yes", "--evidence", "E1", "--status", "open", "--verdict-by", "t / 2026-11-08", "--reason", "r", "--causality", causality); code != 0 {
+			t.Fatalf("add-finding %s = %d %s", location, code, out)
+		}
+	}
+	add("calc/calc.go:3", "introduced")
+	if out, code := runCLI(t, bin, "plan", "check", "--path", plan, "--base", "main"); code != 0 {
+		t.Fatalf("a finding on a touched file passes: %d %s", code, out)
+	}
+	add("calc/other.go:9", "introduced")
+	out, code := runCLI(t, bin, "plan", "check", "--path", plan, "--base", "main")
+	if code != 1 || !strings.Contains(out, "is not touched by the change against main") {
+		t.Fatalf("an untouched file must be refused: %d %s", code, out)
+	}
+}

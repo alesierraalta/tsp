@@ -15,6 +15,7 @@ import (
 	"github.com/alesierraalta/tsp/internal/bench"
 	"github.com/alesierraalta/tsp/internal/buildinfo"
 	"github.com/alesierraalta/tsp/internal/check"
+	"github.com/alesierraalta/tsp/internal/citation"
 	"github.com/alesierraalta/tsp/internal/doctor"
 	"github.com/alesierraalta/tsp/internal/evidence"
 	"github.com/alesierraalta/tsp/internal/feature"
@@ -186,7 +187,8 @@ plan init [--path <path>] [--force] [--micro]
           (--micro writes the micro skeleton: header, Findings and Evidence ledger, for one small function)
 plan count [--path <path>] [--json]
            (prints {"findings":N,"evidence":M} for the plan: how much of it a run recorded)
-plan check [--path <path>] [--report <file|->] [--pins]
+plan check [--path <path>] [--report <file|->] [--pins] [--base <ref>]
+           (--base: a row that says introduced must cite a file the change against <ref> touches)
            (--pins: run the test each settled Findings row names as its witness; a witness that
             passes on this code pins nothing, so the row is refused)
            (--report: every production path:line the final report cites must be a Findings row; a defect
@@ -1532,6 +1534,7 @@ func runPlan(args []string) int {
 	verdictBy := fs.String("verdict-by", "", "who settled it and when (add-finding)")
 	reason := fs.String("reason", "", "why the verdict stands (add-finding)")
 	fingerprint := fs.String("fingerprint", "", "cited-files fingerprint at verdict, default - (add-finding)")
+	causality := fs.String("causality", "", "whether the defect came with the change: introduced, pre-existing, or unknown, the default (add-finding)")
 	claim := fs.String("claim", "", "what the observation establishes (add-evidence)")
 	executed := fs.String("executed", "", "what was executed, as prose a human reads (add-evidence)")
 	admitCommand := fs.String("admit", "", "the one bare command plan admit runs for this row (add-evidence)")
@@ -1539,6 +1542,7 @@ func runPlan(args []string) int {
 	observedText := fs.String("observed", "", "what was observed (add-evidence)")
 	report := fs.String("report", "", "a final report to compare with the Findings table, or - for stdin (check only): every production path:line it cites must be a Findings row")
 	jsonOut := fs.Bool("json", false, "machine-readable output (count only)")
+	baseRef := fs.String("base", "", "check only: a finding that says introduced must cite a file this change against <ref> touches")
 	pins := fs.Bool("pins", false, "run the test each settled Findings row names as its witness (check only): a witness that passes on this code pins nothing and is refused")
 	normalize := fs.String("normalize", "", "Go regexp for the part of the output that moves, such as a time (add-evidence)")
 	mutate := fs.String("mutate", "", "falsifiability claim: '<old> => <new> @ <path>:<line>' (add-evidence)")
@@ -1686,6 +1690,9 @@ func runPlan(args []string) int {
 		if *pins {
 			problems = append(problems, pinProblems(effectivePath)...)
 		}
+		if *baseRef != "" {
+			problems = append(problems, causalityProblems(effectivePath, *baseRef)...)
+		}
 		if len(problems) == 0 {
 			fmt.Printf("%s: well formed\n", effectivePath)
 			return 0
@@ -1731,7 +1738,7 @@ func runPlan(args []string) int {
 		line, rowID, err := plan.AddFindingID(effectivePath, plan.Finding{
 			ID: *id, Location: *location, Severity: *severity, DataSafe: *dataSafe,
 			Evidence: *evidence, Test: *test, Status: *status, VerdictBy: *verdictBy,
-			Reason: *reason, Fingerprint: *fingerprint,
+			Reason: *reason, Fingerprint: *fingerprint, Causality: *causality,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "plan add-finding:", err)
@@ -2933,4 +2940,51 @@ func witnessCommand(root, cell string) ([]string, error) {
 		return []string{"node", "--test", "--test-name-pattern", name, path}, nil
 	}
 	return nil, fmt.Errorf("no known runner for %s", filepath.Ext(path))
+}
+
+// causalityProblems reads every row that claims its defect came with the change and refuses the one whose file the
+// change does not touch: a defect on an untouched file was already there, and calling it introduced blocks a merge
+// for something this change did not do (#402).
+func causalityProblems(planPath, base string) []string {
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		return []string{"read the plan: " + err.Error()}
+	}
+	header, rows := plan.Table(string(data), "Findings")
+	causalityCol, findCol := findingsColumn(header, "causality"), findingsColumn(header, "finding")
+	if causalityCol < 0 || findCol < 0 {
+		return nil
+	}
+	root := filepath.Dir(planPath)
+	out, err := exec.Command("git", "-C", root, "diff", "--name-only", base+"...HEAD").Output()
+	if err != nil {
+		return []string{fmt.Sprintf("--base %s: the change could not be read: %v", base, err)}
+	}
+	touched := string(out)
+	var problems []string
+	for _, r := range rows {
+		if len(r) <= causalityCol || len(r) <= findCol {
+			continue
+		}
+		if !strings.EqualFold(strings.Trim(strings.TrimSpace(r[causalityCol]), "`"), "introduced") {
+			continue
+		}
+		id := strings.Trim(strings.TrimSpace(r[0]), "`")
+		cites := citation.Extract(r[findCol])
+		if len(cites) == 0 {
+			continue
+		}
+		file := cites[0].Path
+		found := false
+		for _, line := range strings.Split(touched, "\n") {
+			if citation.SamePath(strings.TrimSpace(line), file) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			problems = append(problems, fmt.Sprintf("finding %s says introduced, but %s is not touched by the change against %s: a defect on an untouched file was already there", id, file, base))
+		}
+	}
+	return problems
 }

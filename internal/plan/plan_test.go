@@ -117,8 +117,8 @@ func TestCheckAcceptsACompliantPlan(t *testing.T) {
 	}
 	body, _ := os.ReadFile(p)
 	plan := replaceFixture(t, string(body), "the Findings header",
-		"| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict |\n|---|---|---|---|---|---|---|---|---|---|\n",
-		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a quoted comma | fixed | me / 2026-09-10 | - | abc1234 |\n")
+		"| Id | Finding (path:line, one line) | Severity (consequence class) | Data safe? | Evidence id | Pinning test (suite path :: test name) | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict | Causality (`introduced` / `pre-existing` / `unknown`) |\n|---|---|---|---|---|---|---|---|---|---|---|\n",
+		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a quoted comma | fixed | me / 2026-09-10 | - | abc1234 | introduced |\n")
 	plan = replaceFixture(t, plan, "the Evidence ledger header",
 		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Expect | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
 		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | | | | | reverted → red | same input | observado |\n")
@@ -1780,5 +1780,41 @@ func TestLedgerResolvesTheExpectColumnByName(t *testing.T) {
 	rows := Ledger(doc)
 	if len(rows) != 1 || rows[0].Expect != "fail" || rows[0].Executed != "prose" || rows[0].Mutation != "m" {
 		t.Fatalf("ledger = %#v, want the Expect cell read as its own column", rows)
+	}
+}
+
+// A row may say whether its defect was introduced by the change or was already there, which is what decides a
+// merge; the cell is optional and its vocabulary is closed (#402).
+func TestCheckReadsAnOptionalCausalityCell(t *testing.T) {
+	planWith := func(cell string) []string {
+		p := filepath.Join(t.TempDir(), "plan.md")
+		body := "# Test plan\n\n## Findings\n\n" +
+			"| Id | Finding (path:line, one line) | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Cited-files fingerprint at verdict | Causality |\n" +
+			"|---|---|---|---|---|---|---|---|---|---|---|\n" +
+			"| F1 | internal/x/x.go:10 a defect | high | yes | - | - | open | - | - | - | " + cell + " |\n\n## Evidence ledger\n"
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		problems, err := Check(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return problems
+	}
+	for _, ok := range []string{"introduced", "pre-existing", "unknown", "-", ""} {
+		for _, problem := range planWith(ok) {
+			if strings.Contains(problem, "causality must be") {
+				t.Errorf("causality %q refused: %s", ok, problem)
+			}
+		}
+	}
+	var breach bool
+	for _, problem := range planWith("maybe") {
+		if strings.Contains(problem, "causality must be introduced, pre-existing, or unknown") {
+			breach = true
+		}
+	}
+	if !breach {
+		t.Fatalf("an unknown causality value must be refused: %v", planWith("maybe"))
 	}
 }

@@ -4,7 +4,7 @@ description: "Trigger: haz el TSP, haz TSP, TSP, haz test stragety, haz test str
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.7.19"
+  version: "0.7.20"
   requires_tsp: "0.8.0"
   requires_tpp: "0.5.1"
   scope: [common]
@@ -151,3 +151,6 @@ promise × class is, and step 6 says when it is complete.
    for stdin); fix every citation it names by adding the row or removing it from the report.
    A row that names a `Pinning test` claims that test fails on this code: `tsp plan check --pins`
    runs each one and refuses a row whose test passes, because a witness that passes pins nothing.
+   On a change, say whether each defect came with it: `--causality introduced` for a line this work
+   changed, `pre-existing` for one already there, and `tsp plan check --base <ref>` refuses an
+   `introduced` finding whose file the change does not touch.
