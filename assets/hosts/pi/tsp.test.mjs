@@ -18,6 +18,7 @@ import tppExtension, {
   buildArgv,
   childEnv,
   runTppCommand,
+  planFindingCount,
   isSourcePath,
   cwdPath,
   repoProbe as gitProbe,
@@ -211,6 +212,7 @@ function offerHarness(opts = {}) {
     const fallback = argv[0] === "feedback" ? feedback ?? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
     const outcome = argv[0] === "check" && argv[1] === "--cwd"
       ? (typeof check === "function" ? check(calls.length) : check)
+      : argv[0] === "plan" && argv[1] === "count" ? opts.planCount ?? { stdout: '{"findings":1,"evidence":1}\n', stderr: "", code: 0 }
       : argv[0] === "status" ? status ?? fallback
       : findings[argv[1]] ?? fallback;
     if (outcome instanceof Error) throw outcome;
@@ -1159,4 +1161,26 @@ test("an unreadable status keeps the automatic run, so a broken status call neve
   await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
   assert.deepEqual(h.asked, [], "nothing is asked: the shipped behaviour is preserved");
   assert.deepEqual(h.sent, ["haz el TSP"]);
+});
+
+// The extension asks the plan how much a run recorded, and the answer decides whether the run is told to record (#398).
+test("the plan's finding count is read, and an unreadable answer means it cannot say", async () => {
+  const ok = async () => ({ stdout: '{"findings":0,"evidence":2}\n', stderr: "", code: 0 });
+  assert.equal(await planFindingCount("/repo", {}, ok), 0);
+  const failed = async () => ({ stdout: "", stderr: "plan count: no plan", code: 1 });
+  assert.equal(await planFindingCount("/repo", {}, failed), undefined);
+  const thrown = async () => { throw new Error("spawn tsp ENOENT"); };
+  assert.equal(await planFindingCount("/repo", {}, thrown), undefined);
+});
+
+// A TSP run that wrote a test and recorded no finding is asked once to record it, in a turn of its own.
+test("a run that pinned a test and recorded nothing is asked to record it, once", async () => {
+  const h = offerHarness({ planCount: { stdout: '{"findings":0,"evidence":0}\n', stderr: "", code: 0 }, feedback: "disabled" });
+  await h.run("haz el TSP", [["write", "src/add.test.js"]]);
+  const asked = h.sent.filter((m) => m.includes("tsp plan add-finding"));
+  assert.equal(asked.length, 1, `sent: ${JSON.stringify(h.sent)}`);
+  assert.ok(h.notes.some((n) => /recorded no finding/.test(n.message)), "the operator is told why");
+  const quiet = offerHarness({ planCount: { stdout: '{"findings":0,"evidence":0}\n', stderr: "", code: 0 }, feedback: "disabled" });
+  await quiet.run("haz el TSP", [["write", "src/add.js"]]);
+  assert.equal(quiet.sent.filter((m) => m.includes("tsp plan add-finding")).length, 0, "no test changed, nothing to record");
 });
