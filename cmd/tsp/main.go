@@ -2048,6 +2048,7 @@ func runBenchRun(args []string) int {
 	runs := fs.Int("runs", 1, "runs per case")
 	families := fs.String("families", "", "comma-separated failure families to run, aiming the budget at the kinds earlier readings missed (boundary, concurrency, contract, input-domain, numeric, performance, resilience-io, security, state-logic, time); empty runs every case")
 	emptyBase := fs.Bool("empty-base", false, "with --as-change, commit an empty base so the whole fixture is the change and a defect is found in the code rather than read off its own diff; a clean control always gets an empty base")
+	recordNudge := fs.Bool("record-nudge", false, "ask a run once to record what it found when it changed a test and the plan holds no finding: the plan is what every later reader sees (#398)")
 	asChange := fs.Bool("as-change", false, "present every case as a change: a base commit with the fixed code (fixture plus fix/all) and a candidate commit with the fixture, so a review arm and a test arm read the same repository; required by --runner gentle-review")
 	rounds := fs.Int("rounds", 1, "rounds per run: the agent runs again in the same workspace up to N times, every later round told the tests earlier rounds left failing on the unmodified code and asked for defects they do not cover; each round is recorded, and the provenance records the rounds")
 	sessions := fs.Int("sessions", 1, "independent review sessions per run; apply reference fixes for caught defects between sessions, retaining tests")
@@ -2223,7 +2224,7 @@ func runBenchRun(args []string) int {
 		return 2
 	}
 	_, code := bench.Run(bench.Options{
-		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, FixLoop: *fixLoop, AsChange: *asChange, EmptyBase: *emptyBase, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
+		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, FixLoop: *fixLoop, AsChange: *asChange, EmptyBase: *emptyBase, RecordNudge: *recordNudge, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
 		Families:     commaList(*families),
 		Prior:        prior,
 		Timeout:      *timeout,
