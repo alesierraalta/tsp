@@ -173,3 +173,8 @@ arm B case-runs of the first rerun attempt. RDD cannot run on Luna (gentle-ai re
 models are Claude's), so the rerun runs **arm B only**, in both conditions, with `--runner pi --model
 openai-codex/gpt-6-luna` on a binary from `main` at 3135e1b. It is reported as an exploratory arm with no verdict
 against arm A; the registered comparison needs the Claude session and is not made here.
+
+**D7 (2026-11-08, TSP only).** A third run of the TSP arm, on `openai-codex/gpt-6-luna`, with the runner-side
+record nudge (#398, `--record-nudge`): one follow-up asking the run to record what it found when it changed a test
+and the plan held no finding. Same 22 cases, two controls, 3 runs, same analysis; no RDD arm (Claude-only). Its
+result appears in the report as "Addendum 2" and is not a verdict against arm A.

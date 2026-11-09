@@ -124,6 +124,9 @@ type Options struct {
 	// AsChange presents every case as a change: a base commit with the fixed code and a candidate commit with the
 	// fixture, so an arm that reviews a diff and an arm that writes tests read the same repository.
 	AsChange bool
+	// RecordNudge, when set, asks a run once to record what it found when it changed a test and the plan holds no
+	// finding: the plan is what every later reader sees, so a finding that lives only in the chat is lost (#398).
+	RecordNudge bool
 	// EmptyBase, with AsChange, commits a base with no files, so the whole fixture is the change and a defect has to be
 	// found in the code rather than read off a diff of its own.
 	EmptyBase bool
@@ -772,6 +775,17 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		}
 		res.Notes = append(res.Notes, res.FailReason)
 		return finish(res, opts, true)
+	}
+	if opts.RecordNudge && !res.Failed && needsRecordNudge(ws) {
+		// One follow-up, in the same workspace, tells the run what the plan is missing and nothing else: the same
+		// instruction the host gives at settle, moved into the runner so a measurement can see its effect.
+		notes := runOpts
+		notes.Followup = RecordInstruction
+		before := res.Turns
+		if ar2, more := runAgent(ws, key, notes, opts, &res, attempts); !res.Failed {
+			ar, attempts = ar2, more
+			res.Notes = append(res.Notes, fmt.Sprintf("record nudge: the plan held no finding after %d turn(s), so the run was asked once to record what it found", before))
+		}
 	}
 	if opts.EscalateModel != "" && !pinsADefect(ws, opts.SuiteTimeout) {
 		// The first run left no new test failing on the unmodified code, so it pinned nothing: the case runs again
