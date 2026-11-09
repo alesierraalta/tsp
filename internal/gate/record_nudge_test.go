@@ -220,3 +220,47 @@ func TestRunBlocksTheStopOnceAndAcceptsTheNextSettle(t *testing.T) {
 		t.Fatalf("log rows = %s, want the accepted settle recorded", row)
 	}
 }
+
+// The nudge is about this session's plan, and a session's binding is per repository: bindingPath
+// hashes root and session together so two worktrees never share one. The marker that remembers the
+// ask has to follow the same scope, or one repository's ask silences the next one's debt (#425).
+func TestDecideAsksEachRepositoryOnce(t *testing.T) {
+	dir := t.TempDir()
+	asked := func(root string) Result {
+		repo := &fakeRepo{root: root, plan: planWithOneFinding, status: porcelain(),
+			transcript: stamped(auditStart,
+				`{"name":"Skill","input":{"skill":"tsp"}}`,
+				`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"`+root+`/src/other_test.go"}}]}}`)}
+		deps := repo.deps(auditNow)
+		deps.BindingDir = dir
+		storedBinding(t, dir, "sess-1", root, plan.DefaultPath, "run-t1")
+		return Decide(Input{SessionID: "sess-1", TranscriptPath: "t"}, deps)
+	}
+	if first := asked("/repo-a"); !first.Block {
+		t.Fatalf("the first repository was not asked: %#v", first)
+	}
+	if second := asked("/repo-b"); !second.Block {
+		t.Fatalf("a second repository was never asked: the marker is keyed by session alone, so one ask silences the other's debt")
+	}
+	if again := asked("/repo-a"); again.Block {
+		t.Fatalf("the first repository was asked twice: %#v", again)
+	}
+}
+
+// A marker that cannot be written leaves the session with no memory of the ask, and a hook that
+// refused every stop would nag until the host overrides it. No state, no refusal (#425).
+func TestDecideNeverRefusesWithoutAMarkerDirectory(t *testing.T) {
+	t.Setenv(BindingEnv, `{"session_id":"sess-1","root":"/repo","planPath":"`+plan.DefaultPath+`","run":"run-t1"}`)
+	repo := &fakeRepo{root: "/repo", plan: planWithOneFinding, status: porcelain(),
+		transcript: stamped(auditStart,
+			`{"name":"Skill","input":{"skill":"tsp"}}`,
+			`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/repo/src/other_test.go"}}]}}`)}
+	deps := repo.deps(auditNow)
+	deps.BindingDir = ""
+	for i := 0; i < 2; i++ {
+		res := Decide(Input{SessionID: "sess-1", TranscriptPath: "t"}, deps)
+		if res.Block {
+			t.Fatalf("stop %d was refused with no marker directory: a once-per-session ask has no state to keep it once", i+1)
+		}
+	}
+}
