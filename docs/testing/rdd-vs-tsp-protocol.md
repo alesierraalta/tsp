@@ -173,3 +173,8 @@ arm B case-runs of the first rerun attempt. RDD cannot run on Luna (gentle-ai re
 models are Claude's), so the rerun runs **arm B only**, in both conditions, with `--runner pi --model
 openai-codex/gpt-6-luna` on a binary from `main` at 3135e1b. It is reported as an exploratory arm with no verdict
 against arm A; the registered comparison needs the Claude session and is not made here.
+
+**D8 (2026-11-08, reviewer arm).** A new arm (#410) reviews the change on the same model as TSP and is scored by
+the same matcher, replacing the Claude-only RDD arm for this measurement. Same cases, controls, 3 runs,
+`openai-codex/gpt-6-luna`, change condition only; its result is "Addendum 3" and is a comparison of roles
+(reviewing versus pinning), not of RDD's four lenses, which still cannot run without Claude (#411).

@@ -205,3 +205,37 @@ That is the same failure #384 addressed, one layer deeper: `tsp plan check --rep
 unrecorded defect, but a model that writes no plan at all still exits clean, because the skill's instruction is
 prose to it. Closing it for good means enforcing the plan at the runner (the bench, and the Stop hook where the
 host has one) rather than asking the model, which is what #385 and #386 now need.
+
+## Addendum 3 (2026-11-08): reviewing versus pinning, on one model, without Claude
+
+RDD's reviewers run inside Claude Code, so the registered comparison needed an account this project no longer had.
+The reviewer arm of #410 removes that dependency: Pi asks the change for findings and the same matcher scores them.
+Same model (`openai-codex/gpt-6-luna`), same 22 cases and 2 controls, 3 runs each, `--as-change`.
+
+| Change condition, one model | Reviewer (#410) | TSP with the record nudge |
+|---|---|---|
+| Valid case-runs | 71 (one case ran twice) | 72 |
+| Detected (runs) | 56/65 (**0.862**) | 50/66 (0.758) |
+| Detected (cases, any run) | **22/22** | 20/22 |
+| Pinned by a test | 0 | **51/66 (0.773)** |
+| False positives per control run | 0.00 | 0.00 |
+| Seconds per case-run | **24** | 96 |
+| Cost per case-run | not reported by the provider | US$0.0076 |
+
+Cases only the reviewer found: h06 (`ent` pattern escaping) and r27 (esbuild mangle labels). Cases only TSP found:
+none. So at case level the reviewer's detections are a superset here, and at run level TSP is the only arm that
+leaves a guard behind.
+
+**What this says.** On one model and one corpus, **reviewing finds more and finds it faster; pinning is what TSP
+adds**. That reproduces the role split the Haiku study suggested, without a Claude session anywhere:
+
+- For "is there a defect in this change?", the reviewer arm is the better and cheaper instrument (0.862 vs 0.758,
+  24 s vs 96 s).
+- For "is it guarded from now on?", only TSP answers: 51 of 66 runs left a test that fails on the defect.
+- Neither substitutes the other, and the union at case level is the reviewer's set, so nothing was lost by
+  running TSP as the second step rather than the first.
+
+**Limits.** Pi reports no cost or turns for this provider, so the reviewer arm's price is unknown beyond wall time.
+One case (h10) has two runs instead of three. The reviewer's prompt is one instruction, not RDD's four lenses, so
+this measures "a reviewer", not RDD's exact configuration — #411 is the way to put gentle-ai's own lenses on a
+non-Claude model.
