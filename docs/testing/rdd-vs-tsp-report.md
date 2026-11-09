@@ -276,3 +276,37 @@ adds**. That reproduces the role split the Haiku study suggested, without a Clau
 One case (h10) has two runs instead of three. The reviewer's prompt is one instruction, not RDD's four lenses, so
 this measures "a reviewer", not RDD's exact configuration — #411 is the way to put gentle-ai's own lenses on a
 non-Claude model.
+
+## Addendum 4 (2026-11-09): the registered comparison, completed on Haiku
+
+Deviation D9. Arm B was rerun from scratch on `haiku`, both conditions, 22 cases and 2 controls, 3 runs, with a
+`tsp` binary from a clean `main` at 6d62dee and no `--record-nudge`. Arm A is the first study's 72 change-condition
+runs, reused as D4.2 registered. The analysis read 66 defect case-runs and 6 control runs and excluded none.
+
+| Measure | A, RDD | B, TSP |
+|---|---|---|
+| Detected | 1.000 [1.000, 1.000] | 0.985 [0.955, 1.000] |
+| Union | 1.000 [1.000, 1.000] | |
+| A − B | 0.015 [0.000, 0.045] | |
+| Union − max(A,B) | 0.000 [0.000, 0.000] | |
+| Pinned | — | 64/66 (evidence-backed 65/66) |
+| False positives per control run | 6.833 | 0.500 |
+| Cost per case-run | US$0.015 | US$0.037 |
+| Seconds per case-run | 102.1 | 168.8 |
+
+One case-run was detected only by A and none only by B.
+
+**Verdict, by the rule fixed before the run: equivalent at this sample size.** The interval of A − B includes 0, so
+the rule cannot name one arm better, and the union adds nothing over the best arm, so the arms are not
+complementary. With 22 cases and a ceiling this close to 1, the data does not separate them.
+
+**What separates them is not detection.** On the two clean controls — changes with no defect — arm A raised 6.8
+findings per run and arm B 0.5, so a reader of RDD's output pays for about fourteen times the noise on a clean
+change. And arm B left a test that fails on the defect in 64 of 66 runs, which no review can give: the defect is
+guarded afterwards. For the same detection, TSP cost 2.5 times as much and took 1.65 times as long.
+
+**Incidents during the rerun, none of which changed a measure.** The machine rebooted mid-rerun; a relaunch from
+cron inherited a PATH without the `claude` binary and 98 case-runs failed before reaching a model. They were
+deleted and re-run, and the analysis above excludes nothing. The account's five-hour limit stopped the rerun once;
+it was paused and resumed, and the runs it interrupted were discarded and repeated. The first analysis printed
+after the reboot, over 8 cases, is not a result.
