@@ -1038,6 +1038,44 @@ test("state an older version wrote, or that is corrupted, is ignored without an 
   }
 });
 
+// The recording notice is owed once per branch, not once per session (#398): its marker rides the session state
+// with `ran` and `declined`, so the rebuild a reload, a resume or a fork performs finds it already set.
+const RECORD_NOTICE = "tsp plan add-finding";
+const owingPlan = { stdout: '{"findings":0,"evidence":0}\n', stderr: "", code: 0 };
+const records = (sent) => sent.filter((m) => m.includes(RECORD_NOTICE)).length;
+
+test("the recording notice is not asked a second time after a reload", async () => {
+  const entries = [];
+  const first = offerHarness({ entries, planCount: owingPlan });
+  await first.run("haz el TSP", [["write", "src/add.test.js"]]);
+  assert.equal(records(first.sent), 1, "the first run is asked to record what it pinned");
+  const resumed = offerHarness({ entries, planCount: owingPlan });
+  await resumed.start("resume");
+  await resumed.run("haz el TSP", [["write", "src/other.test.js"]]);
+  assert.equal(records(resumed.sent), 0, "a notice already sent on this branch is not sent again after the reload");
+  assert.equal(tspState(entries).recordNudged, true, "the branch records that the notice went out");
+});
+
+test("state written before the marker existed still loads, and its run is asked to record", async () => {
+  // The exact shape an older version wrote: the field it never knew is absent, not false.
+  const entries = [{ type: "custom", customType: "tsp-state", data: { declined: [], lastFix: "", pending: "", ran: true } }];
+  const h = offerHarness({ entries, planCount: owingPlan });
+  await h.start("resume");
+  await h.run("haz el TSP", [["write", "src/add.test.js"]]);
+  assert.equal(records(h.sent), 1, "a branch from an older version owes the notice like any other");
+  assert.equal(tspState(entries).recordNudged, true, "the marker is written from then on");
+});
+
+test("a marker that is not a boolean is ignored, so a broken write never silences the notice", async () => {
+  for (const recordNudged of ["yes", 1, null, {}, [true]]) {
+    const entries = [{ type: "custom", customType: "tsp-state", data: { ran: true, recordNudged } }];
+    const h = offerHarness({ entries, planCount: owingPlan });
+    await h.start("resume");
+    await h.run("haz el TSP", [["write", "src/add.test.js"]]);
+    assert.equal(records(h.sent), 1, `recordNudged ${JSON.stringify(recordNudged)} is not a marker, and is not obeyed`);
+  }
+});
+
 // A session without a UI cannot answer the question, so the repository's own requirement has to reach the agent
 // through the actionable boundary: one continuation per turn, never in a child, never after the branch's run.
 test("a session without UI runs a required TSP through one continuation and stays silent for ask and none", async () => {
