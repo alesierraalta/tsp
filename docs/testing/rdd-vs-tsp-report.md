@@ -206,6 +206,43 @@ unrecorded defect, but a model that writes no plan at all still exits clean, bec
 prose to it. Closing it for good means enforcing the plan at the runner (the bench, and the Stop hook where the
 host has one) rather than asking the model, which is what #385 and #386 now need.
 
+## Addendum 2 (2026-11-08): enforcing the record closes the detection gap
+
+After the Luna arm above, the question was whether its 0.045 detection was a finding failure or a recording failure.
+Two measurements on `openai-codex/gpt-6-luna`, same cases and analysis, no Claude anywhere:
+
+**Paired probe** (4 cases × 3 runs, h04, r17, r37, r05), with `--record-nudge`: one follow-up asking the run to
+record what it found when it changed a test and the plan held no finding.
+
+| Probe | Detected | Pinned | Turns | US$/run |
+|---|---|---|---|---|
+| without the nudge | 0/12 | 12/12 | 10 | 0.0036 |
+| with the nudge | 9/12 | 12/12 | 17 | 0.0068 |
+
+**Full change condition** (22 cases + 2 controls × 3 runs = 72), before and after the nudge:
+
+| Change condition, TSP on Luna | Without the nudge | With the nudge |
+|---|---|---|
+| Valid case-runs | 72 | 72 |
+| Detected | 3/66 (0.045) | **50/66 (0.758)** |
+| Pinned by a test | 51/66 (0.773) | 51/66 (0.773) |
+| Runs that wrote no plan | 63/66 | 8/66 |
+| Findings rows per run | 0.0 | 0.9 |
+| False positives per control run | 0.00 | 0.00 |
+| Cost per case-run (US$) | 0.0038 | 0.0076 |
+| Turns per run | 10 | 17 |
+| Total spend (US$) | 0.27 | 0.55 |
+
+What this settles: the gap was **recording, not finding**. The same model, on the same cases, pinned the same
+defects, and only the instruction to write them into the plan moved detection from 4.5% to 75.8%. Prose in the
+skill and `tsp plan check --report` did not do it; a follow-up in the runner did. Cost and turns double, and one
+defect in five is still reported in the chat and not recorded (8 of 66 runs), which is what the host-side
+enforcement of #398 (the Claude Code Stop hook, still unbuilt) and the runner-side one now merged are for.
+
+**No RDD comparison follows from this.** RDD's reviewers run inside Claude Code, so no arm exists on this model;
+the registered Haiku comparison still needs that session, and #410 (a reviewer arm on any model) is the way to
+stop depending on it.
+
 ## Addendum 3 (2026-11-08): reviewing versus pinning, on one model, without Claude
 
 RDD's reviewers run inside Claude Code, so the registered comparison needed an account this project no longer had.

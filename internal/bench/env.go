@@ -129,7 +129,9 @@ func WriteNoneConfig(dir, runner, configFrom string) error {
 	switch runner {
 	case RunnerAgy:
 		return writeAgyConfig(dir, configFrom, false)
-	case RunnerPi:
+	case RunnerPi, RunnerReview:
+		// A reviewer runs on Pi's runtime with no skill: the arm measures reviewing, so it is set up like a bare Pi
+		// run and told apart only by its prompt (#410).
 		return writePiConfig(dir, configFrom, []string{})
 	case RunnerCodex:
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -140,7 +142,7 @@ func WriteNoneConfig(dir, runner, configFrom string) error {
 		}
 		return writeIsolatedHome(dir)
 	default:
-		return fmt.Errorf("runner %q has no bare configuration; use %s, %s or %s", runner, RunnerPi, RunnerCodex, RunnerAgy)
+		return fmt.Errorf("runner %q has no bare configuration; use %s, %s, %s or %s", runner, RunnerPi, RunnerCodex, RunnerAgy, RunnerReview)
 	}
 }
 
