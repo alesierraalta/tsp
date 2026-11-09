@@ -78,6 +78,12 @@ type Result struct {
 	PlanFound            bool            `json:"plan_found"`
 	PlanPath             string          `json:"plan_path,omitempty"` // workspace-relative path read, set only when a plan was found
 	PlanFormat           string          `json:"plan_format"`         // FormatTable, FormatProse or FormatEmpty
+	// RecordNudgeAsked records that the run changed a test and left the plan empty, so the runner asked it
+	// once to record what it found. A run that recorded on its own, or changed no test, is never asked.
+	RecordNudgeAsked bool `json:"record_nudge_asked,omitempty"`
+	// RecordedAfterNudge records that the plan held a finding after that ask. It is the only reading of the
+	// nudge's effect a result.json carries: without it, whether the run recovered lives only in prose notes.
+	RecordedAfterNudge bool `json:"recorded_after_nudge,omitempty"`
 	// LightActivated records that the run declared a scoped run its own plan validates. It is the only
 	// durable answer to "did the mode run?": a defect found, a well-formed ordinary plan, or a line that
 	// merely looks like a declaration leaves it false.

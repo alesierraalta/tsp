@@ -166,9 +166,21 @@ func emitWith(w io.Writer, reason, userLine string) {
 	_, _ = w.Write(bytes.TrimRight(buf.Bytes(), "\n"))
 }
 
+// emitBlock refuses the stop: Claude Code reads a top-level decision and its reason, sends the model
+// back once with it, and the exit code stays 0 — a host that cannot read this JSON ends the turn
+// instead of breaking it.
+func emitBlock(w io.Writer, reason string) {
+	payload := map[string]string{"decision": "block", "reason": reason}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(payload)
+	_, _ = w.Write(bytes.TrimRight(buf.Bytes(), "\n"))
+}
+
 // Run is the Stop hook: stdin payload → decision → log line → optional Stop feedback.
 // It always returns 0; an unreadable payload or an internal failure is silence, never a
-// broken turn.
+// broken turn. The one decision that refuses a stop rides the JSON, not the exit code.
 func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code int) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -202,6 +214,8 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 		appendEntry(logPath, res.Entry)
 	}
 	switch {
+	case res.Block:
+		emitBlock(stdout, res.BlockReason)
 	case res.Fire:
 		emit(stdout, res.Reason)
 	case res.Audit:

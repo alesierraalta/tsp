@@ -97,10 +97,13 @@ export function buildArgv(d: TppDispatch, cwd: string): string[] {
   }
 }
 
-/** Child env for one tpp process: the observation rides only an observed doctor child; base is copied, never mutated. */
+/**
+ * Child env for one tpp process: the observation rides an observed doctor or check child, the two that decide from it
+ * (check holds a Gentle session to the required gate, #418); base is copied, never mutated.
+ */
 export function childEnv(base: Readonly<Record<string, string | undefined>>, d: TppDispatch, gentleObserved: boolean): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...base };
-  if (gentleObserved && d.kind === "doctor") env[GENTLE_OBSERVATION_ENV] = GENTLE_OBSERVATION_VALUE;
+  if (gentleObserved && (d.kind === "doctor" || d.kind === "check")) env[GENTLE_OBSERVATION_ENV] = GENTLE_OBSERVATION_VALUE;
   return env;
 }
 
@@ -482,7 +485,7 @@ export function statusFor(decision: string | undefined, loop: LoopStatus | undef
 }
 
 /** What the offer remembers on the session branch: a reload, a resume or a fork rebuilds exactly this. */
-interface OfferState { declined: string[]; lastFix: string; pending: string; ran: boolean; own?: OwnMessage; loop?: LoopStatus }
+interface OfferState { declined: string[]; lastFix: string; pending: string; ran: boolean; recordNudged: boolean; own?: OwnMessage; loop?: LoopStatus }
 const STATE_TYPE = "tsp-state";
 
 /** What the loop sends the agent next ("" for nothing) and, for a fix answer, the tree and message that identify it. */
@@ -592,6 +595,8 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   const head = opts.head ?? headAt;
   const probe = opts.probe ?? repoProbe;
   const child = env.GENTLE_PI_AGENTS_CHILD === "1";
+  // Read at each check, not at load: gentle-pi may register its tools after this extension.
+  const checkEnv = () => childEnv(env, { kind: "check", rest: [] }, observesGentleSession(pi.getAllTools()));
   const edited = new Set<string>(); // source paths changed in the current run through the edit tools
   let opened: RepoSnapshot | undefined; // the working tree as this run found it, read only when the offer can fire
   const declined = new Set<string>(); // paths the user already said No to
@@ -606,16 +611,16 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   let lastFix = ""; // the fix answer the agent was last sent: the same one again after its fix run means it changed nothing
   let ran = false; // a TSP run already happened on this branch: one run per branch, never one per turn
   let continued = false;
-  let recordNudged = false; // the run that pinned a test was already asked to record it: once per session
+  let recordNudged = false; // the run that pinned a test was already asked to record it: once per branch, kept in the state like ran
   let pendingRecord = ""; // the recording notice waiting for a turn of its own (#398)
   let decision: string | undefined; // the debt the last check named, for the status line
   let loop: LoopStatus | undefined; // the loop the branch is in, for the status line
   // A user's message that merely starts like one of the extension's own is the user's: it never runs the loop.
   let own: OwnMessage | undefined;
   // The decisions live on the session branch, so a reload, a resume and a fork rebuild them instead of forgetting them.
-  const persist = () => pi.appendEntry(STATE_TYPE, { declined: [...declined], lastFix, pending, ran, own, loop } satisfies OfferState);
+  const persist = () => pi.appendEntry(STATE_TYPE, { declined: [...declined], lastFix, pending, ran, recordNudged, own, loop } satisfies OfferState);
   const restore = (ctx: { sessionManager?: { getBranch?: () => readonly unknown[] } }) => {
-    declined.clear(); lastFix = ""; pending = ""; ran = false; own = undefined; loop = undefined; decision = undefined;
+    declined.clear(); lastFix = ""; pending = ""; ran = false; recordNudged = false; own = undefined; loop = undefined; decision = undefined;
     try {
       let data: unknown;
       for (const entry of (ctx.sessionManager?.getBranch?.() ?? []) as { type?: unknown; customType?: unknown; data?: unknown }[]) {
@@ -626,6 +631,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       if (typeof s.lastFix === "string") lastFix = s.lastFix;
       if (typeof s.pending === "string") pending = s.pending;
       if (s.ran === true) ran = true;
+      if (s.recordNudged === true) recordNudged = true;
       const saved = s.loop as Partial<LoopStatus> | undefined;
       loop = saved !== null && typeof saved === "object" && typeof saved.next === "string" && ["fix", "tsp", "done", "stop", "error"].includes(saved.next)
         && [saved.round, saved.maxRounds, saved.open].every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0)
@@ -701,7 +707,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     if (ctx.hasUI || child || continued || ran || feedbackRun || fixRun || tspRun || optedOut(ctx.cwd)) return;
     const paths = collect(ctx.cwd);
     if (paths.length === 0) return;
-    const verdict = await checkVerdict(ctx.cwd, env, exec, paths, turnHead);
+    const verdict = await checkVerdict(ctx.cwd, checkEnv(), exec, paths, turnHead);
     if (verdict === undefined || verdict === "stale" || verdict.decision !== DECISION_REQUIRED) return;
     continued = true;
     return {
@@ -752,11 +758,12 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       lastFix = step.fix;
       persist();
       // The run that just ended may have pinned a defect and recorded nothing: the plan is what every later
-      // reader sees, so the session is asked once to record it (#398).
+      // reader sees, so the branch is asked once to record it, and the marker is written with the notice, before
+      // it goes out (#398).
       if (tspRun && !recordNudged) {
         const count = await planFindingCount(ctx.cwd, env, exec);
         const noticeText = count === undefined ? "" : unrecordedRunNotice(count, freshTests);
-        if (noticeText !== "") { recordNudged = true; pendingRecord = noticeText; }
+        if (noticeText !== "") { recordNudged = true; pendingRecord = noticeText; persist(); }
       }
       const request = tspRun && !feedbackGiven ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
       if (request !== "") { pending = step.message; persist(); send(request, "feedback"); return; }
@@ -776,7 +783,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     // The branch's run already happened; the check still answers ask (or required) until a round is booked, and
     // repeating the run every turn is exactly the loop #342 reports. A fresh session offers again.
     if (ran) return;
-    const verdict = await checkVerdict(ctx.cwd, env, exec, paths, turnHead);
+    const verdict = await checkVerdict(ctx.cwd, checkEnv(), exec, paths, turnHead);
     if (verdict === "stale") {
       decision = undefined; // a check that cannot answer names no debt
       // Once per session: an install that cannot answer is worth one sentence, not one per turn.

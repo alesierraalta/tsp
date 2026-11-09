@@ -240,8 +240,11 @@ flowchart TD
 ```
 
 Nothing fires from a file's mtime or another chat's worktree: without an explicit `tsp bind` for
-this session, the Stop sends no plan notice at all. It is a reminder, never an approval gate: every
-path exits 0, and each decision is one line in the telemetry log.
+this session, the Stop sends no plan notice at all. It is a reminder, never an approval gate, with
+one exception: a bound session that ran the discipline and edited a test file no Findings row
+records is sent back once, in the same session, to record it. That refusal rides the hook's JSON
+(`decision: "block"`), not its exit code, so every path still exits 0 and a host that cannot read
+the JSON ends the turn instead of breaking it. Each decision is one line in the telemetry log.
 
 ### Plan audits are opt-in, per session
 

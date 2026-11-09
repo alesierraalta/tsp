@@ -1,9 +1,9 @@
 {
-  "fingerprint": "sha256:0889ced23ffc34af41080fce62bfdc70dd71fbeb1dfea303486376446a7a354c",
+  "fingerprint": "sha256:cb491d3eea7aa5aac2048c4f3f441041679150bd1f02d74e9cc50225eec8e270",
   "files": [
-    "assets/hosts/pi/live/run.mjs",
-    "assets/hosts/pi/live/scripted-model.ts"
+    "assets/hosts/pi/live/gentle-stub.ts",
+    "assets/hosts/pi/live/run.mjs"
   ],
-  "reason": "assets/hosts/pi/live/ is itself the test: a manual live harness that drives a real Pi against a scripted model (14 cases plus a negative control); it cannot run in CI without a Pi install",
-  "recorded": "2026-11-07T00:19:31Z"
+  "reason": "the changed files are the live Pi proof harness itself (a case runner and a gentle-pi stand-in); they are verified by running them: both new cases pass on main and fail on the extension before #419",
+  "recorded": "2026-11-09T16:13:28Z"
 }

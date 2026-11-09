@@ -70,6 +70,10 @@ const CASES = [
     want: (r) => offers(r).length === 0 && tspAsked(r) === 0 },
   { name: "a required verdict runs TSP without asking (UI session)", files: { ".tsp.json": '{"gate":"always"}\n' }, script: [edit("src/add.js"), text(), ...fillers],
     prompts: ["change it"], answer: () => "No", want: (r) => offers(r).length === 0 && tspRuns(r) === 1 },
+  { name: "a Gentle session runs TSP without asking and without a declared gate (UI session)", gentle: true, script: [edit("src/add.js"), text(), ...fillers],
+    prompts: ["change it"], answer: () => "No", want: (r) => offers(r).length === 0 && tspRuns(r) === 1 },
+  { name: "a Gentle session without a UI asks the model to run TSP, once, without a declared gate", gentle: true, mode: "json",
+    script: [edit("src/add.js"), text(), ...fillers], prompts: ["change it"], want: (r) => tspAsked(r) === 1 },
   { name: "offer fires for a source change made by sed -i through bash", script: [{ tool: "bash", args: { command: "sed -i 's/a + b/a + b + 0/' src/add.js" } }, text()],
     prompts: ["change it"], answer: () => "No", want: (r) => offers(r).length === 1 },
   { name: "offer fires for a source change made by another process (a delegated worker)",
@@ -110,15 +114,17 @@ function sandbox(c) {
 const BASE_FLAGS = ["--no-extensions", ...(process.env.PI_LIVE_WITHOUT_TSP ? [] : ["--extension", process.env.PI_LIVE_EXTENSION ?? join(PI_DIR, "tsp.ts")]), "--extension", join(HERE, "scripted-model.ts"),
   "--provider", "scripted", "--model", "script", "--no-context-files", "--no-skills"];
 /** A case with `then` runs a second Pi process on the same stored session (--continue): what survives a resume. */
-const piFlags = (sb, { persist = false, cont = false } = {}) =>
-  [...BASE_FLAGS, ...(persist ? ["--session-dir", join(sb.dir, "sessions"), ...(cont ? ["--continue"] : [])] : ["--no-session"])];
+// A case with `gentle` also loads a stand-in for gentle-pi, so the session is observed as a Gentle one (#418).
+const piFlags = (sb, { persist = false, cont = false, gentle = false } = {}) =>
+  [...BASE_FLAGS, ...(gentle ? ["--extension", join(HERE, "gentle-stub.ts")] : []),
+    ...(persist ? ["--session-dir", join(sb.dir, "sessions"), ...(cont ? ["--continue"] : [])] : ["--no-session"])];
 const scriptEnv = (sb, c) => ({ ...sb.env, PI_LIVE_SCRIPT: JSON.stringify(c.script), PI_LIVE_SEEN: join(sb.dir, "seen.jsonl") });
 
 /** One RPC session: send each prompt, answer dialogs, and wait for the extension to go quiet after the run settles. */
 function runRpc(c, sb, session) {
   return new Promise((done) => {
     const r = { ui: [], users: [], events: new Set(), settled: 0, aborted: [], tspCalls: [] };
-    const p = spawn("pi", ["--mode", "rpc", ...piFlags(sb, session)], { cwd: sb.repo, env: scriptEnv(sb, c) });
+    const p = spawn("pi", ["--mode", "rpc", ...piFlags(sb, { ...session, gentle: c.gentle })], { cwd: sb.repo, env: scriptEnv(sb, c) });
     let buf = "", last = Date.now(), queue = [...c.prompts], busy = false, asked = 0;
     const send = (o) => p.stdin.write(JSON.stringify(o) + "\n");
     p.stdout.on("data", (d) => {
@@ -149,7 +155,7 @@ function runRpc(c, sb, session) {
 function runJson(c, sb) {
   return new Promise((done) => {
     const r = { ui: [], users: [], events: new Set(), settled: 0, aborted: [], tspCalls: [] };
-    const p = spawn("pi", ["-p", c.prompts[0], "--mode", "json", ...piFlags(sb)], { cwd: sb.repo, env: scriptEnv(sb, c), stdio: ["ignore", "pipe", "pipe"] });
+    const p = spawn("pi", ["-p", c.prompts[0], "--mode", "json", ...piFlags(sb, { gentle: c.gentle })], { cwd: sb.repo, env: scriptEnv(sb, c), stdio: ["ignore", "pipe", "pipe"] });
     let buf = "";
     p.stdout.on("data", (d) => {
       buf += d;

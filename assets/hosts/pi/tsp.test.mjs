@@ -110,21 +110,23 @@ test("gentle detection reads registered tools, not PATH", () => {
   assert.equal(observesGentleSession([]), false);
 });
 
-test("the observation rides only the doctor child, only when observed, and mutates nothing", () => {
+test("the observation rides only the doctor and check children, only when observed, and mutates nothing", () => {
   const base = Object.freeze({ PATH: "/usr/bin", HOME: "/home/u" });
   // The parent shell may legitimately export the protocol var; capture it so the
   // mutation check below compares before/after instead of assuming it is absent.
   const ambientBefore = process.env[protocolEnv];
   assert.equal(childEnv(base, parseTppCommand("doctor"), true)[protocolEnv], protocolValue);
   assert.equal(childEnv(base, parseTppCommand("doctor"), true).PATH, "/usr/bin", "the child keeps its normal environment");
-  assert.equal(childEnv(base, parseTppCommand("check"), true)[protocolEnv], undefined, "check never needs a mode observation, whatever the shell exports");
+  assert.equal(childEnv(base, parseTppCommand("check"), true)[protocolEnv], protocolValue, "check decides the gate from the observation, so an observed Gentle session is required to run TSP (#418)");
+  assert.equal(childEnv(base, parseTppCommand("check"), false)[protocolEnv], undefined, "a session that is not Gentle is checked as a bare repository");
+  assert.equal(childEnv(base, parseTppCommand("feedback --summary"), true)[protocolEnv], undefined, "only the commands that decide from the observation receive it");
   assert.equal(childEnv(base, parseTppCommand("doctor"), false)[protocolEnv], undefined, "detection failing never forges the observation");
   assert.deepEqual({ ...base }, { PATH: "/usr/bin", HOME: "/home/u" }, "the base env object is untouched");
   assert.equal(process.env[protocolEnv], ambientBefore, "childEnv never mutates this process's ambient environment");
   // The child's env comes from the caller's base, never from ambient process.env:
-  // a base-borne value rides verbatim, even for check, where the extension adds nothing.
+  // a base-borne value rides verbatim, even for feedback, where the extension adds nothing.
   const marker = "from-caller-base";
-  const carry = childEnv({ ...base, [protocolEnv]: marker }, parseTppCommand("check"), true);
+  const carry = childEnv({ ...base, [protocolEnv]: marker }, parseTppCommand("feedback --summary"), true);
   assert.equal(carry[protocolEnv], marker, "childEnv copies the caller's base verbatim");
 });
 
@@ -201,13 +203,14 @@ const errorVerdict = (reason) => ({ stdout: JSON.stringify({ decision: "error", 
 // chat when the repository left that to the human; "Sí" sends the identity prompt "haz el TSP" as if the user typed
 // it. Every collaborator is faked: no Pi, no files, no git.
 function offerHarness(opts = {}) {
-  const { hasUI = true, optedOut = false, env = {}, findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), status, probe, entries = [], feedback } = opts;
+  const { hasUI = true, optedOut = false, env = {}, tools = [], findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), status, probe, entries = [], feedback } = opts;
   const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
-  const asked = [], sent = [], calls = [], notes = [], statuses = [], widgets = [];
+  const asked = [], sent = [], calls = [], notes = [], statuses = [], widgets = [], checkEnvs = [];
   // findings maps a findings subcommand to the child it answers with; a missing one answers exit 0, no output.
   // check is the pre-offer `tsp check --json` the offer derives its verdict from; the default names one run to plan.
   const exec = async (argv, o) => {
     calls.push({ argv: [...argv], cwd: o.cwd });
+    if (argv[0] === "check") checkEnvs.push(o.env);
     // A feedback template nobody configured answers as tsp does with feedback switched off: no request, no notice.
     const fallback = argv[0] === "feedback" ? feedback ?? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
     const outcome = argv[0] === "check" && argv[1] === "--cwd"
@@ -222,7 +225,7 @@ function offerHarness(opts = {}) {
   // The session branch: entries survive a reload, a resume and a fork when a harness shares the same array.
   const pi = {
     registerCommand: () => {},
-    getAllTools: () => [],
+    getAllTools: () => tools,
     on: (event, handler) => { handlers[event] = handler; },
     sendUserMessage: (text) => sent.push(text),
     appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }),
@@ -248,7 +251,7 @@ function offerHarness(opts = {}) {
     await handlers.agent_settled({ type: "agent_settled", aborted }, ctx);
     return proposal;
   };
-  return { asked, sent, calls, notes, statuses, widgets, entries, run, start, beforeSettle };
+  return { asked, sent, calls, checkEnvs, notes, statuses, widgets, entries, run, start, beforeSettle };
 }
 
 // The check's argv: one object of output, the turn's own base commit, and one --paths per path.
@@ -260,6 +263,30 @@ test("a run that edits source code ends with the TSP question, and Sí sends haz
   assert.deepEqual(h.calls, [{ argv: CHECK(["internal/retry/retry.go", "src/new.ts"]), cwd: "/repo" }], "the check is scoped to the source this run touched, one --paths per path, and reads the commit the turn started from");
   assert.deepEqual(h.asked, [{ title: "¿Quieres hacer TSP?\nrun m1: layers swept: 1 of 3", options: ["Sí", "No"] }]);
   assert.deepEqual(h.sent, ["haz el TSP"]);
+});
+
+test("a Gentle session's check carries the Gentle observation, so the repository's gate can require TSP (#418)", async () => {
+  for (const hasUI of [true, false]) {
+    const gentle = offerHarness({ hasUI, tools: [{ name: "gentle_review" }], env: { PATH: "/usr/bin" } });
+    await gentle.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+    assert.ok(gentle.checkEnvs.length > 0, "the run was checked");
+    for (const e of gentle.checkEnvs) {
+      assert.equal(e[protocolEnv], protocolValue, `every check of a Gentle session carries the observation (hasUI=${hasUI})`);
+      assert.equal(e.PATH, "/usr/bin", "the check keeps its normal environment");
+    }
+    const plain = offerHarness({ hasUI, env: { PATH: "/usr/bin" } });
+    await plain.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+    assert.ok(plain.checkEnvs.length > 0, "the run was checked");
+    for (const e of plain.checkEnvs) assert.equal(e[protocolEnv], undefined, `a session without Gentle tools never forges the observation (hasUI=${hasUI})`);
+  }
+});
+
+test("Gentle tools registered after the extension loaded still count at the check (#418)", async () => {
+  const tools = [];
+  const h = offerHarness({ tools });
+  tools.push({ name: "gentle_odd_phase" });
+  await h.run("add a retry limit", [["edit", "internal/retry/retry.go"]]);
+  assert.equal(h.checkEnvs.at(-1)[protocolEnv], protocolValue, "the session is observed when the check runs, not when the extension loaded");
 });
 
 test("a changed path carrying a comma is asked for as its own path, never folded into a list", async () => {
@@ -1008,6 +1035,44 @@ test("state an older version wrote, or that is corrupted, is ignored without an 
     await h.start("resume");
     await h.run("change a", [["edit", "internal/a.go"]]);
     assert.equal(h.asked.length, 1, `corrupt state ${JSON.stringify(data)} is ignored, not obeyed`);
+  }
+});
+
+// The recording notice is owed once per branch, not once per session (#398): its marker rides the session state
+// with `ran` and `declined`, so the rebuild a reload, a resume or a fork performs finds it already set.
+const RECORD_NOTICE = "tsp plan add-finding";
+const owingPlan = { stdout: '{"findings":0,"evidence":0}\n', stderr: "", code: 0 };
+const records = (sent) => sent.filter((m) => m.includes(RECORD_NOTICE)).length;
+
+test("the recording notice is not asked a second time after a reload", async () => {
+  const entries = [];
+  const first = offerHarness({ entries, planCount: owingPlan });
+  await first.run("haz el TSP", [["write", "src/add.test.js"]]);
+  assert.equal(records(first.sent), 1, "the first run is asked to record what it pinned");
+  const resumed = offerHarness({ entries, planCount: owingPlan });
+  await resumed.start("resume");
+  await resumed.run("haz el TSP", [["write", "src/other.test.js"]]);
+  assert.equal(records(resumed.sent), 0, "a notice already sent on this branch is not sent again after the reload");
+  assert.equal(tspState(entries).recordNudged, true, "the branch records that the notice went out");
+});
+
+test("state written before the marker existed still loads, and its run is asked to record", async () => {
+  // The exact shape an older version wrote: the field it never knew is absent, not false.
+  const entries = [{ type: "custom", customType: "tsp-state", data: { declined: [], lastFix: "", pending: "", ran: true } }];
+  const h = offerHarness({ entries, planCount: owingPlan });
+  await h.start("resume");
+  await h.run("haz el TSP", [["write", "src/add.test.js"]]);
+  assert.equal(records(h.sent), 1, "a branch from an older version owes the notice like any other");
+  assert.equal(tspState(entries).recordNudged, true, "the marker is written from then on");
+});
+
+test("a marker that is not a boolean is ignored, so a broken write never silences the notice", async () => {
+  for (const recordNudged of ["yes", 1, null, {}, [true]]) {
+    const entries = [{ type: "custom", customType: "tsp-state", data: { ran: true, recordNudged } }];
+    const h = offerHarness({ entries, planCount: owingPlan });
+    await h.start("resume");
+    await h.run("haz el TSP", [["write", "src/add.test.js"]]);
+    assert.equal(records(h.sent), 1, `recordNudged ${JSON.stringify(recordNudged)} is not a marker, and is not obeyed`);
   }
 });
 
