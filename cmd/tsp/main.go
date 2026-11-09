@@ -2027,6 +2027,10 @@ func configModeFor(runner, agentConfig string) string {
 	case agentConfig == "none", runner == bench.RunnerCodex:
 		// Codex runs only bare: the embedded skills target the hosts tsp installs into, not codex.
 		return bench.ConfigNone
+	case runner == bench.RunnerReview:
+		// A reviewer must read the change with no skill and no operator configuration: the arm exists to compare a
+		// reviewer against a test-writing run, not against this machine's instructions (#410).
+		return bench.ConfigNone
 	case agentConfig != "":
 		return bench.ConfigCustom
 	case runner == bench.RunnerPi || runner == bench.RunnerAgy:
