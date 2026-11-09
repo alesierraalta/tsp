@@ -178,3 +178,8 @@ against arm A; the registered comparison needs the Claude session and is not mad
 record nudge (#398, `--record-nudge`): one follow-up asking the run to record what it found when it changed a test
 and the plan held no finding. Same 22 cases, two controls, 3 runs, same analysis; no RDD arm (Claude-only). Its
 result appears in the report as "Addendum 2" and is not a verdict against arm A.
+
+**D8 (2026-11-08, reviewer arm).** A new arm (#410) reviews the change on the same model as TSP and is scored by
+the same matcher, replacing the Claude-only RDD arm for this measurement. Same cases, controls, 3 runs,
+`openai-codex/gpt-6-luna`, change condition only; its result is "Addendum 3" and is a comparison of roles
+(reviewing versus pinning), not of RDD's four lenses, which still cannot run without Claude (#411).
