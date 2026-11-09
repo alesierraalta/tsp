@@ -261,7 +261,11 @@ func Decide(in Input, d Deps) Result {
 		// records that one itself. The one exception is the settle that follows a recording nudge: the model
 		// was asked and this stop is accepted, which is a different fact, and the nudge is measurable only
 		// if the log says so.
-		if nudged(d.BindingDir, in.SessionID) {
+		cwd := in.Cwd
+		if cwd == "" {
+			cwd = d.WorkDir
+		}
+		if root, ok := repoRoot(d, cwd); ok && nudged(d.BindingDir, root, in.SessionID) {
 			return Result{Entry: &Entry{
 				TS:            d.Now.UTC().Format(time.RFC3339),
 				Session:       in.SessionID,
