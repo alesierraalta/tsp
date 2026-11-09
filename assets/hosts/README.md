@@ -31,6 +31,13 @@ and Pi both work this way, and Pi's payload carries the same fields Claude's doe
 `pi/settings.stop-hook.json` into Pi's settings — Pi's is contract-read, not run here (see Verified
 below).
 
+A Stop hook may also refuse the stop. Claude Code reads a top-level `{"decision":"block","reason":…}`
+on stdout, or exit 2 with the reason on stderr, and sends the model back with it; it caps 8
+consecutive blocks. `tsp gate` uses the JSON form and always exits 0, so a host that cannot read the
+JSON still ends the turn. It refuses at most once per session, and only for a bound session that ran
+the discipline and edited a test file no Findings row records: the evidence is the session's own
+tool calls in the transcript, never a worktree entry, which cannot say who authored it.
+
 **Plugins.** The host loads code and gives it an event bus. OpenCode works this way, but its
 automatic transport is disabled until session-scoped evidence is available: `opencode/tsp.ts`
 no longer runs a check on `session.idle`, because a repo-wide check with no session binding
