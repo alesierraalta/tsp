@@ -183,3 +183,15 @@ result appears in the report as "Addendum 2" and is not a verdict against arm A.
 the same matcher, replacing the Claude-only RDD arm for this measurement. Same cases, controls, 3 runs,
 `openai-codex/gpt-6-luna`, change condition only; its result is "Addendum 3" and is a comparison of roles
 (reviewing versus pinning), not of RDD's four lenses, which still cannot run without Claude (#411).
+
+**D9 (2026-11-09, before the registered rerun, #416).** The Claude Code session is back, so the registered
+comparison D4 and D5 describe is made on `haiku`. Everything registered above is kept (cases, controls, model,
+3 runs, measures, analysis, decision rule, D4's reuse of arm A and the D4/D5 contamination check); only this
+changes:
+
+1. Arm B is rerun from scratch in both conditions with a `tsp` binary built from a clean `main` at 6d62dee. It
+   includes #391, #393 and #389 as D4 and D5 require, and later changes that do not alter the runner's prompt
+   or the matcher (`plan check --pins`, `--replay`, `--base`, `plan init --spec`, `tsp pin`).
+2. Arm B runs without `--record-nudge`. The registered arm measures TSP as it ships on Claude Code, and the
+   Claude Code half of #398 has not shipped; the nudge is a runner aid D7 measured apart.
+3. The case-runs of the attempt the expired session stopped (D6) are moved aside unread and not reported.
