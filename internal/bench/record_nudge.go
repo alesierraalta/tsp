@@ -44,6 +44,10 @@ func planFindings(ws string) int {
 	return len(tableRows)
 }
 
+// recordedAfterNudge answers whether the run recorded a finding after the nudge. The plan held no finding when the
+// nudge was sent, so any finding it holds now is the recording the ask asked for (#398).
+func recordedAfterNudge(ws string) bool { return planFindings(ws) > 0 }
+
 // needsRecordNudge answers whether the runner should ask this workspace to record what it found: it changed a test,
 // and the plan holds no finding — including the case where no plan was written at all.
 func needsRecordNudge(ws string) bool {

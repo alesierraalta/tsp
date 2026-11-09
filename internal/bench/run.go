@@ -782,8 +782,10 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		notes := runOpts
 		notes.Followup = RecordInstruction
 		before := res.Turns
+		res.RecordNudgeAsked = true
 		if ar2, more := runAgent(ws, key, notes, opts, &res, attempts); !res.Failed {
 			ar, attempts = ar2, more
+			res.RecordedAfterNudge = recordedAfterNudge(ws)
 			res.Notes = append(res.Notes, fmt.Sprintf("record nudge: the plan held no finding after %d turn(s), so the run was asked once to record what it found", before))
 		}
 	}
