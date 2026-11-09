@@ -21,6 +21,8 @@ Pinned: Pi 1.5.0 (`pi --version`), extension at `assets/hosts/pi/tsp.ts` on `mai
 | Source changed by another process during the turn (what a delegated worker does) produces the offer | pass (gap closed by #345) |
 | A file that was already dirty before the turn and not touched by it produces no offer | pass |
 | A `required` verdict in a session without a UI (`--mode json`) puts "haz el TSP — …" in front of the model exactly once | pass (gap closed by #347; fails on the extension before it) |
+| A Gentle session (a Gentle-owned tool registered, no `.tsp.json`) runs TSP without asking, with a UI | pass (fails on the extension before #418) |
+| A Gentle session without a UI (`--mode json`, no `.tsp.json`) puts "haz el TSP — …" in front of the model exactly once | pass (fails on the extension before #418) |
 
 No gap is open. The three rows that were known gaps (#345 twice, #347) carried a `gap` marker in the harness, which fails as `GAP CLOSED` when the wanted behaviour appears; each marker was removed with the change that closed it.
 
@@ -35,7 +37,7 @@ No gap is open. The three rows that were known gaps (#345 twice, #347) carried a
 
 ## Sessions without a UI
 
-Since #347 the extension acts there in one case only: when `tsp check --json` answers `required` (a `.tsp.json` `"gate":"always"`, or a verified Gentle session) for the source changed in a completed turn, it adds one `custom_message` ("haz el TSP — <why>") with `continue: true` at `agent_before_settle`, once per user turn. It does not ask when the verdict is `ask` (that is the human's question), does nothing in a delegated child, with `.no-testing-gate`, after an aborted or failed run, or when the turn changed no source, and it does not run the findings loop or request feedback, which need the UI. The check is still run in those sessions, so `tsp` is called once per turn that changed source.
+Since #347 the extension acts there in one case only: when `tsp check --json` answers `required` (a `.tsp.json` `"gate":"always"`, or a verified Gentle session: since #418 the extension passes that observation to every check it runs, so a Gentle session without a declared gate is `required`) for the source changed in a completed turn, it adds one `custom_message` ("haz el TSP — <why>") with `continue: true` at `agent_before_settle`, once per user turn. It does not ask when the verdict is `ask` (that is the human's question), does nothing in a delegated child, with `.no-testing-gate`, after an aborted or failed run, or when the turn changed no source, and it does not run the findings loop or request feedback, which need the UI. The check is still run in those sessions, so `tsp` is called once per turn that changed source.
 
 ## The blind spot and whether an event closes it
 
