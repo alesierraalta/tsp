@@ -93,7 +93,7 @@ type Result struct {
 	// rather than its exit code, so a host that cannot read the JSON still ends the turn.
 	Block       bool
 	BlockReason string
-	Entry  *Entry
+	Entry       *Entry
 	// Owed and Pending are the decision itself, structured: layers assigned and never invoked, and
 	// ranked targets still pending. The operator line reads them instead of counting phrases inside
 	// Reason — prose this package writes and is free to reword, which is how the line-anchored report
