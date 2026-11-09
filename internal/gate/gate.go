@@ -73,6 +73,11 @@ type Entry struct {
 	// BaseDrift marks a stop whose admitted base ref moved before this report: the evidence was
 	// validated on another commit than the one the ref points at now.
 	BaseDrift bool `json:"base_drift,omitempty"`
+	// Nudged marks the stop that asked the model to record an edited test, and NudgeAccepted the
+	// later settle accepted without the row: together they make the nudge measurable from the log
+	// alone, without a second source of truth.
+	Nudged        bool `json:"nudged,omitempty"`
+	NudgeAccepted bool `json:"nudge_accepted,omitempty"`
 }
 
 type Result struct {
@@ -82,7 +87,13 @@ type Result struct {
 	Fire   bool
 	Audit  bool // the discipline ran and left breadth owed; a different question, same Stop
 	Reason string
-	Entry  *Entry
+	// Block is the recording nudge: this session edited a test file the plan records no finding for,
+	// and the host is asked to send the model back once to record it. It is the only decision in this
+	// package that refuses a stop, it fires at most once per session, and it rides the hook's JSON
+	// rather than its exit code, so a host that cannot read the JSON still ends the turn.
+	Block       bool
+	BlockReason string
+	Entry       *Entry
 	// Owed and Pending are the decision itself, structured: layers assigned and never invoked, and
 	// ranked targets still pending. The operator line reads them instead of counting phrases inside
 	// Reason — prose this package writes and is free to reword, which is how the line-anchored report
@@ -247,7 +258,18 @@ func Decide(in Input, d Deps) Result {
 		// The host sets this flag when the Stop hook already ran for this stop, and that run wrote its own
 		// line: a second line here would count one stop twice, and silence in the log still means `the hook
 		// did not run`. A payload that could not be read is the case that leaves nothing behind, and `Run`
-		// records that one itself.
+		// records that one itself. The one exception is the settle that follows a recording nudge: the model
+		// was asked and this stop is accepted, which is a different fact, and the nudge is measurable only
+		// if the log says so.
+		if nudged(d.BindingDir, in.SessionID) {
+			return Result{Entry: &Entry{
+				TS:            d.Now.UTC().Format(time.RFC3339),
+				Session:       in.SessionID,
+				SkillsLoaded:  []string{},
+				Skipped:       SkippedNudgeAccepted,
+				NudgeAccepted: true,
+			}}
+		}
 		return Result{}
 	}
 	cwd := in.Cwd
@@ -294,6 +316,11 @@ func Decide(in Input, d Deps) Result {
 		// Nothing in this session invoked the discipline, so there is nothing to audit, and no
 		// source change this stop can be proven to own: silence, with the row saying what was loaded.
 		return Result{Entry: entry}
+	}
+	// The recording nudge comes first: a defect this session pinned and never recorded is lost to
+	// every reader of the plan, and the breadth counters can wait for the stop that follows the record.
+	if res, asked := nudge(d, root, binding.PlanPath, in, entry); asked {
+		return res
 	}
 	return audit(d, root, binding.PlanPath, binding.Run, Result{Entry: entry}, entry)
 }
