@@ -64,7 +64,7 @@ const (
 
 // KnownRunner reports whether name selects a runner the bench can spawn; empty means the default.
 func KnownRunner(name string) bool {
-	return name == "" || name == RunnerClaude || name == RunnerPi || name == RunnerCodex || name == RunnerAgy || name == RunnerGentleReview
+	return name == "" || name == RunnerClaude || name == RunnerPi || name == RunnerCodex || name == RunnerAgy || name == RunnerGentleReview || name == RunnerReview
 }
 
 // DefaultModel is the model a runner uses when the operator does not name one: the free Pi model the
@@ -73,6 +73,8 @@ func DefaultModel(runner string) string {
 	switch runner {
 	case RunnerClaude, RunnerGentleReview:
 		return "haiku"
+	case RunnerReview:
+		return DefaultModel(RunnerPi)
 	case RunnerAgy:
 		return "gemini-3.8-flash-low"
 	case RunnerCodex:
@@ -93,6 +95,8 @@ func runnerAgent(runner string) Agent {
 		return codexAgent
 	case RunnerGentleReview:
 		return gentleReviewAgent
+	case RunnerReview:
+		return reviewAgent
 	}
 	return claudeAgent
 }
@@ -496,7 +500,10 @@ func runUnits(units []unit, opts Options) ([]Result, []bool) {
 			return Result{}
 		}
 		res := runOnce(u.caseDir, u.key, u.run, opts)
-		if opts.Runner == RunnerGentleReview {
+		if opts.Runner == RunnerReview {
+			logf("[%s #%d] reviewer detected %d/%d unmatched %d cost $%.3f turns %d%s\n",
+				name, u.run, res.Detected, res.Total, res.UnmatchedFindings, res.CostUSD, res.Turns, invalidTag(res))
+		} else if opts.Runner == RunnerGentleReview {
 			logf("[%s #%d] review detected %d/%d unmatched %d cost $%.3f reviewers %d%s\n",
 				name, u.run, res.Detected, res.Total, res.UnmatchedFindings, res.CostUSD, res.Turns, invalidTag(res))
 		} else {
@@ -816,6 +823,16 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	}
 	res.Seconds = time.Since(started).Seconds()
 	res.FinalMessage = clipFinalMessage(ar.Result)
+	if opts.Runner == RunnerReview {
+		// A reviewer writes no plan and no test: its answer is scored by the plan's matcher, and no catch runs.
+		if scored, err := ScoreReviewText(ar.Result, key); err != nil {
+			res.Failed, res.FailReason = true, "the reviewer answered with no findings object: "+err.Error()
+		} else {
+			res = merge(res, scored)
+		}
+		res.Misses = Diagnose(res, key)
+		return finish(res, opts, res.Detected < res.Total)
+	}
 	if opts.Runner == RunnerGentleReview {
 		// A review writes no plan and no test: its findings are scored with the plan matcher, and no catch is run,
 		// because a test the arm never meant to write is not a miss of the review.
