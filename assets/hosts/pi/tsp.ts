@@ -97,10 +97,13 @@ export function buildArgv(d: TppDispatch, cwd: string): string[] {
   }
 }
 
-/** Child env for one tpp process: the observation rides only an observed doctor child; base is copied, never mutated. */
+/**
+ * Child env for one tpp process: the observation rides an observed doctor or check child, the two that decide from it
+ * (check holds a Gentle session to the required gate, #418); base is copied, never mutated.
+ */
 export function childEnv(base: Readonly<Record<string, string | undefined>>, d: TppDispatch, gentleObserved: boolean): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...base };
-  if (gentleObserved && d.kind === "doctor") env[GENTLE_OBSERVATION_ENV] = GENTLE_OBSERVATION_VALUE;
+  if (gentleObserved && (d.kind === "doctor" || d.kind === "check")) env[GENTLE_OBSERVATION_ENV] = GENTLE_OBSERVATION_VALUE;
   return env;
 }
 
@@ -592,6 +595,8 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   const head = opts.head ?? headAt;
   const probe = opts.probe ?? repoProbe;
   const child = env.GENTLE_PI_AGENTS_CHILD === "1";
+  // Read at each check, not at load: gentle-pi may register its tools after this extension.
+  const checkEnv = () => childEnv(env, { kind: "check", rest: [] }, observesGentleSession(pi.getAllTools()));
   const edited = new Set<string>(); // source paths changed in the current run through the edit tools
   let opened: RepoSnapshot | undefined; // the working tree as this run found it, read only when the offer can fire
   const declined = new Set<string>(); // paths the user already said No to
@@ -701,7 +706,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     if (ctx.hasUI || child || continued || ran || feedbackRun || fixRun || tspRun || optedOut(ctx.cwd)) return;
     const paths = collect(ctx.cwd);
     if (paths.length === 0) return;
-    const verdict = await checkVerdict(ctx.cwd, env, exec, paths, turnHead);
+    const verdict = await checkVerdict(ctx.cwd, checkEnv(), exec, paths, turnHead);
     if (verdict === undefined || verdict === "stale" || verdict.decision !== DECISION_REQUIRED) return;
     continued = true;
     return {
@@ -776,7 +781,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     // The branch's run already happened; the check still answers ask (or required) until a round is booked, and
     // repeating the run every turn is exactly the loop #342 reports. A fresh session offers again.
     if (ran) return;
-    const verdict = await checkVerdict(ctx.cwd, env, exec, paths, turnHead);
+    const verdict = await checkVerdict(ctx.cwd, checkEnv(), exec, paths, turnHead);
     if (verdict === "stale") {
       decision = undefined; // a check that cannot answer names no debt
       // Once per session: an install that cannot answer is worth one sentence, not one per turn.
