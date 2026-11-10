@@ -2935,7 +2935,7 @@ func pinProblems(planPath string) []string {
 	if testCol < 0 || statusCol < 0 {
 		return nil
 	}
-	root := filepath.Dir(planPath)
+	root := witnessRoot(planPath)
 	var problems []string
 	for _, r := range rows {
 		if len(r) <= testCol || len(r) <= statusCol {
@@ -2961,10 +2961,16 @@ func pinProblems(planPath string) []string {
 		cmd := exec.Command(argv[0], argv[1:]...)
 		cmd.Dir = root
 		out, err := cmd.CombinedOutput()
-		if err == nil {
-			problems = append(problems, fmt.Sprintf("finding %s claims %s as its witness, but it passes on this code, so it pins nothing: make it fail for the reason the finding names, or report the defect as unconfirmed", id, cell))
-		} else if strings.Contains(string(out), "build failed") || strings.Contains(string(out), "cannot find package") || strings.Contains(string(out), "no such file") {
+		unrunnable := strings.Contains(string(out), "build failed") || strings.Contains(string(out), "cannot find package") || strings.Contains(string(out), "no such file")
+		switch {
+		case unrunnable:
 			problems = append(problems, fmt.Sprintf("finding %s names the witness %s, which cannot be run: %s", id, cell, firstLine(string(out))))
+		case status == "confirmed" && err == nil:
+			// A confirmed defect is still on this code, so its witness has to fail: one that passes pins nothing.
+			problems = append(problems, fmt.Sprintf("finding %s claims %s as its witness, but it passes on this code, so it pins nothing: make it fail for the reason the finding names, or report the defect as unconfirmed", id, cell))
+		case status == "fixed" && err != nil:
+			// A fixed defect is gone, so its witness has to pass: one that fails says the repair did not hold.
+			problems = append(problems, fmt.Sprintf("finding %s is fixed, but its witness %s fails on this code: the repair did not hold, or the row names the wrong test", id, cell))
 		}
 	}
 	return problems
@@ -2983,6 +2989,23 @@ func findingsColumn(header []string, name string) int {
 
 // witnessCommand is the argument vector that runs one witness named as "<test file> :: <test name>". The test name
 // travels as one argument, never through a shell.
+// witnessRoot is where a row's repository-relative witness runs from. Every row in this repository
+// names its witness from the repository root, so the plan's own directory is the wrong place to look:
+// resolving there reports every row unrunnable and the check can never run one. A relative plan path
+// is relative to the directory the command runs in; an absolute one is anchored at its git root.
+func witnessRoot(planPath string) string {
+	if !filepath.IsAbs(planPath) {
+		return "."
+	}
+	dir := filepath.Dir(planPath)
+	if out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output(); err == nil {
+		if root := strings.TrimSpace(string(out)); root != "" {
+			return root
+		}
+	}
+	return dir
+}
+
 func witnessCommand(root, cell string) ([]string, error) {
 	parts := strings.Split(cell, "::")
 	if len(parts) != 2 {
@@ -3031,7 +3054,9 @@ func replayFindings(path string, timeout time.Duration) (problems, unproven []st
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		cmd := exec.CommandContext(ctx, "sh", "-c", command)
-		cmd.Dir = filepath.Dir(path)
+		// A reproduction is written the way a row is: from the repository root, not from the plan's own
+		// directory, which is where a relative command would not find what it names.
+		cmd.Dir = witnessRoot(path)
 		// The reproduction runs what a row claims, so its deadline ends the whole group it started: a descendant
 		// holding the output open would otherwise outlive the check.
 		processGroup(cmd)

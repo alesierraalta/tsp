@@ -18,6 +18,10 @@ import (
 // later settle without the row is accepted rather than asked again.
 const SkippedNudgeAccepted = "nudge_accepted"
 
+// SkippedNudgeUnmarkable records a stop that owed a recording but had nowhere to remember asking:
+// no marker directory means no once-per-session promise, so the hook stays silent instead of nagging.
+const SkippedNudgeUnmarkable = "nudge_unmarkable"
+
 // editingTools are the calls that write a file. A session's own calls are the only proof this gate
 // accepts that it authored a change: the worktree shows what is dirty, never who dirtied it.
 var editingTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true}
@@ -109,18 +113,21 @@ func recordsTest(rows [][]string, rel string) bool {
 	return false
 }
 
-// nudgeMarkerPath names the file that remembers this session was already asked. It sits beside the
-// bindings, under the same hashed-name discipline, so no filename carries a raw session ID.
-func nudgeMarkerPath(dir, sessionID string) string {
-	if dir == "" || sessionID == "" {
+// nudgeMarkerPath names the file that remembers this session was already asked in this repository.
+// It is keyed by root and session, exactly like the binding it belongs to: two worktrees under one
+// session are two plans, and one ask must not silence the other's debt. It sits beside the bindings,
+// under the same hashed-name discipline, so no filename carries a raw session ID. No directory means
+// no marker, and the caller refuses nothing rather than nagging a session it cannot remember.
+func nudgeMarkerPath(dir, root, sessionID string) string {
+	if dir == "" || root == "" || sessionID == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte("nudge\x00" + sessionID))
+	sum := sha256.Sum256([]byte("nudge\x00" + root + "\x00" + sessionID))
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".nudged")
 }
 
-func nudged(dir, sessionID string) bool {
-	p := nudgeMarkerPath(dir, sessionID)
+func nudged(dir, root, sessionID string) bool {
+	p := nudgeMarkerPath(dir, root, sessionID)
 	if p == "" {
 		return false
 	}
@@ -130,8 +137,8 @@ func nudged(dir, sessionID string) bool {
 
 // markNudged never fails the turn: a marker that cannot be written costs one repeated question, and
 // a stop is not worth breaking over it.
-func markNudged(dir, sessionID string) {
-	p := nudgeMarkerPath(dir, sessionID)
+func markNudged(dir, root, sessionID string) {
+	p := nudgeMarkerPath(dir, root, sessionID)
 	if p == "" {
 		return
 	}
@@ -155,12 +162,18 @@ func nudge(d Deps, root, planRel string, in Input, entry *Entry) (Result, bool) 
 	if !owed {
 		return Result{}, false
 	}
-	if nudged(d.BindingDir, in.SessionID) {
+	if nudgeMarkerPath(d.BindingDir, root, in.SessionID) == "" {
+		// No marker directory is no memory of the ask, and a hook that refused every stop would nag a
+		// session it cannot remember until the host overrides it: silence, with the reason logged.
+		entry.Skipped = SkippedNudgeUnmarkable
+		return Result{Entry: entry}, true
+	}
+	if nudged(d.BindingDir, root, in.SessionID) {
 		entry.Skipped = SkippedNudgeAccepted
 		entry.NudgeAccepted = true
 		return Result{Entry: entry}, true
 	}
-	markNudged(d.BindingDir, in.SessionID)
+	markNudged(d.BindingDir, root, in.SessionID)
 	entry.Nudged = true
 	return Result{Block: true, BlockReason: reason, Entry: entry}, true
 }

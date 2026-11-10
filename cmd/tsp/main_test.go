@@ -3530,3 +3530,71 @@ func TestPlanCheckValidatesIndependentCandidateReviews(t *testing.T) {
 		t.Fatalf("confirmation without decisive evidence = %d\n%s", code, out)
 	}
 }
+
+// A Findings row names its witness the way every row in this repository does: repository-relative.
+// The pin check resolves it against the plan's own directory, so every row is reported unrunnable and
+// the check that exists to refuse a passing witness can never run one (#425).
+func TestPinProblemsResolvesWitnessesFromTheRepositoryRoot(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	planPath := filepath.Join("docs", "testing", "test-plan.md")
+	if err := os.MkdirAll(filepath.Dir(planPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan := "## Findings\n\n| Id | Finding (path:line, one line) | Severity | Data safe | Evidence | Pinning test | Status | Verdict by | Reason |\n" +
+		"|---|---|---|---|---|---|---|---|---|\n" +
+		"| F1 | `internal/x/x.go:1` a claim | silently wrong answer | yes | E1 | `internal/x/x_test.go :: TestPinned` | fixed | t / 2026-11-09 | reason |\n"
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "internal", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	witness := "package x\n\nimport \"testing\"\n\nfunc TestPinned(t *testing.T) { t.Fatal(\"pinned on this code\") }\n"
+	if err := os.WriteFile(filepath.Join(root, "internal", "x", "x_test.go"), []byte(witness), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "internal", "x", "x.go"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/x\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pinProblems(planPath) {
+		if strings.Contains(p, "cannot be run") {
+			t.Fatalf("the witness was not found: %s", p)
+		}
+	}
+}
+
+// A fixed row's witness is supposed to pass: the defect it pinned is gone. The check refuses a passing
+// witness because a confirmed row's test must fail on the defective code, and applying that rule to a
+// fixed row refuses every repair the plan records (#425).
+func TestPinProblemsAcceptsAFixedRowsPassingWitness(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	planPath := filepath.Join("docs", "testing", "test-plan.md")
+	if err := os.MkdirAll(filepath.Dir(planPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan := "## Findings\n\n| Id | Finding (path:line, one line) | Severity | Data safe | Evidence | Pinning test | Status | Verdict by | Reason |\n" +
+		"|---|---|---|---|---|---|---|---|---|\n" +
+		"| F1 | `internal/x/x.go:1` a claim | silently wrong answer | yes | E1 | `internal/x/x_test.go :: TestFixed` | fixed | t / 2026-11-09 | reason |\n"
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "internal", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "internal", "x", "x_test.go"), []byte("package x\n\nimport \"testing\"\n\nfunc TestFixed(t *testing.T) {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/x\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pinProblems(planPath) {
+		if strings.Contains(p, "pins nothing") {
+			t.Fatalf("a fixed row was refused for its witness passing: %s", p)
+		}
+	}
+}
