@@ -277,25 +277,31 @@ func TestCorpusSuitesAreGreenOnEveryVariant(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs the corpus suites")
 	}
+	// Each case's suites run on their own and share nothing, so the cases run side by side: run one after
+	// another they were 149 s of this package's 254 s, and this package is the critical path of every CI round
+	// (#435). The variants of one case stay serial, because they stage the same fixture.
 	cases := vendoredCases(t)
 	for _, c := range cases {
-		key, err := LoadKey(c)
-		if err != nil {
-			continue
-		}
-		variants := []string{""}
-		if entries, err := os.ReadDir(filepath.Join(c, FixDir)); err == nil {
-			for _, e := range entries {
-				if e.IsDir() {
-					variants = append(variants, filepath.Join(c, FixDir, e.Name()))
+		t.Run(filepath.Base(c), func(t *testing.T) {
+			t.Parallel()
+			key, err := LoadKey(c)
+			if err != nil {
+				return
+			}
+			variants := []string{""}
+			if entries, err := os.ReadDir(filepath.Join(c, FixDir)); err == nil {
+				for _, e := range entries {
+					if e.IsDir() {
+						variants = append(variants, filepath.Join(c, FixDir, e.Name()))
+					}
 				}
 			}
-		}
-		for _, v := range variants {
-			green, out, err := suiteOn(filepath.Join(c, FixtureDir), v, c, nil, key.Suite, 5*time.Minute)
-			if err != nil || !green {
-				t.Errorf("%s variant %q: green=%v err=%v\n%s", filepath.Base(c), filepath.Base(v), green, err, tail(out, 600))
+			for _, v := range variants {
+				green, out, err := suiteOn(filepath.Join(c, FixtureDir), v, c, nil, key.Suite, 5*time.Minute)
+				if err != nil || !green {
+					t.Errorf("variant %q: green=%v err=%v\n%s", filepath.Base(v), green, err, tail(out, 600))
+				}
 			}
-		}
+		})
 	}
 }
