@@ -1,5 +1,11 @@
 # TSP (Test Strategy Planning)
 
+<p align="center">
+  <a href="https://github.com/Gentleman-Programming/gentle-ai">
+    <img width="320" src="https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/docs/assets/brand/built-with-gentle-ai.png" alt="Built with Gentle-AI" />
+  </a>
+</p>
+
 To install: [paste this prompt into your agent](#install-with-an-agent). It installs tsp, runs the
 checks, and reports how it ended — you do not run anything by hand.
 
