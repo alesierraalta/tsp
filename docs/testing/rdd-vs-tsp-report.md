@@ -310,3 +310,53 @@ cron inherited a PATH without the `claude` binary and 98 case-runs failed before
 deleted and re-run, and the analysis above excludes nothing. The account's five-hour limit stopped the rerun once;
 it was paused and resumed, and the runs it interrupted were discarded and repeated. The first analysis printed
 after the reboot, over 8 cases, is not a result.
+
+## Addendum 5 (2026-11-10): the chain — RDD's findings, pinned by TSP
+
+Issue #387. A third arm that takes a native review's findings and asks an agent to pin each one with a test, so
+the chain is measured on the same cases as the two arms above.
+
+**Design.** `tsp bench run --pin-from <reviewers.jsonl>` hands the run a review's own artifact as its whole
+instruction: the case's request and the bench prompt never reach this arm, because the review already made the
+claim. The agent writes one test per finding and records it through `tsp pin --record`, which **runs the test and
+refuses one that passes** — so the judge of a real pin is the product's own code, not a rule in the bench. A
+finding that cannot be pinned is recorded `blocked`; one whose claim does not hold, `refuted`.
+
+The reviews are arm A's own first runs (`.runs/rdd-vs-tsp/study/change-A/<case>/1/reviewers.jsonl`), unmodified:
+the arm measures what happens to a review's output, not how good the review was. One run per case, `haiku`, same
+22 cases and 2 controls, `--as-change`.
+
+| Measure | Chain | TSP alone (Addendum 4) | RDD alone |
+|---|---|---|---|
+| Case defect pinned | **21/21 (100%)** | 64/66 (97%) | not applicable — a review cannot pin |
+| Its test actually discriminates | 20/21 (95%) | 64/66 (97%) | — |
+| Findings pinned per run | 107 over 23 runs, median 4 | — | — |
+| False pins on a clean control | 2 pinned then 2 refuted of 6 findings (c01); 0 of 5 (g05) | 0.5 findings per control run | 6.8 findings per control run |
+| Cost per case-run | US$0.025 | US$0.037 | US$0.015 |
+| Seconds per case-run | 112 | 169 | 102 |
+
+**What this says.** On these cases a review's findings are pinned at the same rate TSP reaches running alone
+(21/21 against 64/66 — one run per case against three, so the intervals overlap and neither is separable here),
+for two-thirds the cost and two-thirds the time, because the review already did the hunting and this arm only
+writes the guards. The chain is the composition the milestone asked for: RDD's detection with TSP's guard, and the
+second step is cheaper than running TSP from scratch.
+
+The clean controls behave differently from RDD: on `c01` the chain raised 6 findings, pinned 2, refuted 2 and
+blocked 2, and on `g05` it pinned none of 5 — so a clean change does not fill the plan with pins it cannot
+defend, which is where RDD's 6.8 findings per control run hurt its reader.
+
+**Two product defects the arm found, both fixed before the numbers above were taken.** `tsp pin --record`
+resolved the witness from the plan's own directory, so every pin of a plan under `docs/testing/` was refused as
+`no such file` (#430, PR #431) — the first run recorded all nine of h04's findings as `blocked` after pinning
+them. And the arm's prompt left the plan's path to the agent's own resolution, so the pins landed outside the
+workspace and the arm read zero (#432). Neither was visible to any unit test; both came from running the thing.
+
+**Incidents.** The first sweep ran six cases side by side and eleven of them exited before scaffolding, each with
+no output directory; the same case run alone exits 0. The eleven were re-run at three side by side and all
+completed. The numbers above are the 23 runs that produced a result, with none failed. A defect the run met along
+the way: `tsp pin --record` was fixed and merged (#431) before the sweep that produced this table.
+
+**Limits.** One run per case, so this is an exploratory arm in the sense of D6-D8: it reports a rate, not a
+verdict against the registered comparison, which needs three runs per arm. The pins are counted against the
+case's own defect by location, with the same matcher the reviewer arm uses; a pin that guards a real secondary
+defect the case does not plant is not counted for it.
