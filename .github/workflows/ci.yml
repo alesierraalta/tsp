@@ -20,9 +20,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  # The suite is 162 s of the ~195 s a round takes, and it is CPU-bound: three `go test` processes inside one
+  # four-core runner compete for the same cores and measured 153 s, nine seconds saved. One shard per runner
+  # adds the cores instead, and the round waits on the slowest shard rather than on the whole suite.
+  shard:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -34,40 +41,41 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: test shard ${{ matrix.shard }} of 3
+        run: |
+          set -u
+          pkgs=$(go list ./...)
+          echo "$(echo "$pkgs" | wc -l) packages, shard ${{ matrix.shard }} of 3"
+          echo "$pkgs" | awk -v i=${{ matrix.shard }} 'NR % 3 == i % 3' > /tmp/shard.pkgs
+          if [ ! -s /tmp/shard.pkgs ]; then
+            echo "this shard holds no package"
+            exit 0
+          fi
+          go test -count=1 $(cat /tmp/shard.pkgs)
+
+  # Everything else a round checks, and the check the branch rule requires: it keeps its name and its verdict is
+  # the shards'. A failed or cancelled shard fails it, so a broken suite can never report green through here.
+  test:
+    needs: [shard]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: every shard passed
+        run: |
+          echo "shard result: ${{ needs.shard.result }}"
+          test "${{ needs.shard.result }}" = "success"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
       - name: gofmt
         run: test -z "$(gofmt -l .)"
       - name: vet
         run: go vet ./...
       - name: build
         run: make build
-      # The suite is 81% of this job's wall clock (162 s of ~195 s measured on #433). One `go test ./...`
-      # runs the packages it can in parallel, but the runner has four cores and the heaviest packages are
-      # single processes: the round waits on the slowest one. Three disjoint shards run side by side instead,
-      # over the same cache, and the job fails if any shard does — the check keeps its name, so the branch
-      # rule that requires it does not move.
-      - name: test
-        run: |
-          set -u
-          pkgs=$(go list ./...)
-          total=$(echo "$pkgs" | wc -l)
-          echo "sharding $total packages into 3"
-          rm -f /tmp/shard-*.log
-          rc=0
-          for i in 1 2 3; do
-            (
-              echo "$pkgs" | awk -v i="$i" 'NR % 3 == i % 3' > "/tmp/shard-$i.pkgs"
-              echo "shard $i: $(wc -l < "/tmp/shard-$i.pkgs") packages"
-              if [ -s "/tmp/shard-$i.pkgs" ]; then
-                go test -count=1 $(cat "/tmp/shard-$i.pkgs") 2>&1 | tee "/tmp/shard-$i.log"
-                exit "${PIPESTATUS[0]}"
-              fi
-            ) &
-          done
-          for job in $(jobs -p); do wait "$job" || rc=1; done
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::a test shard failed; see the logs above"
-            exit 1
-          fi
       # The testing gate does not read the plan for a commit range, so two branches cut from the same main that
       # each record the next free id would merge into one plan holding that id twice. On a pull request this runs
       # on the merge with main; on main it runs on what was merged.
