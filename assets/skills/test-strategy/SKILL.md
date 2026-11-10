@@ -5,7 +5,7 @@ license: Apache-2.0
 metadata:
   author: "alesierraalta"
   version: "0.7.23"
-  requires_tsp: "0.8.1"
+  requires_tsp: "0.9.0"
   requires_tpp: "0.5.1"
   scope: [common]
   auto_invoke: "Any request to test something: find the defects the green suite misses and pin each one with a failing test"

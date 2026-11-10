@@ -1,9 +1,8 @@
 {
-  "fingerprint": "sha256:cb491d3eea7aa5aac2048c4f3f441041679150bd1f02d74e9cc50225eec8e270",
+  "fingerprint": "sha256:ad22b9ffd069e1c169ce598d3167ec8622e1a9b85517cbf39a30f39736283f68",
   "files": [
-    "assets/hosts/pi/live/gentle-stub.ts",
-    "assets/hosts/pi/live/run.mjs"
+    "internal/buildinfo/buildinfo.go"
   ],
-  "reason": "the changed files are the live Pi proof harness itself (a case runner and a gentle-pi stand-in); they are verified by running them: both new cases pass on main and fail on the extension before #419",
-  "recorded": "2026-11-09T16:13:28Z"
+  "reason": "the release bumps one constant and the skills' pin; no behaviour changed, and the tag workflow re-runs the suite",
+  "recorded": "2026-11-10T15:46:48Z"
 }
