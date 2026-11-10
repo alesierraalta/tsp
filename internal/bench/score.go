@@ -95,6 +95,10 @@ type Result struct {
 	ClaimedPinned   int         `json:"claimed_pinned"`    // defects whose finding names a pinning test
 	Caught          int         `json:"caught"`            // defects some agent test distinguishes (fixture vs fix)
 	Catch           CatchResult `json:"catch"`
+	// PinChain is the --pin-from arm's own reading of this run: what it did with each finding a review handed it,
+	// scored from the Pinning section it wrote. It travels beside the detection above and is never folded into it
+	// (S4): a defect pinned and a defect caught are two measurements of one case, not one count.
+	PinChain *PinChainResult `json:"pin_chain,omitempty"`
 	// FinalMessage is the agent's last answer, kept so a miss can be traced to a defect the run named
 	// without pinning it; Misses gives every uncaught defect its reason (Diagnose).
 	FinalMessage string `json:"final_message,omitempty"`
