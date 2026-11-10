@@ -20,16 +20,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The suite is 162 s of the ~195 s a round takes, and it is CPU-bound: three `go test` processes inside one
-  # four-core runner compete for the same cores and measured 153 s, nine seconds saved. One shard per runner
-  # adds the cores instead, and the round waits on the slowest shard rather than on the whole suite.
-  shard:
+  test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -41,41 +34,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: test shard ${{ matrix.shard }} of 3
-        run: |
-          set -u
-          pkgs=$(go list ./...)
-          echo "$(echo "$pkgs" | wc -l) packages, shard ${{ matrix.shard }} of 3"
-          echo "$pkgs" | awk -v i=${{ matrix.shard }} 'NR % 3 == i % 3' > /tmp/shard.pkgs
-          if [ ! -s /tmp/shard.pkgs ]; then
-            echo "this shard holds no package"
-            exit 0
-          fi
-          go test -count=1 $(cat /tmp/shard.pkgs)
-
-  # Everything else a round checks, and the check the branch rule requires: it keeps its name and its verdict is
-  # the shards'. A failed or cancelled shard fails it, so a broken suite can never report green through here.
-  test:
-    needs: [shard]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: every shard passed
-        run: |
-          echo "shard result: ${{ needs.shard.result }}"
-          test "${{ needs.shard.result }}" = "success"
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
       - name: gofmt
         run: test -z "$(gofmt -l .)"
       - name: vet
         run: go vet ./...
       - name: build
         run: make build
+      - name: test
+        run: go test ./... -count=1
       # The testing gate does not read the plan for a commit range, so two branches cut from the same main that
       # each record the next free id would merge into one plan holding that id twice. On a pull request this runs
       # on the merge with main; on main it runs on what was merged.
