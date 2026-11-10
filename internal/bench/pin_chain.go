@@ -33,11 +33,14 @@ const (
 // each one. Nothing of the case's request reaches this arm, because the review already made the claim it is asked
 // to pin (S1, S2).
 func PinPrompt(findingsPath string) string {
-	return fmt.Sprintf(`Read the review's findings at %s. Every finding cites a path:line and a claim. For each one, write one test that fails on this code and passes on the fixed code, and record it with %s. A finding you cannot pin is recorded with %s; a finding whose claim does not hold is recorded with %s. Nothing else records a pin, so a finding you leave unrecorded is a finding this run did not answer. Do not change any source file.`,
+	plan := pinCommand("--path " + PlanPath)
+	return fmt.Sprintf(`Read the review's findings at %s. Every finding cites a path:line and a claim. For each one, write one test that fails on this code and passes on the fixed code, and record it with %s. A finding you cannot pin is recorded with %s; a finding whose claim does not hold is recorded with %s. Every command names the plan with %s: the plan is this run's deliverable and it lives in the workspace, so a pin recorded anywhere else is a pin the run never reports. When no plan exists yet, create it first with %s. Nothing else records a pin, so a finding you leave unrecorded is a finding this run did not answer. Do not change any source file.`,
 		findingsPath,
-		pinCommand("tsp pin --record <id> --test '<suite path> :: <test name>'"),
-		pinCommand("tsp pin --block <id> --reason '<why the pin could not be attempted>'"),
-		pinCommand("tsp pin --refute <id> --reason '<why the claim does not hold>'"))
+		pinCommand("tsp pin --record <id> --test '<suite path> :: <test name>' --path "+PlanPath),
+		pinCommand("tsp pin --block <id> --reason '<why the pin could not be attempted>' --path "+PlanPath),
+		pinCommand("tsp pin --refute <id> --reason '<why the claim does not hold>' --path "+PlanPath),
+		plan,
+		pinCommand("tsp plan init --path "+PlanPath))
 }
 
 // pinCommand renders one of the commands the prompt names the way the skill's own instructions render one.
