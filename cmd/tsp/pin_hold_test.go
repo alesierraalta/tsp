@@ -161,3 +161,33 @@ func TestPlanCheckHoldsThePinningSectionToItsRules(t *testing.T) {
 		}
 	}
 }
+
+// A row names its witness from the repository root, which is where every plan in this repository lives:
+// docs/testing/test-plan.md is two directories below it. Resolving the witness from the plan's own directory
+// looks for calc/c_test.go under docs/testing and reports a test that is there as "no such file", so a finding
+// the run actually pinned is recorded as blocked (#430).
+func TestPinRecordsAWitnessForAPlanOutsideTheRepositoryRoot(t *testing.T) {
+	dir, _, findings := pinWorkdir(t)
+	bin := buildCLI(t)
+	plan := filepath.Join(dir, "docs", "testing", "test-plan.md")
+	if err := os.MkdirAll(filepath.Dir(plan), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := runCLI(t, bin, "plan", "init", "--micro", "--path", plan); code != 0 {
+		t.Fatalf("plan init = %d %s", code, out)
+	}
+	if out, code := runCLI(t, bin, "pin", "--path", plan, "--findings", findings); code != 0 {
+		t.Fatalf("import = %d %s", code, out)
+	}
+	out, code := pinCLI(t, dir, "pin", "--path", plan, "--record", "P1", "--test", "calc/r_test.go :: TestAddFails")
+	if code != 0 {
+		t.Fatalf("record = %d %s: a witness that is in the repository was called missing", code, out)
+	}
+	body, err := os.ReadFile(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "| pinned |") {
+		t.Fatalf("plan = %s, want the row recorded as pinned", body)
+	}
+}

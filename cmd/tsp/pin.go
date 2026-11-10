@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -66,7 +65,11 @@ func runPin(args []string) int {
 			fmt.Fprintln(os.Stderr, "pin: --record needs --test '<suite path> :: <test name>'")
 			return 2
 		}
-		argv, err := witnessCommand(filepath.Dir(planPath), *test)
+		// The witness is named from the repository root, the way every plan in this repository names one, so the
+		// plan's own directory is the wrong place to look: a plan under docs/testing would report a test that is
+		// there as missing (#430).
+		root := witnessRoot(planPath)
+		argv, err := witnessCommand(root, *test)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "pin: %s cannot be run: %v\n", *test, err)
 			return 1
@@ -76,7 +79,7 @@ func runPin(args []string) int {
 		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-		cmd.Dir = filepath.Dir(planPath)
+		cmd.Dir = root
 		processGroup(cmd)
 		runErr := cmd.Run()
 		timedOut := ctx.Err() != nil
