@@ -1,0 +1,45 @@
+name: corpus
+
+# The corpus fixture check, moved out of the required round (#435). It runs the suite of every corpus case on
+# every fix variant, so a case whose fixed code breaks its own suite is caught before the bench reads "red" for
+# the wrong reason. Those suites only change when the corpus does, or when the code that stages and runs them
+# does, so it runs when those paths change instead of in every pull request's round.
+#
+# It is not a required check: a required check with a path filter never reports on a pull request that touches
+# none of its paths, and the branch rule would then block that pull request forever.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "bench/cases/**"
+      - "internal/bench/**"
+      - ".github/workflows/corpus.yml"
+  pull_request:
+    paths:
+      - "bench/cases/**"
+      - "internal/bench/**"
+      - ".github/workflows/corpus.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Corpus cases carry Node suites; without node they would fail here for the wrong reason.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: every corpus suite is green on every variant
+        run: go test ./internal/bench/ -count=1 -run '^TestCorpusSuitesAreGreenOnEveryVariant$' -v

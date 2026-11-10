@@ -40,8 +40,11 @@ jobs:
         run: go vet ./...
       - name: build
         run: make build
+      # The corpus fixture check runs the suite of every corpus case on every fix variant: ~95 s of a ~195 s round,
+      # on work that only changes when the corpus or the code that runs its suites does. It runs in corpus.yml
+      # when those paths change instead of in every round (#435). Every other test runs here as before.
       - name: test
-        run: go test ./... -count=1
+        run: go test ./... -count=1 -skip '^TestCorpusSuitesAreGreenOnEveryVariant$'
       # The testing gate does not read the plan for a commit range, so two branches cut from the same main that
       # each record the next free id would merge into one plan holding that id twice. On a pull request this runs
       # on the merge with main; on main it runs on what was merged.
