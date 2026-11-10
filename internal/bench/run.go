@@ -165,6 +165,11 @@ type Options struct {
 	// TspPath is the tsp binary the loop runs `findings record` and `findings check` with. Empty uses the running
 	// executable, which for a bench run is tsp itself; a test names one so the registry is exercised for real.
 	TspPath string
+	// PinFrom names another review's findings — the reviewers.jsonl a reviewer arm already wrote, unmodified — and
+	// turns the run into the chain arm: the agent is handed that file and asked to pin each finding with a test,
+	// instead of hunting for its own defects. It is scored in Result.PinChain, beside detection, never inside it
+	// (S1, S2, S4). Empty leaves every prompt byte for byte what it was.
+	PinFrom string
 }
 
 // Agent runs the model once in a workspace; injected so tests never spawn claude. The case's key
@@ -182,19 +187,24 @@ type Aggregate struct {
 	Families []string `json:"families,omitempty"` // the families a reading was aimed at; empty means every case
 	// Prior is the target repository's own defect-class memory, passed in through Options and never serialized: it
 	// says what the target has already paid for, not what this reading measured.
-	Prior          []Prior  `json:"-"`
-	Cases          []Result `json:"cases"`
-	Defects        int      `json:"defects"`
-	Found          int      `json:"found"`
-	Recall         float64  `json:"recall"`
-	ClaimedPinned  int      `json:"claimed_pinned"` // defects whose finding names a pinning test
-	Caught         int      `json:"caught"`         // defects distinguished by an agent test
-	RecallCaught   float64  `json:"recall_caught"`  // caught over defects of valid runs
-	FalsePositives int      `json:"false_positives"`
-	CostUSD        float64  `json:"cost_usd"`
-	Invalid        int      `json:"invalid"`
-	Failed         int      `json:"failed"`    // agent did not run to completion; excluded from recall
-	Escalated      int      `json:"escalated"` // runs rerun with Options.EscalateModel because the first pinned nothing
+	Prior         []Prior  `json:"-"`
+	Cases         []Result `json:"cases"`
+	Defects       int      `json:"defects"`
+	Found         int      `json:"found"`
+	Recall        float64  `json:"recall"`
+	ClaimedPinned int      `json:"claimed_pinned"` // defects whose finding names a pinning test
+	Caught        int      `json:"caught"`         // defects distinguished by an agent test
+	RecallCaught  float64  `json:"recall_caught"`  // caught over defects of valid runs
+	// Pinned, Refuted and Blocked sum the chain arm's own reading over valid runs: defects it pinned with a test,
+	// claims it refuted, and findings it could not attempt. A reading with no chain arm carries zeros.
+	Pinned         int     `json:"pinned,omitempty"`
+	Refuted        int     `json:"refuted,omitempty"`
+	Blocked        int     `json:"blocked,omitempty"`
+	FalsePositives int     `json:"false_positives"`
+	CostUSD        float64 `json:"cost_usd"`
+	Invalid        int     `json:"invalid"`
+	Failed         int     `json:"failed"`    // agent did not run to completion; excluded from recall
+	Escalated      int     `json:"escalated"` // runs rerun with Options.EscalateModel because the first pinned nothing
 	// CaughtByRound and BrokenByRound sum, over valid runs, the defects caught and the tests red on the fully
 	// fixed code once round k ended; empty when the runs made one pass.
 	TurnsBySession     []int     `json:"turns_by_session,omitempty"`
@@ -560,6 +570,11 @@ func foldResult(agg *Aggregate, u unit, res Result) {
 		agg.Found += res.Found
 		agg.Caught += res.Caught
 		agg.ClaimedPinned += res.ClaimedPinned
+		if res.PinChain != nil {
+			agg.Pinned += res.PinChain.Pinned
+			agg.Refuted += res.PinChain.Refuted
+			agg.Blocked += res.PinChain.Blocked
+		}
 		agg.FalsePositives += res.FalsePositives
 		agg.ControlInventions += res.ControlInventions
 		if !res.PlanFound {
@@ -580,6 +595,7 @@ func finalizeAggregate(agg *Aggregate) {
 	counts := CountUnique(agg.Cases)
 	agg.Defects, agg.Found, agg.Caught = 0, 0, 0
 	agg.ClaimedPinned, agg.FalsePositives, agg.ControlInventions = 0, 0, 0
+	agg.Pinned, agg.Refuted, agg.Blocked = 0, 0, 0
 	agg.Invalid, agg.Failed, agg.NoPlan, agg.LightActivated, agg.MicroActivated = 0, 0, 0, 0, 0
 	agg.AdjudicatedTrue, agg.AdjudicatedFalse, agg.OutOfScope = 0, 0, 0
 	agg.PendingAdjudication = 0
@@ -609,6 +625,11 @@ func finalizeAggregate(agg *Aggregate) {
 		}
 		agg.FalsePositives += r.FalsePositives
 		agg.ControlInventions += r.ControlInventions
+		if r.PinChain != nil {
+			agg.Pinned += r.PinChain.Pinned
+			agg.Refuted += r.PinChain.Refuted
+			agg.Blocked += r.PinChain.Blocked
+		}
 		if !r.PlanFound {
 			agg.NoPlan++
 		}
@@ -721,6 +742,11 @@ func unwritten(agg Aggregate, opts Options, artifact string, err error) (Aggrega
 func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	name := filepath.Base(caseDir)
 	ws := filepath.Join(opts.Out, name, fmt.Sprint(run), "ws")
+	if opts.PinFrom != "" {
+		// The Pinning section the chain wrote is its whole measurement: a workspace thrown away takes the section
+		// with it, so the arm keeps it whether or not the run landed perfectly.
+		opts.Keep = true
+	}
 	res := Result{Case: name, Run: run, Family: key.Family, Total: len(key.Defects), Workspace: ws}
 	scaffold := Scaffold
 	if opts.AsChange {
@@ -763,6 +789,11 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	}
 	if opts.Sessions > 1 {
 		return runSessions(caseDir, ws, key, runOpts, opts, res)
+	}
+	if opts.PinFrom != "" {
+		// The chain's whole instruction is the review's findings: the case's request and the bench prompt never
+		// reach this arm, because the claim to pin was already made by the reviewer (S1, S2).
+		runOpts.Task = PinPrompt(opts.PinFrom)
 	}
 	started := time.Now()
 	ar, attempts := runAgent(ws, key, runOpts, opts, &res, 0)
@@ -846,6 +877,17 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 	res.Detected = DetectedDefects(res)
 	res.Catch = Discriminate(caseDir, ws, key, opts.SuiteTimeout)
 	res.Caught = res.Catch.Count()
+	if opts.PinFrom != "" {
+		// What the chain pinned is read from the plan it wrote, beside the detection above and never inside it
+		// (S4): the defects it pinned are listed in key order, so the count reads against a TSP arm's caught.
+		chain, pinned := ScorePinning(ws), PinnedDefects(ws, key)
+		for _, d := range key.Defects {
+			if pinned[d.ID] {
+				chain.Defects = append(chain.Defects, d.ID)
+			}
+		}
+		res.PinChain = &chain
+	}
 	if opts.Rounds > 1 {
 		recordRound(&res, ws, res.Catch, roundSeconds, opts.SuiteTimeout)
 	}
@@ -969,6 +1011,9 @@ func merge(res, scored Result) Result {
 	// The loop is the run's own account of work the scorer never sees: a rescore re-reads the plan and the tests,
 	// and must not drop what the fix step and the two arms measured.
 	scored.FixLoop = res.FixLoop
+	// The chain's pins are read from the Pinning section when the run ends: a rescore re-reads findings, not pins,
+	// so the arm's own reading travels with the case instead of disappearing from it.
+	scored.PinChain = res.PinChain
 	scored.Suite, scored.Invalid, scored.InvalidReason = res.Suite, res.Invalid, res.InvalidReason
 	scored.Failed, scored.FailReason = res.Failed, res.FailReason
 	scored.FinalMessage = res.FinalMessage

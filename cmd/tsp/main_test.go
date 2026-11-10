@@ -2725,6 +2725,30 @@ func TestBenchRunFixLoopFlag(t *testing.T) {
 	}
 }
 
+// --pin-from turns a run into the chain arm: a review's findings are the whole instruction, and what the run did
+// with them is scored beside detection. It is accepted like any other run flag and named in the help; independent
+// sessions are refused, because the chain is read once from the plan of one run.
+func TestBenchRunPinFromFlag(t *testing.T) {
+	none := filepath.Join(t.TempDir(), "none-*")
+	findings := filepath.Join(t.TempDir(), "reviewers.jsonl")
+	if err := os.WriteFile(findings, []byte(`{"findings":[{"location":"src/a.mjs:1","claim":"add returns a wrong sum"}]}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runBenchRun([]string{"--runner", "pi", "--model", "cheap", "--pin-from", findings, "--dry-run", "--cases", none, "--out", t.TempDir()}); code != 1 {
+		t.Errorf("a valid --pin-from exit = %d, want 1 (flags accepted, no case matched)", code)
+	}
+	out := t.TempDir()
+	if code := runBenchRun([]string{"--runner", "pi", "--model", "cheap", "--pin-from", findings, "--sessions", "2", "--dry-run", "--cases", none, "--out", out}); code != 2 {
+		t.Errorf("--pin-from with --sessions above 1 exit = %d, want 2", code)
+	}
+	if entries, _ := os.ReadDir(out); len(entries) != 0 {
+		t.Errorf("a refused --pin-from wrote %d entries", len(entries))
+	}
+	if !strings.Contains(usage, "[--pin-from <file>]") {
+		t.Errorf("the help does not name --pin-from:\n%s", usage)
+	}
+}
+
 // setupEnv isolates a setup run: its own HOME and installation state, and exactly the PATH given, so
 // the PATH check sees only what the test decided.
 func setupEnv(t *testing.T, home, path string) []string {
