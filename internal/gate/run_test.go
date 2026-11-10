@@ -222,3 +222,23 @@ func TestRunAuditsFromTheBindingStoredBesideItsLog(t *testing.T) {
 		t.Fatalf("log row = %s, want the audited entry", row)
 	}
 }
+
+// A payload the hook cannot read is a decision it records: the log has to tell "the hook never ran" from
+// "it ran and could not read what it was handed" (#427, F38).
+func TestRunRecordsAPayloadItCouldNotRead(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "telemetry", "testing-gate.jsonl")
+	var stdout bytes.Buffer
+	if code := Run(strings.NewReader(`{"session_id":`), &stdout, logPath, auditNow); code != 0 {
+		t.Fatalf("exit = %d, want 0: an unreadable payload never breaks the turn", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want silence", stdout.String())
+	}
+	row, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if !strings.Contains(string(row), `"skipped":"unreadable_payload"`) {
+		t.Fatalf("log row = %s, want the unreadable payload recorded", row)
+	}
+}
