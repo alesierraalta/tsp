@@ -825,6 +825,9 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     decision = DECISION_ASK;
     const owed = verdict.named ? verdict.debt : verdict.reason;
     if (owed === "") return;
+    // The line names the debt while the question is open: the paint after settle runs once the human has answered,
+    // and a No has cleared the debt by then, so without this the line never showed it at all (#404).
+    paint(ctx);
     const answer = await ctx.ui.select(`${OFFER_QUESTION}\n${owed}`, [OFFER_YES, OFFER_NO]);
     if (answer === OFFER_YES) {
       declined.clear();

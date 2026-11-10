@@ -205,7 +205,9 @@ const errorVerdict = (reason) => ({ stdout: JSON.stringify({ decision: "error", 
 function offerHarness(opts = {}) {
   const { hasUI = true, optedOut = false, env = {}, tools = [], findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), status, probe, entries = [], feedback } = opts;
   const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
-  const asked = [], sent = [], calls = [], notes = [], statuses = [], widgets = [], checkEnvs = [];
+  // shown is what the status line read at the moment each dialog opened: the line exists to show the debt while
+  // the question is open, and every later paint happens after the answer has already settled it.
+  const asked = [], sent = [], calls = [], notes = [], statuses = [], widgets = [], checkEnvs = [], shown = [];
   // findings maps a findings subcommand to the child it answers with; a missing one answers exit 0, no output.
   // check is the pre-offer `tsp check --json` the offer derives its verdict from; the default names one run to plan.
   const exec = async (argv, o) => {
@@ -232,7 +234,7 @@ function offerHarness(opts = {}) {
   };
   tppExtension(pi, { optedOut: () => optedOut, env, exec, head, probe });
   const ctx = { hasUI, cwd: "/repo", sessionManager: { getBranch: () => entries }, ui: {
-    select: async (title, options) => { asked.push({ title, options }); return answer; },
+    select: async (title, options) => { shown.push(statuses.at(-1)); asked.push({ title, options }); return answer; },
     notify: (message, type) => notes.push({ message, type }),
     setStatus: (_key, text) => statuses.push(text),
     setWidget: (key, lines) => widgets.push({ key, lines }),
@@ -251,7 +253,7 @@ function offerHarness(opts = {}) {
     await handlers.agent_settled({ type: "agent_settled", aborted }, ctx);
     return proposal;
   };
-  return { asked, sent, calls, checkEnvs, notes, statuses, widgets, entries, run, start, beforeSettle };
+  return { asked, sent, calls, checkEnvs, notes, statuses, shown, widgets, entries, run, start, beforeSettle };
 }
 
 // The check's argv: one object of output, the turn's own base commit, and one --paths per path.
@@ -1130,6 +1132,20 @@ test("the status line names the debt, follows the loop, and clears when nothing 
   const declined = offerHarness({ answer: "No" });
   await declined.run("change a", [["edit", "internal/a.go"]]);
   assert.equal(declined.statuses.at(-1), undefined, "an answered question is nothing owed");
+});
+
+// The live case that failed on main (#404, #420): the offer raised its question with the status line still blank,
+// because the only paint ran after the answer, and a "No" had already cleared the debt by then. The line has to
+// name the debt while the question is open, whatever the answer turns out to be.
+test("the status line names the debt while the question is open, and clears after a No", async () => {
+  const declined = offerHarness({ answer: "No" });
+  await declined.run("change a", [["edit", "internal/a.go"]]);
+  assert.equal(declined.asked.length, 1, "the offer raised its question");
+  assert.deepEqual(declined.shown, ["tsp: ask"], "the line showed the debt while the question was open");
+  assert.equal(declined.statuses.at(-1), undefined, "a No clears it");
+  const accepted = offerHarness({ answer: "Sí" });
+  await accepted.run("change a", [["edit", "internal/a.go"]]);
+  assert.deepEqual(accepted.shown, ["tsp: ask"], "the line showed the debt before a Sí too");
 });
 
 test("a loop paints its round and open findings, survives a reload, and clears when it ends", async () => {
