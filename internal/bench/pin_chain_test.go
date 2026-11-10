@@ -102,6 +102,10 @@ func TestPinPromptNamesTheFindingsAndTheThreeCommands(t *testing.T) {
 		"tsp pin --refute <id> --reason",
 		"fails on this code and passes on the fixed code",
 		"Do not change any source file.",
+		// The plan is the run's deliverable and ScorePinning reads it from the workspace: a pin recorded at a
+		// path the prompt left to the agent's cwd is a pin the run never reports.
+		"--path " + PlanPath,
+		"tsp plan init --path " + PlanPath,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the prompt does not say %q:\n%s", want, got)
