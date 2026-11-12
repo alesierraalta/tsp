@@ -201,7 +201,7 @@ compares that ref with the working tree, so it runs before you commit.
 
 ```
 $ tsp probe surface --base main
-surface: 3 row(s) in 3 function(s), 2 unguarded; heuristic: data flow is intra-function; a guard is a check that mentions the input, not proof it is correct
+surface: 3 row(s) in 3 function(s), 2 unguarded; fidelity: go ast; heuristic: data flow is intra-function; a guard is a check that mentions the input, not proof it is correct
 api.go:20 func Migrate(...)
   n int (public) -> allocation @ api.go:21  guard: none  verdict: ___
 api.go:25 func handle(...)
@@ -216,8 +216,20 @@ where the value came from: `public` or `internal` (an exported or unexported fun
 `template`, `decode`, `regex`, `allocation`, `loop`, `accumulation`, `case` and `timezone`. Unguarded rows
 print first, because they are what you fix. Exit codes: **1** an input reaches a sink unguarded, **0** every
 row is guarded or there is none, **2** nothing measurable or a usage error. A change in a language the probe
-has no extractor for (today: anything but Go) exits **2** with the language named, because "nothing was
-measured" is not "nothing is wrong".
+has no extractor for — today ruby, rust, java, c/c++ and shell — exits **2** with the language named, because
+"nothing was measured" is not "nothing is wrong".
+
+Three languages are read today, at two fidelities. Go is read with `go/ast`, so a Go row knows the shape of the
+call it found: `fidelity: ast`. JavaScript and TypeScript (`.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx`) and
+Python are read with a lexer and, for Python, with the indentation scan `internal/findings/locate.go` already
+uses: those rows are `fidelity: heuristic`. The header names the fidelity of every measured language, and every
+JSON row carries the field, so a reader knows whether a row came from a parser or from a lexer:
+
+```
+$ tsp probe surface --paths src/report.js --json | jq -c '.fidelity, .rows[0] | {fidelity}'
+{"javascript":"heuristic"}
+{"fidelity":"heuristic"}
+```
 
 A row is worth a probe only when the caller can make it worse. What a caller sends is an input; a
 `context.Context` or an `error` a parameter carries is a runtime handle, so it is not. An allocation or a loop
@@ -226,7 +238,10 @@ proportional to data already in memory and is not a row either, while a scalar s
 one. `fmt.Fprintf` into a buffer the function declared builds a value, and whatever that value reaches is the
 row. And `if err != nil` guards the input only when the call that produced the error parsed the input
 (`strconv.Atoi`, `url.Parse`, `json.Unmarshal`) or a `validate*` helper took it; the status of an unrelated call
-says nothing about the value that call received.
+says nothing about the value that call received. The same three rules hold in the lexer languages: a `Request`,
+a `Session`, a `cursor`, a `self` is a handle rather than an input, a name holding a call's verdict (`err`,
+`ok`, `exists`) is not a guard for the value that call received, and a loop or an allocation bounded by
+`length`/`len()` of a collection already in memory is proportional.
 
 The data flow is *intra-function*: a value is followed through assignments, concatenation, `fmt.Sprintf`,
 `filepath.Join`, string operations, slicing and conversions inside one function, and a guard is a check
@@ -235,7 +250,23 @@ that mentions the value — an `if` that leaves the function, or a call like `st
 interprocedural flow (a value washed through a helper, a struct field or a global), reflection, aliasing
 two names to one value, a guard that is present but wrong (a prefix check against an attacker-shaped root),
 and anything the type system would have to answer. `filepath.Clean` is deliberately not a guard on its own.
-`*_test.go` files are not measured.
+`*_test.go`, `*.test.js`/`*.spec.js` and `test_*.py`/`*_test.py` files are not measured.
+
+Each language also has its own blind spots, and the lexical ones are the reason a row says `heuristic`. The
+JavaScript and TypeScript reader is a lexer, not a parser: it finds top-level `function` declarations, arrows
+bound to a name, `class` methods, and reads a callback nobody named as part of the function it lives in; it does
+not resolve types, generics or JSX text, it does not follow a call to the class that defines the method, and a
+name-written flow means `order.items` is reported as `order`. A computed key (`obj[key] = value`),
+`Object.assign` and `_.merge` are reported as the prototype-pollution sink; a spread (`{ ...input }`) is
+deliberately not a row, because copying own properties cannot reach a prototype. Sinks spelled inside a string,
+a comment, a regex literal or the literal part of a template are never rows, while a template's `${...}`
+interpolations are code. The Python reader is an indentation scan over the same lexer: it sees `def` and
+`async def`, methods included, drops `self` and `cls`, keeps an f-string's `{...}` expressions as code, and
+treats a docstring, a comment or a plain string as data. It does not resolve inheritance, decorators or
+`__getattr__`, and a `pickle.loads`/`yaml.load` that names `SafeLoader` is not a row, because the whole point of
+that argument is to refuse to build arbitrary objects. In both lexers a guard is still only a check that
+mentions the value: an `if` whose body raises, returns or aborts, a `validate*`/`sanitize*`/`escape*`/`clean*`
+helper, an `int()`/`Decimal()`/`parseInt` parse, `shlex.quote`, `markupsafe.escape` or `os.path.realpath`.
 
 ## How it works
 

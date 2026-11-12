@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/alesierraalta/tsp/internal/surface"
 )
@@ -48,7 +49,7 @@ type surfaceFlags struct {
 }
 
 // surfaceHelp is what the probe answers when it is asked what it does.
-const surfaceHelp = "Usage of probe surface:\n  tsp probe surface [dir] [--cwd <dir>] [--base <ref>] [--paths <path> ...] [--json]\nLists, for the functions a change touches (or the paths given), every input and its origin, the sensitive\nsinks it reaches and whether a guard stands between them. --base compares that ref with the working tree.\nExit 1: an input reaches a sink unguarded; 0: every row is guarded or there is none; 2: nothing measurable\nor usage error. Never writes.\n"
+const surfaceHelp = "Usage of probe surface:\n  tsp probe surface [dir] [--cwd <dir>] [--base <ref>] [--paths <path> ...] [--json]\nLists, for the functions a change touches (or the paths given), every input and its origin, the sensitive\nsinks it reaches and whether a guard stands between them. --base compares that ref with the working tree.\nGo is read with go/ast; JavaScript, TypeScript and Python with a lexer, and their rows say heuristic.\nExit 1: an input reaches a sink unguarded; 0: every row is guarded or there is none; 2: nothing measurable\nor usage error. Never writes.\n"
 
 // pathsFlag collects a repeatable --paths value.
 type pathsFlag []string
@@ -106,7 +107,7 @@ func printSurfaceReport(report surface.Report, asJSON bool, out, stderr io.Write
 		}
 		return 0
 	}
-	fmt.Fprintf(out, "surface: %d row(s) in %d function(s), %d unguarded; heuristic: %s\n", len(report.Rows), report.Functions(), report.Unguarded(), report.Heuristic)
+	fmt.Fprintf(out, "surface: %d row(s) in %d function(s), %d unguarded;%s; heuristic: %s\n", len(report.Rows), report.Functions(), report.Unguarded(), fidelityText(report), report.Heuristic)
 	for _, group := range groupSurfaceRows(report.Rows) {
 		fmt.Fprintf(out, "%s:%d func %s(...)\n", group.file, group.line, group.function)
 		for _, row := range group.rows {
@@ -117,6 +118,25 @@ func printSurfaceReport(report surface.Report, asJSON bool, out, stderr io.Write
 		fmt.Fprintln(out, "not measured:", note)
 	}
 	return 0
+}
+
+// fidelityText says how each measured language was read, so the header carries the same honesty the rows do. A
+// language with no rows still says how it was read: the reader has to know whether silence means a parser
+// found nothing or a lexer could not see it.
+func fidelityText(report surface.Report) string {
+	languages := make([]string, 0, len(report.Fidelity))
+	for language := range report.Fidelity {
+		languages = append(languages, language)
+	}
+	if len(languages) == 0 {
+		return ""
+	}
+	sort.Strings(languages)
+	parts := make([]string, 0, len(languages))
+	for _, language := range languages {
+		parts = append(parts, fmt.Sprintf(" %s %s", language, report.Fidelity[language]))
+	}
+	return " fidelity:" + strings.Join(parts, ",")
 }
 
 // guardText is the guard a reader sees, or the word that says there is none.

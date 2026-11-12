@@ -18,6 +18,10 @@ type GoExtractor struct{}
 // Language names the language this extractor reads.
 func (GoExtractor) Language() string { return "go" }
 
+// Fidelity says how the file was read: go/ast sees the function's shape, so a Go row is stronger than a
+// lexer's.
+func (GoExtractor) Fidelity() string { return FidelityAST }
+
 // Extract inventories every function of the file that meets the change, methods included; a closure
 // assigned inside an inventoried function is read as part of that function.
 func (GoExtractor) Extract(src Source, want Want) ([]Function, error) {
@@ -47,45 +51,30 @@ func (GoExtractor) Extract(src Source, want Want) ([]Function, error) {
 	return functions, nil
 }
 
-// taint is one input the function reads, and every name it was assigned to inside the function.
-type taint struct {
-	label  string
-	origin string
-	first  int
-	// values are the names that carry the input's value, which is what a guard has to mention. A status
-	// result reached through a call is tainted for the sinks it feeds, but a check on it says the call
-	// failed, not that the input was examined, so it is bound without landing here.
-	values map[string]bool
-}
-
-// guard is one check seen in the function and the names its condition mentions.
-type guard struct {
-	line  int
-	text  string
-	names map[string]bool
-}
-
-// goAnalysis is one function's inventory while it is being built.
+// goAnalysis is one function's inventory while it is being built. The books it writes to are the shared
+// flow, so a Go row and a lexer's row are the same kind of promise.
 type goAnalysis struct {
-	fset   *token.FileSet
-	path   string
-	fn     *ast.FuncDecl
-	fnLine int
-	taints map[string]*taint
+	*flow
+	fset *token.FileSet
+	fn   *ast.FuncDecl
 	// sizes are the names holding a length or a capacity the function computed, which bound a loop the same
 	// way len() itself does: `end := len(value)` scans value and cannot run past it.
 	sizes map[string]bool
 	// status are the names this function uses for a call's verdict, learned once before the flow settles so a
 	// later `err := helper(x)` is read the same way as the `x, err := helper(...)` that taught it.
 	status map[string]bool
-	guards []guard
-	rows   []Row
 }
 
 // inventory reads one function: first the taints settle, then one pass collects the guards and another
 // looks for sinks, so a check written after a use still guards the sink it precedes.
 func inventory(fset *token.FileSet, path string, fn *ast.FuncDecl) []Row {
-	a := &goAnalysis{fset: fset, path: path, fn: fn, fnLine: fset.Position(fn.Pos()).Line, taints: map[string]*taint{}, sizes: map[string]bool{}, status: map[string]bool{}}
+	a := &goAnalysis{
+		flow:   newFlow(path, fn.Name.Name, fset.Position(fn.Pos()).Line),
+		fset:   fset,
+		fn:     fn,
+		sizes:  map[string]bool{},
+		status: map[string]bool{},
+	}
 	a.seed()
 	a.markStatus(fn.Body)
 	// Three rounds because a name can be assigned before the value that taints it is named: the flow a
@@ -108,51 +97,28 @@ func (a *goAnalysis) seed() {
 	}
 	for _, field := range a.fn.Type.Params.List {
 		text := a.text(field.Type)
-		if isHandle(text) {
-			continue
-		}
 		for _, name := range field.Names {
+			if isGoHandle(text) {
+				continue
+			}
 			label := name.Name
 			if text != "" {
 				label = name.Name + " " + text
 			}
-			a.bind(name.Name, a.newTaint(label, origin, a.fnLine))
+			a.bind(name.Name, a.newTaint(label, origin, a.functionLine))
 		}
 	}
 }
 
-// isHandle reports the parameter types that are runtime handles instead of data: a context carries a deadline
-// and a cancellation, an error carries a verdict. Neither can be made hostile, so neither is an input.
-func isHandle(typeName string) bool {
+// isGoHandle reports the parameter types that are runtime handles instead of data: a context carries a
+// deadline and a cancellation, an error carries a verdict. Neither can be made hostile, so neither is an
+// input.
+func isGoHandle(typeName string) bool {
 	switch typeName {
 	case "context.Context", "*context.Context", "error":
 		return true
 	}
 	return false
-}
-
-// newTaint records one input.
-func (a *goAnalysis) newTaint(label, origin string, line int) *taint {
-	return &taint{label: label, origin: origin, first: line, values: map[string]bool{}}
-}
-
-// bind says that name now carries the taint, which is how a derived value keeps its origin.
-func (a *goAnalysis) bind(name string, t *taint) {
-	if name == "" || name == "_" {
-		return
-	}
-	a.taints[name] = t
-	t.values[name] = true
-}
-
-// bindStatus says that name carries a value computed from the taint but is not the value itself: the error
-// one call returns about work it did with the input. Sinks on it are still reported; a guard on it is not,
-// because `if err != nil` says the call failed, not that the input is safe.
-func (a *goAnalysis) bindStatus(name string, t *taint) {
-	if name == "" || name == "_" {
-		return
-	}
-	a.taints[name] = t
 }
 
 // propagate follows assignments, declarations, range variables and nested closures until every name a
@@ -233,7 +199,7 @@ func (a *goAnalysis) assign(n *ast.AssignStmt) {
 		}
 		a.noteSize(id.Name, t, rhs)
 		if a.statusResult(id.Name, n, i) {
-			a.bindStatus(id.Name, t)
+			a.bindVerdict(id.Name, t)
 			continue
 		}
 		a.bind(id.Name, t)
@@ -748,7 +714,7 @@ func (a *goAnalysis) noteAccumulation(n *ast.AssignStmt) {
 		return
 	}
 	target, ok := n.Lhs[0].(*ast.Ident)
-	if !ok || !a.moneyLike(target.Name) {
+	if !ok || !a.isMoneyLike(target.Name) {
 		return
 	}
 	if t := a.taintOf(n.Rhs[0]); t != nil {
@@ -756,15 +722,9 @@ func (a *goAnalysis) noteAccumulation(n *ast.AssignStmt) {
 	}
 }
 
-// moneyLike reports a total whose float arithmetic drifts, by its declared type or by its name.
-func (a *goAnalysis) moneyLike(name string) bool {
-	lower := strings.ToLower(name)
-	for _, word := range []string{"amount", "price", "total", "sum", "balance", "cost", "fee", "cents", "money", "budget", "charge", "credit", "debit"} {
-		if strings.Contains(lower, word) {
-			return true
-		}
-	}
-	return a.declaredFloat(name)
+// isMoneyLike reports a total whose float arithmetic drifts, by its declared type or by its name.
+func (a *goAnalysis) isMoneyLike(name string) bool {
+	return moneyLike(name) || a.declaredFloat(name)
 }
 
 // declaredFloat reports a name declared float64 or float32 in this function.
@@ -811,39 +771,6 @@ func (a *goAnalysis) noteCaseComparison(n *ast.IfStmt) {
 		}
 		return true
 	})
-}
-
-// add records one row, with the guard that stands between the input's first use and this line.
-func (a *goAnalysis) add(t *taint, kind, call string, line int) {
-	seen := a.guardFor(t, line)
-	a.rows = append(a.rows, Row{
-		File:         a.path,
-		Function:     a.fn.Name.Name,
-		FunctionLine: a.fnLine,
-		Input:        t.label,
-		Origin:       t.origin,
-		Sink:         kind,
-		SinkCall:     call,
-		SinkLine:     line,
-		Guard:        seen,
-		Guarded:      seen != "",
-	})
-}
-
-// guardFor returns the guard text between an input's first use and a sink, preferring the closest one, or
-// an empty string when nothing between them mentions the value.
-func (a *goAnalysis) guardFor(t *taint, line int) string {
-	text, at := "", -1
-	for _, g := range a.guards {
-		if g.line < t.first || g.line > line || g.line < at {
-			continue
-		}
-		if !shares(g.names, t.values) {
-			continue
-		}
-		text, at = g.text, g.line
-	}
-	return text
 }
 
 // mentioned names every identifier and selector root an expression mentions, so a check can be matched to
@@ -947,26 +874,6 @@ func isLiteral(expr ast.Expr) bool {
 	switch expr.(type) {
 	case *ast.BasicLit:
 		return true
-	}
-	return false
-}
-
-// shares reports whether two name sets meet.
-func shares(a, b map[string]bool) bool {
-	for name := range a {
-		if b[name] {
-			return true
-		}
-	}
-	return false
-}
-
-// has reports whether a chain contains a segment.
-func has(segments []string, want string) bool {
-	for _, segment := range segments {
-		if segment == want {
-			return true
-		}
 	}
 	return false
 }

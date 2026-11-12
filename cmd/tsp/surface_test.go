@@ -162,7 +162,7 @@ func Peek(name string) (*os.File, error) {
 // A change the probe has no extractor for exits 2 and says so: silence there would read as clean.
 func TestProbeSurfaceRefusesAChangeItCannotMeasure(t *testing.T) {
 	dir := surfaceRepo(t)
-	if err := os.WriteFile(filepath.Join(dir, "tool.py"), []byte("def load(name):\n    return open(name)\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tool.rb"), []byte("def load(name)\n  open(name)\nend\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	code, out, stderr := captureStreams(t, func() int {
@@ -174,7 +174,7 @@ func TestProbeSurfaceRefusesAChangeItCannotMeasure(t *testing.T) {
 	if out != "" {
 		t.Errorf("stdout = %q, want nothing", out)
 	}
-	if !strings.Contains(stderr, "nothing in this change was measured") || !strings.Contains(stderr, "python") {
+	if !strings.Contains(stderr, "nothing in this change was measured") || !strings.Contains(stderr, "ruby") {
 		t.Errorf("stderr = %q, want the unmeasured language named", stderr)
 	}
 }
@@ -258,5 +258,219 @@ func TestProbeSurfaceDoesNotTouchTheTree(t *testing.T) {
 	}
 	if !before.ModTime().Equal(after.ModTime()) || before.Size() != after.Size() {
 		t.Fatal("the probe rewrote the file it read")
+	}
+}
+
+// surfaceJS is an unguarded input to a filesystem read, in the shape a node service writes it.
+const surfaceJS = `import fs from "node:fs";
+
+export function load(name) {
+  return fs.readFileSync(name);
+}
+`
+
+// surfaceGuardJS is the same flow with the check a reviewer would accept.
+const surfaceGuardJS = `import fs from "node:fs";
+import path from "node:path";
+
+export function load(name) {
+  const full = path.join("data", name);
+  if (!full.startsWith("data/")) {
+    throw new Error("outside the data directory");
+  }
+  return fs.readFileSync(full);
+}
+`
+
+// surfaceQuietJS names sinks only where they are text: a comment, a string and a template's literal part.
+const surfaceQuietJS = `// fs.readFileSync(name) is a comment.
+export function quiet(name) {
+  const note = "fs.readFileSync(name)";
+  const pattern = /fs\.readFileSync\(name\)/;
+  return note + pattern.source;
+}
+`
+
+// surfacePy is an unguarded input to a filesystem read in Python.
+const surfacePy = `import os
+
+
+def load(name):
+    return open(os.path.join("data", name)).read()
+`
+
+// surfaceGuardPy is the same flow with the containment check Python writes.
+const surfaceGuardPy = `import os
+
+
+def load(name):
+    path = os.path.join("data", name)
+    if not path.startswith("data/"):
+        raise ValueError("outside the data directory")
+    with open(path) as handle:
+        return handle.read()
+`
+
+// surfaceQuietPy names sinks only where they are text.
+const surfaceQuietPy = `import os
+
+# open(name) is a comment.
+
+
+def quiet(name):
+    """open(name) and os.system(name) are a docstring."""
+    note = "open(name)"
+    pattern = r"os\.system\(name\)"
+    return note + pattern
+`
+
+// writeFixture lays one file down and returns the directory the probe reads.
+func writeFixture(t *testing.T, name, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// A JavaScript change the lexer can measure reports its rows and says they are heuristic: a reader has to know
+// how shallow the reading is before spending a probe on it.
+func TestProbeSurfaceReportsAnUnguardedJavaScriptRow(t *testing.T) {
+	dir := writeFixture(t, "load.js", surfaceJS)
+	code, out, stderr := captureStreams(t, func() int {
+		return runProbeSurface([]string{"--cwd", dir, "--paths", "load.js"})
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1 for an unguarded input reaching the filesystem: %s", code, stderr)
+	}
+	for _, want := range []string{
+		"1 row(s) in 1 function(s), 1 unguarded",
+		"fidelity: javascript heuristic",
+		"load.js:3 func load(...)",
+		"name (public) -> file @ load.js:4  guard: none  verdict: ___",
+		"heuristic: data flow is intra-function",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+// A guarded JavaScript row stays a report: exit 0 with the guard printed, because the next step attacks the
+// promise.
+func TestProbeSurfaceExitsZeroWhenTheOnlyJavaScriptRowIsGuarded(t *testing.T) {
+	dir := writeFixture(t, "load.js", surfaceGuardJS)
+	code, out, stderr := captureStreams(t, func() int {
+		return runProbeSurface([]string{"--cwd", dir, "--paths", "load.js"})
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 when every row is guarded: %s\n%s", code, stderr, out)
+	}
+	if !strings.Contains(out, "0 unguarded") || !strings.Contains(out, "startsWith") {
+		t.Fatalf("output = %q, want the startsWith guard recorded", out)
+	}
+}
+
+// A sink spelled inside JavaScript text is not a call, so a quiet file measures clean and exits 0.
+func TestProbeSurfaceIgnoresSinksWrittenInJavaScriptText(t *testing.T) {
+	dir := writeFixture(t, "quiet.js", surfaceQuietJS)
+	code, out, stderr := captureStreams(t, func() int {
+		return runProbeSurface([]string{"--cwd", dir, "--paths", "quiet.js"})
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 for a file whose sinks are only text: %s\n%s", code, stderr, out)
+	}
+	if !strings.Contains(out, "0 row(s)") {
+		t.Fatalf("output = %q, want the zero counts", out)
+	}
+}
+
+// The same three behaviours for Python, read by indentation instead of by a parser.
+func TestProbeSurfaceReportsAnUnguardedPythonRow(t *testing.T) {
+	dir := writeFixture(t, "load.py", surfacePy)
+	code, out, stderr := captureStreams(t, func() int {
+		return runProbeSurface([]string{"--cwd", dir, "--paths", "load.py"})
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1: %s", code, stderr)
+	}
+	for _, want := range []string{
+		"1 row(s) in 1 function(s), 1 unguarded",
+		"fidelity: python heuristic",
+		"load.py:4 func load(...)",
+		"name (public) -> file @ load.py:5  guard: none  verdict: ___",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+// A guarded Python sink exits 0.
+func TestProbeSurfaceExitsZeroWhenTheOnlyPythonRowIsGuarded(t *testing.T) {
+	dir := writeFixture(t, "load.py", surfaceGuardPy)
+	code, out, stderr := captureStreams(t, func() int {
+		return runProbeSurface([]string{"--cwd", dir, "--paths", "load.py"})
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0: %s\n%s", code, stderr, out)
+	}
+	if !strings.Contains(out, "0 unguarded") || !strings.Contains(out, "startswith") {
+		t.Fatalf("output = %q, want the startswith guard recorded", out)
+	}
+}
+
+// A Python sink inside a comment, a docstring or a plain string is not a call.
+func TestProbeSurfaceIgnoresSinksWrittenInPythonText(t *testing.T) {
+	dir := writeFixture(t, "quiet.py", surfaceQuietPy)
+	code, out, stderr := captureStreams(t, func() int {
+		return runProbeSurface([]string{"--cwd", dir, "--paths", "quiet.py"})
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0: %s\n%s", code, stderr, out)
+	}
+	if !strings.Contains(out, "0 row(s)") {
+		t.Fatalf("output = %q, want the zero counts", out)
+	}
+}
+
+// The JSON a caller reads carries the same fidelity the text does, per row and per language.
+func TestProbeSurfaceJSONMarksHeuristicRows(t *testing.T) {
+	dir := writeFixture(t, "load.js", surfaceJS)
+	code, out, stderr := captureStreams(t, func() int {
+		return runProbeSurface([]string{"--cwd", dir, "--paths", "load.js", "--json"})
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1: %s", code, stderr)
+	}
+	var report struct {
+		Fidelity map[string]string `json:"fidelity"`
+		Rows     []struct {
+			Sink     string `json:"sink"`
+			Fidelity string `json:"fidelity"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("json: %v: %q", err, out)
+	}
+	if report.Fidelity["javascript"] != "heuristic" {
+		t.Errorf("fidelity = %v, want javascript heuristic", report.Fidelity)
+	}
+	if len(report.Rows) != 1 || report.Rows[0].Fidelity != "heuristic" || report.Rows[0].Sink != "file" {
+		t.Fatalf("rows = %+v, want one heuristic file row", report.Rows)
+	}
+	clean := writeFixture(t, "one.go", "package one\n\nfunc One() {}\n")
+	code, out, _ = captureStreams(t, func() int {
+		return runProbeSurface([]string{"--cwd", clean, "--paths", "one.go", "--json"})
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("json: %v: %q", err, out)
+	}
+	if report.Fidelity["go"] != "ast" {
+		t.Errorf("fidelity = %v, want go ast", report.Fidelity)
 	}
 }

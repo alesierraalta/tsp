@@ -294,13 +294,13 @@ func loadName(name string) (*os.File, error) {
 
 // A language without an extractor is named, not passed over as clean.
 func TestALanguageWithoutAnExtractorIsNotMeasured(t *testing.T) {
-	dir := writeTree(t, map[string]string{"tool.py": "def f(name):\n    return open(name)\n"})
-	report, err := probe(t, dir, "tool.py")
+	dir := writeTree(t, map[string]string{"tool.rb": "def f(name)\n  open(name)\nend\n"})
+	report, err := probe(t, dir, "tool.rb")
 	if !errors.Is(err, ErrUnusable) {
 		t.Fatalf("err = %v, want ErrUnusable", err)
 	}
-	if joined := strings.Join(report.Skipped, "; "); !strings.Contains(joined, "python") {
-		t.Errorf("skipped = %q, want python named", joined)
+	if joined := strings.Join(report.Skipped, "; "); !strings.Contains(joined, "ruby") {
+		t.Errorf("skipped = %q, want ruby named", joined)
 	}
 }
 
@@ -690,5 +690,471 @@ func inspect(name string) error { return nil }
 	row := rowFor(t, report, SinkTemplate)
 	if row.Guarded {
 		t.Fatalf("row = %+v, want unguarded: err is the call's status, not the name", row)
+	}
+}
+
+// The JavaScript extractor reads the file with a lexer instead of a parser, so the row says so: a heuristic
+// row is still a promise, but a reader knows how much the tool claims.
+func TestAnUnguardedJavaScriptParameterReachingTheFilesystemIsARow(t *testing.T) {
+	body := `import fs from "node:fs";
+import path from "node:path";
+
+export function load(name) {
+  return fs.readFileSync(path.join("data", name));
+}
+`
+	dir := writeTree(t, map[string]string{"load.js": body})
+	report, err := probe(t, dir, "load.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rowFor(t, report, SinkFile)
+	if row.Input != "name" || row.Origin != OriginPublic {
+		t.Errorf("input = %q (%s), want the exported parameter", row.Input, row.Origin)
+	}
+	if row.Guarded || row.Guard != "" {
+		t.Errorf("guard = %q guarded=%v, want none", row.Guard, row.Guarded)
+	}
+	if row.Function != "load" || row.SinkLine != lineOf(t, body, "fs.readFileSync") || row.SinkCall != "fs.readFileSync" {
+		t.Errorf("row = %+v, want function load on the readFileSync line", row)
+	}
+	if row.Fidelity != FidelityHeuristic || report.Fidelity["javascript"] != FidelityHeuristic {
+		t.Errorf("fidelity = %q/%q, want heuristic in the row and in the report", row.Fidelity, report.Fidelity["javascript"])
+	}
+	if !report.Blocking() {
+		t.Error("an unguarded input reaching the filesystem must block")
+	}
+}
+
+// The same flow with the check a reviewer would accept: the row stays, guarded, because the next skill step
+// attacks the promise instead of trusting it.
+func TestAGuardedJavaScriptSinkIsRecorded(t *testing.T) {
+	body := `import fs from "node:fs";
+import path from "node:path";
+
+export function load(name) {
+  const full = path.join("data", name);
+  if (!full.startsWith("data/")) {
+    throw new Error("outside the data directory");
+  }
+  return fs.readFileSync(full);
+}
+`
+	dir := writeTree(t, map[string]string{"load.js": body})
+	report, err := probe(t, dir, "load.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rowFor(t, report, SinkFile)
+	if !row.Guarded || !strings.Contains(row.Guard, "startsWith") {
+		t.Fatalf("guard = %q guarded=%v, want the startsWith check recorded", row.Guard, row.Guarded)
+	}
+	if report.Blocking() {
+		t.Errorf("a guarded inventory must not block: %+v", report.Rows)
+	}
+}
+
+// A sink the source only talks about is not a sink: strings, template text, regex literals and comments are
+// not data flow, which is the whole reason the lexer exists.
+func TestASinkInsideJavaScriptTextIsNotARow(t *testing.T) {
+	body := `import fs from "node:fs";
+
+// fs.readFileSync(name) would be a sink if this comment were code.
+/* child_process.execSync(cmd) is the same story. */
+export function quiet(name) {
+  const note = "fs.readFileSync(name)";
+  const pattern = /fs\.readFileSync\(name\)/;
+  const html = ` + "`" + `<div>${"static"}</div>` + "`" + `;
+  return note + pattern.source + html;
+}
+`
+	dir := writeTree(t, map[string]string{"quiet.js": body})
+	report, err := probe(t, dir, "quiet.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Rows) != 0 || report.Blocking() {
+		t.Fatalf("rows = %+v, want none: text carries no flow", report.Rows)
+	}
+}
+
+// Prototype pollution: a computed key written into an object, where the key came from the caller.
+func TestAComputedJavaScriptKeyFromAnInputIsARow(t *testing.T) {
+	body := `export function apply(target, source) {
+  for (const key in source) {
+    target[key] = source[key];
+  }
+  return target;
+}
+`
+	dir := writeTree(t, map[string]string{"merge.js": body})
+	report, err := probe(t, dir, "merge.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rowFor(t, report, SinkDecode)
+	if row.Function != "apply" || row.Guarded {
+		t.Fatalf("row = %+v, want the unguarded merge in apply", row)
+	}
+	if row.SinkLine != lineOf(t, body, "target[key] = source[key]") {
+		t.Errorf("sink line = %d, want the computed assignment", row.SinkLine)
+	}
+}
+
+// A request value handed to a shell is the other defect, and the origin column has to say http.
+func TestAJavaScriptRequestValueReachingExecIsARow(t *testing.T) {
+	body := `import { execSync } from "node:child_process";
+
+export function run(req) {
+  const command = req.query.cmd;
+  return execSync(command);
+}
+`
+	dir := writeTree(t, map[string]string{"run.js": body})
+	report, err := probe(t, dir, "run.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rowFor(t, report, SinkExec)
+	if row.Origin != OriginHTTP || row.Guard != "" {
+		t.Errorf("row = %+v, want an unguarded http value reaching exec", row)
+	}
+	if row.SinkLine != lineOf(t, body, "execSync(command)") {
+		t.Errorf("sink line = %d, want the execSync line", row.SinkLine)
+	}
+}
+
+// TypeScript is the same file with annotations: the type is not a name, and a typed parameter is still an
+// input.
+func TestATypeScriptParameterIsMeasured(t *testing.T) {
+	report, err := probe(t, ".", filepath.Join("testdata", "ts", "load.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wants(t, report, SinkFile, SinkAllocation)
+	if report.Fidelity["typescript"] != FidelityHeuristic {
+		t.Errorf("fidelity = %q, want heuristic", report.Fidelity["typescript"])
+	}
+	for _, row := range report.Rows {
+		if strings.Contains(row.Input, "string") && !strings.HasPrefix(row.Input, "name") && !strings.HasPrefix(row.Input, "count") {
+			t.Errorf("row input = %q, want the parameter name with its type", row.Input)
+		}
+	}
+}
+
+// A class method is callable from outside when the class is exported, and the parameters of a handle — a
+// request — are not inputs themselves: what the request is asked for is.
+func TestAJavaScriptMethodRecordsItsParameters(t *testing.T) {
+	body := `import fs from "node:fs";
+
+export class AssetStore {
+  read(name) {
+    return fs.readFileSync(name);
+  }
+
+  _cache(name) {
+    return fs.readFileSync(name);
+  }
+}
+`
+	dir := writeTree(t, map[string]string{"store.js": body})
+	report, err := probe(t, dir, "store.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Rows) != 2 {
+		t.Fatalf("rows = %+v, want one per method", report.Rows)
+	}
+	for _, row := range report.Rows {
+		want := OriginPublic
+		if row.Function == "_cache" {
+			want = OriginInternal
+		}
+		if row.Origin != want {
+			t.Errorf("row = %+v, want origin %s", row, want)
+		}
+	}
+}
+
+// A JavaScript test file is not shipped code: measuring it would report the fixture, not the promise.
+func TestAJavaScriptTestFileIsNotMeasured(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"load.js":      "export function load(name) { return name; }\n",
+		"load.test.js": "export function load(name) { return name; }\n",
+	})
+	report, err := probe(t, dir, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range report.Rows {
+		if strings.HasSuffix(row.File, ".test.js") {
+			t.Fatalf("row = %+v, want the test file skipped", row)
+		}
+	}
+	if joined := strings.Join(report.Skipped, "; "); !strings.Contains(joined, "load.test.js") {
+		t.Errorf("skipped = %q, want the test file named", joined)
+	}
+}
+
+// Python is read by indentation, not by an interpreter: an unguarded parameter opened as a path is the same
+// promise, and the row says it was read heuristically.
+func TestAnUnguardedPythonParameterReachingTheFilesystemIsARow(t *testing.T) {
+	body := `import os
+
+
+def load(name):
+    return open(os.path.join("data", name)).read()
+`
+	dir := writeTree(t, map[string]string{"load.py": body})
+	report, err := probe(t, dir, "load.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rowFor(t, report, SinkFile)
+	if row.Input != "name" || row.Origin != OriginPublic || row.Guarded {
+		t.Errorf("row = %+v, want the public unguarded parameter", row)
+	}
+	if row.Function != "load" || row.SinkLine != lineOf(t, body, "open(os.path.join") {
+		t.Errorf("row = %+v, want function load on the open line", row)
+	}
+	if row.Fidelity != FidelityHeuristic || report.Fidelity["python"] != FidelityHeuristic {
+		t.Errorf("fidelity = %q/%q, want heuristic", row.Fidelity, report.Fidelity["python"])
+	}
+	if !report.Blocking() {
+		t.Error("an unguarded input reaching the filesystem must block")
+	}
+}
+
+// The check a Python reviewer would accept, in the shape Python writes it.
+func TestAGuardedPythonSinkIsRecorded(t *testing.T) {
+	body := `import os
+
+
+def load(name):
+    path = os.path.join("data", name)
+    if not path.startswith("data/"):
+        raise ValueError("outside the data directory")
+    with open(path) as handle:
+        return handle.read()
+`
+	dir := writeTree(t, map[string]string{"load.py": body})
+	report, err := probe(t, dir, "load.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rowFor(t, report, SinkFile)
+	if !row.Guarded || !strings.Contains(row.Guard, "startswith") {
+		t.Fatalf("guard = %q guarded=%v, want the startswith check recorded", row.Guard, row.Guarded)
+	}
+	if report.Blocking() {
+		t.Errorf("a guarded inventory must not block: %+v", report.Rows)
+	}
+}
+
+// A sink inside a docstring, a comment or a plain string is not a call.
+func TestASinkInsidePythonTextIsNotARow(t *testing.T) {
+	body := `import os
+
+# open(name) would be a sink if this comment were code.
+def quiet(name):
+    """open(name) and os.system(name) are only a promise in a docstring."""
+    note = "open(name)"
+    pattern = r"os\.system\(name\)"
+    return note + pattern
+`
+	dir := writeTree(t, map[string]string{"quiet.py": body})
+	report, err := probe(t, dir, "quiet.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Rows) != 0 || report.Blocking() {
+		t.Fatalf("rows = %+v, want none: text carries no flow", report.Rows)
+	}
+}
+
+// An f-string handed to the database is the injection a Python review is looking for.
+func TestAPythonFStringReachingTheDatabaseIsARow(t *testing.T) {
+	body := `def find(cursor, name):
+    cursor.execute(f"SELECT * FROM users WHERE name = '{name}'")
+`
+	dir := writeTree(t, map[string]string{"find.py": body})
+	report, err := probe(t, dir, "find.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rowFor(t, report, SinkSQL)
+	if row.Guarded || row.SinkLine != lineOf(t, body, "cursor.execute") {
+		t.Errorf("row = %+v, want the unguarded f-string on the execute line", row)
+	}
+	if row.Input != "name" {
+		t.Errorf("input = %q, want the parameter, not the cursor handle", row.Input)
+	}
+}
+
+// shell=True turns a parameter into a program.
+func TestAPythonShellCommandFromAnInputIsARow(t *testing.T) {
+	body := `import subprocess
+
+
+def run(command):
+    return subprocess.run(command, shell=True, capture_output=True)
+`
+	dir := writeTree(t, map[string]string{"run.py": body})
+	report, err := probe(t, dir, "run.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rowFor(t, report, SinkExec)
+	if row.Guarded || row.SinkCall != "subprocess.run" {
+		t.Errorf("row = %+v, want the unguarded subprocess.run", row)
+	}
+}
+
+// A method's first parameter is the object, not an input: the caller never sends it.
+func TestAPythonMethodSkipsSelf(t *testing.T) {
+	body := `class Store:
+    def read(self, name):
+        with open(name) as handle:
+            return handle.read()
+
+    def _secret(self, name):
+        return open(name).read()
+`
+	dir := writeTree(t, map[string]string{"store.py": body})
+	report, err := probe(t, dir, "store.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Rows) != 2 {
+		t.Fatalf("rows = %+v, want one per method", report.Rows)
+	}
+	for _, row := range report.Rows {
+		if row.Input != "name" {
+			t.Errorf("input = %q, want the parameter after self", row.Input)
+		}
+		if row.Function == "_secret" && row.Origin != OriginInternal {
+			t.Errorf("row = %+v, want the underscore method internal", row)
+		}
+		if row.Function == "read" && row.Origin != OriginPublic {
+			t.Errorf("row = %+v, want the plain method public", row)
+		}
+	}
+}
+
+// A Python test file is not shipped code either.
+func TestAPythonTestFileIsNotMeasured(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"load.py":      "def load(name):\n    return open(name)\n",
+		"test_load.py": "def load(name):\n    return open(name)\n",
+		"load_test.py": "def load(name):\n    return open(name)\n",
+	})
+	report, err := probe(t, dir, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Rows) != 1 || report.Rows[0].File != "load.py" {
+		t.Fatalf("rows = %+v, want only the shipped file measured", report.Rows)
+	}
+}
+
+// An allocation or a loop the caller's collection already bounds is proportional, in Python too: a row there
+// is a probe nobody can break.
+func TestAPythonLoopOverACollectionIsNotARow(t *testing.T) {
+	body := `def render(rows):
+    width = len(rows)
+    out = []
+    for row in rows:
+        out.append(str(row))
+    return "".join(out), width
+`
+	dir := writeTree(t, map[string]string{"render.py": body})
+	report, err := probe(t, dir, "render.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Rows) != 0 {
+		t.Fatalf("rows = %+v, want none: the loop walks the caller's own collection", report.Rows)
+	}
+}
+
+// fixture reads one file from testdata, so the bytes a test asserts on are the bytes a reviewer can run the
+// probe against themselves.
+func fixture(t *testing.T, name string) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+// A spread rebuilds an object from a row of the caller's array: it copies own properties and cannot reach a
+// prototype, so it is not the prototype-pollution sink and a row there is a probe nobody can break.
+func TestASpreadRebuiltFromAnInputIsNotARow(t *testing.T) {
+	dir := writeTree(t, map[string]string{"rows.js": `export function normalize(rows) {
+  return rows.map((row) => ({ ...row, amount: Number(row.amount) }));
+}
+`})
+	report, err := probe(t, dir, "rows.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range report.Rows {
+		if row.Sink == SinkDecode {
+			t.Fatalf("row = %+v, want no decode row: a spread cannot pollute a prototype", row)
+		}
+	}
+}
+
+// A JavaScript loop or allocation bounded by the length of a collection the caller handed over is
+// proportional: the caller cannot make it run longer than the data it passed.
+func TestAJavaScriptLoopBoundedByACollectionIsNotARow(t *testing.T) {
+	report, err := probe(t, ".", filepath.Join("testdata", "js", "copy.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Rows) != 0 {
+		t.Fatalf("rows = %+v, want none: rows.length bounds both", report.Rows)
+	}
+}
+
+// A name holding a call's verdict is not the input: `if (!exists)` says the call failed, not that the value was
+// examined, so it does not guard the read that follows.
+func TestAJavaScriptVerdictNameIsNotAGuard(t *testing.T) {
+	body := fixture(t, filepath.Join("js", "verdict.js"))
+	report, err := probe(t, ".", filepath.Join("testdata", "js", "verdict.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := lineOf(t, body, "fs.readFileSync(name)")
+	for _, row := range report.Rows {
+		if row.Sink == SinkFile && row.SinkLine == read {
+			if row.Guarded {
+				t.Fatalf("row = %+v, want the read unguarded: exists is a verdict, not the value", row)
+			}
+			return
+		}
+	}
+	t.Fatalf("no file row on the read line: %+v", report.Rows)
+}
+
+// A subprocess handed an argv list runs one program with the arguments it was given: the value cannot become a
+// shell command, so a row there is a probe nobody can break.
+func TestAPythonArgvListIsNotACommandInjectionRow(t *testing.T) {
+	body := `import subprocess
+
+
+def probe(name):
+    return subprocess.run(["ls", "-l", name], capture_output=True)
+`
+	dir := writeTree(t, map[string]string{"probe.py": body})
+	report, err := probe(t, dir, "probe.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range report.Rows {
+		if row.Sink == SinkExec {
+			t.Fatalf("row = %+v, want no exec row: an argv list does not reach a shell", row)
+		}
 	}
 }

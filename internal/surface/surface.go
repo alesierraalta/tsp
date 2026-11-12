@@ -39,6 +39,13 @@ const (
 	OriginReader   = "reader"
 )
 
+// The fidelities a row can claim: how much the extractor saw of the function that produced it. A parser
+// knows the shape of a call; a lexer only knows the tokens around it.
+const (
+	FidelityAST       = "ast"
+	FidelityHeuristic = "heuristic"
+)
+
 // Row is one input reaching one sink, with an empty verdict for the reader to fill.
 type Row struct {
 	File         string `json:"file"`
@@ -51,6 +58,7 @@ type Row struct {
 	SinkLine     int    `json:"sink_line"`
 	Guard        string `json:"guard"`
 	Guarded      bool   `json:"guarded"`
+	Fidelity     string `json:"fidelity"`
 }
 
 // Report is what one probe measured.
@@ -60,6 +68,9 @@ type Report struct {
 	NotChecked []string `json:"not_checked,omitempty"`
 	Rows       []Row    `json:"rows,omitempty"`
 	Heuristic  string   `json:"heuristic"`
+	// Fidelity says, per measured language, how deeply the rows were read: a parser or a lexer. A reader who
+	// knows the language's rows are heuristic spends a probe differently.
+	Fidelity map[string]string `json:"fidelity,omitempty"`
 }
 
 // Blocking reports whether an unguarded input reaches a sink.
@@ -90,6 +101,8 @@ func (r Report) Functions() int {
 // scope, the report, the rows and the exit codes stay exactly as they are.
 type Extractor interface {
 	Language() string
+	// Fidelity says how the language is read, so a row carries how much it can be trusted.
+	Fidelity() string
 	Extract(src Source, want Want) ([]Function, error)
 }
 
@@ -133,7 +146,11 @@ type Function struct {
 var extractors = map[string]Extractor{}
 
 // register adds one language's extractor.
-func register(extractor Extractor) { extractors[extractor.Language()] = extractor }
+func register(extractor Extractor) { registerAs(extractor, extractor.Language()) }
+
+// registerAs adds one extractor under a second language name: JavaScript and TypeScript are the same file
+// with different extensions, and both are already named separately by languageOf.
+func registerAs(extractor Extractor, language string) { extractors[language] = extractor }
 
 // extractorFor returns the extractor for a language, and whether the probe can measure it at all.
 func extractorFor(language string) (Extractor, bool) {
@@ -191,8 +208,9 @@ func withDefaults(opts Options) Deps {
 func newReport() Report {
 	return Report{
 		Heuristic: Heuristic,
+		Fidelity:  map[string]string{},
 		NotChecked: []string{
-			"test files: the probe inventories shipped code, so *_test.go functions are not measured",
+			"test files: the probe inventories shipped code, so *_test.go, *.test.js/*.spec.js and *_test.py/test_*.py functions are not measured",
 			"interprocedural flow: an input passing through a helper, a struct field, a global or a reflection call is not followed, and two names holding one value are not aliased",
 		},
 	}
@@ -240,6 +258,11 @@ func pathScope(opts Options, d Deps) (string, map[string][]Range, error) {
 		full := named
 		if !filepath.IsAbs(full) {
 			full = filepath.Join(cwd, named)
+		}
+		// The report names files relative to the repository, so a path the caller wrote relative to their
+		// shell has to be made absolute before it can be compared with the root.
+		if absolute, err := filepath.Abs(full); err == nil {
+			full = absolute
 		}
 		info, err := os.Stat(full)
 		if err != nil {
@@ -291,6 +314,21 @@ func skippedDir(name string) bool {
 	return false
 }
 
+// isTestSource names the files the probe does not measure: the shipped code is what a caller can reach, and
+// a fixture nobody ships cannot be made hostile from outside.
+func isTestSource(path string) bool {
+	base := filepath.Base(path)
+	if strings.HasSuffix(base, "_test.go") {
+		return true
+	}
+	for _, suffix := range []string{".test.js", ".spec.js", ".test.jsx", ".spec.jsx", ".test.mjs", ".spec.mjs", ".test.cjs", ".spec.cjs", ".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx", "_test.py"} {
+		if strings.HasSuffix(base, suffix) {
+			return true
+		}
+	}
+	return strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py")
+}
+
 // relative names a file the way the report prints it: repository-relative, slash-separated.
 func relative(root, full string) string {
 	rel, err := filepath.Rel(root, full)
@@ -320,8 +358,9 @@ func inventoryFiles(report *Report, root string, ranges map[string][]Range, d De
 			continue
 		}
 		report.Measured = append(report.Measured, language)
+		report.Fidelity[language] = extractor.Fidelity()
 		for _, rel := range grouped[language] {
-			if strings.HasSuffix(rel, "_test.go") {
+			if isTestSource(rel) {
 				report.Skipped = appendUnique(report.Skipped, "test file, not measured: "+rel)
 				continue
 			}
@@ -337,7 +376,10 @@ func inventoryFiles(report *Report, root string, ranges map[string][]Range, d De
 			}
 			read++
 			for _, fn := range functions {
-				rows = append(rows, fn.Rows...)
+				for _, row := range fn.Rows {
+					row.Fidelity = extractor.Fidelity()
+					rows = append(rows, row)
+				}
 			}
 		}
 	}
