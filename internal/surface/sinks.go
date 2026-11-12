@@ -2,6 +2,7 @@ package surface
 
 import (
 	"go/ast"
+	"go/token"
 	"strings"
 )
 
@@ -34,6 +35,9 @@ type sinkRule struct {
 	// NotFirst names first arguments that mean this call is not the sink the rule describes, so a log
 	// line written to stdout is not reported as an HTTP response.
 	NotFirst []string
+	// LocalWriter says the first argument has to be a stream outside this function: a call that writes into a
+	// buffer the function declared builds a value here, and whatever that value reaches is the sink.
+	LocalWriter bool
 }
 
 // sinkCatalog is the table other languages will reuse: a sink kind, the callee it answers to, and which
@@ -48,7 +52,7 @@ var sinkCatalog = []sinkRule{
 	{Kind: SinkNetwork, Names: []string{"Parse", "ParseRequestURI", "ParseQuery"}, Pkgs: []string{"url"}},
 	{Kind: SinkTemplate, Names: []string{"Execute", "ExecuteTemplate", "Parse", "ParseFiles", "ParseGlob"}, Pkgs: []string{"template", "html"}},
 	{Kind: SinkTemplate, Names: []string{"WriteString"}, Pkgs: []string{"io"}, From: 1},
-	{Kind: SinkTemplate, Names: []string{"Fprintf", "Fprint", "Fprintln"}, Pkgs: []string{"fmt"}, From: 1, NotFirst: []string{"os.Stdout", "os.Stderr", "os.Stdin", "stdout", "stderr", "log.Writer()"}},
+	{Kind: SinkTemplate, Names: []string{"Fprintf", "Fprint", "Fprintln"}, Pkgs: []string{"fmt"}, From: 1, NotFirst: []string{"os.Stdout", "os.Stderr", "os.Stdin", "stdout", "stderr", "log.Writer()"}, LocalWriter: true},
 	{Kind: SinkDecode, Names: []string{"Unmarshal", "UnmarshalStrict", "Decode", "DecodeValue"}, Pkgs: []string{"json", "xml", "gob", "yaml", "toml"}},
 	{Kind: SinkRegex, Names: []string{"Compile", "MustCompile", "CompilePOSIX", "MustCompilePOSIX"}, Pkgs: []string{"regexp"}},
 	{Kind: SinkAllocation, Names: []string{"make", "new"}, From: 1},
@@ -71,10 +75,19 @@ func (r sinkRule) matches(segments []string, call *ast.CallExpr, text func(ast.E
 			}
 		}
 	}
+	if r.LocalWriter && len(call.Args) > 0 && isLocalAddress(call.Args[0]) {
+		return false
+	}
 	if r.From >= len(call.Args) {
 		return false
 	}
 	return true
+}
+
+// isLocalAddress reports &name: the address of something this function builds, not a stream its caller chose.
+func isLocalAddress(expr ast.Expr) bool {
+	unary, ok := expr.(*ast.UnaryExpr)
+	return ok && unary.Op == token.AND
 }
 
 // validatorPrefixes name the calls that clean a value: a function whose name starts with one of these is a
@@ -108,6 +121,16 @@ func isCaseCall(name string) bool {
 		return true
 	}
 	return false
+}
+
+// parseNames are the calls whose error is a verdict on the value they were handed: the parse rejected it or
+// it did not. They are not validators — a parsed URL is still attacker-shaped — but the error they return
+// belongs to the input, so a check on it is a check on the input.
+var parseNames = []string{"Parse", "ParseRequestURI", "ParseQuery", "ParseForm", "Unmarshal", "UnmarshalStrict", "Decode", "DecodeValue"}
+
+// parses reports a call that reads the value it was given and answers whether it makes sense.
+func parses(name string) bool {
+	return anyOf(name, parseNames)
 }
 
 // anyOf reports whether one of the wanted strings is the given one.
