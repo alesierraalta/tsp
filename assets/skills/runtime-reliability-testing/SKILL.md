@@ -4,7 +4,7 @@ description: "Trigger: runtime testing, load testing, stress test, soak test, ca
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.3"
+  version: "1.3.1"
 ---
 
 ## Activation Contract
@@ -38,7 +38,7 @@ journey, Schemathesis against an existing OpenAPI spec).
 4. **Assert on OBSERVED TELEMETRY, not exit codes**: database state, wire payloads, RSS/heap trends, saturation counters.
 5. **Blast radius containment**: load is scoped to test-owned ephemeral containers on isolated networks; approved exceptions keep the same bounded limits and stop contract.
 6. **Teardown is mandatory**: test-owned containers and volumes are removed even on assertion failure; never touch pre-existing resources.
-7. **Evidence**: every conclusion is `observado` (backed by metrics/logs) or `razonado`; every finding carries an executed evidence record per `~/.claude/skills/test-strategy/references/evidence.md`; no finding from reading alone.
+7. **Evidence**: every conclusion is `observado` (backed by metrics/logs) or `razonado`; every finding carries an executed evidence record per `~/.claude/skills/test-strategy/SKILL.md` (invariant 1); no finding from reading alone.
 
 ## Decision Gates
 
