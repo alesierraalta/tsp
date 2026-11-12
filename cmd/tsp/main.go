@@ -1123,7 +1123,7 @@ func runDoctor(args []string) int {
 	return 1
 }
 
-// selfDir is the directory of the running binary, so a spawned agent runs this build when the
+// selfDir is the directory put first on a spawned agent's PATH, so the agent runs this build when the
 // skill tells it to call `tsp plan init`.
 func selfDir() string {
 	exe, err := os.Executable()
@@ -1133,7 +1133,30 @@ func selfDir() string {
 	if abs, err := filepath.Abs(exe); err == nil {
 		exe = abs
 	}
-	return filepath.Dir(exe)
+	dir, err := agentBinDir(exe)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tsp: %v; the agent will run whatever tsp is on PATH\n", err)
+		return filepath.Dir(exe)
+	}
+	return dir
+}
+
+// agentBinDir returns a directory whose `tsp` is exe. The agent calls `tsp` by name, so a build saved under
+// another name would otherwise lose to the installed one without a word; such a build gets a directory of its
+// own holding a `tsp` link to it.
+func agentBinDir(exe string) (string, error) {
+	name := strings.TrimSuffix(filepath.Base(exe), ".exe")
+	if name == "tsp" {
+		return filepath.Dir(exe), nil
+	}
+	dir, err := os.MkdirTemp("", "tsp-agent-bin-")
+	if err != nil {
+		return "", fmt.Errorf("cannot stage %s as tsp: %w", exe, err)
+	}
+	if err := os.Symlink(exe, filepath.Join(dir, "tsp"+strings.TrimPrefix(filepath.Base(exe), name))); err != nil {
+		return "", fmt.Errorf("cannot stage %s as tsp: %w", exe, err)
+	}
+	return dir, nil
 }
 
 func runCheck(args []string) int {
