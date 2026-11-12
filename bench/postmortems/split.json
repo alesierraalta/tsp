@@ -227,5 +227,21 @@
    "u08-clean-pager": []
   },
   "notes": "u08-clean-pager is the clean control of this batch: it plants no defect and its empty class list says so."
+ },
+ "batch5": {
+  "rule": "Decided before any case was built or measured. Skill text may be written only from train-case misses; held-out cases only measure.",
+  "decided": "2026-11-12, before any w* case existed (issue #447)",
+  "train": [
+   "w01",
+   "w04"
+  ],
+  "held_out": [
+   "w02",
+   "w03",
+   "w05",
+   "w06",
+   "w07"
+  ],
+  "note": "w01-w03 and w07 go, w04-w06 node; w07 is the clean control. Case ids take a slug suffix when built (w01-<slug>); the numbers fix the split."
  }
 }
