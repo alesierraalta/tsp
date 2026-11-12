@@ -39,20 +39,28 @@ type span struct{ from, to int }
 // empty reports a span with nothing in it.
 func (s span) empty() bool { return s.to <= s.from }
 
+// opensGroup reports a lexeme that opens a group: a paren, a bracket, a brace, or a template interpolation.
+// The interpolation is a group because its closing brace has to be matched to something, or a template breaks
+// the block it is written in.
+func opensGroup(text string) bool {
+	return anyOf(text, []string{"(", "[", "{", "${"})
+}
+
+// closesGroup reports a lexeme that closes one.
+func closesGroup(text string) bool { return anyOf(text, []string{")", "]", "}"}) }
+
 // matchClose answers the index of the lexeme closing the group opened at at, or -1. Groups of every kind are
 // counted together, because a call inside a call still ends where its own paren does.
 func matchClose(toks []lexeme, at int) int {
-	switch toks[at].text {
-	case "(", "[", "{":
-	default:
+	if !opensGroup(toks[at].text) {
 		return -1
 	}
 	depth := 0
 	for i := at; i < len(toks); i++ {
-		switch toks[i].text {
-		case "(", "[", "{":
+		switch {
+		case opensGroup(toks[i].text):
 			depth++
-		case ")", "]", "}":
+		case closesGroup(toks[i].text):
 			depth--
 			if depth == 0 {
 				return i
@@ -68,15 +76,13 @@ func depths(toks []lexeme) []int {
 	found := make([]int, len(toks))
 	depth := 0
 	for i, t := range toks {
-		switch t.text {
-		case ")", "]", "}":
+		if closesGroup(t.text) {
 			if depth > 0 {
 				depth--
 			}
 		}
 		found[i] = depth
-		switch t.text {
-		case "(", "[", "{":
+		if opensGroup(t.text) {
 			depth++
 		}
 	}
@@ -85,13 +91,15 @@ func depths(toks []lexeme) []int {
 
 // joins names the tokens a line break does not end a statement after: an operator still wanting its
 // right-hand side continues onto the next line, and so does a keyword that opens a clause.
+// A definition starts a line of its own: it never continues the statement written above it, which is what a
+// `return` followed by a `def` would otherwise be read as.
 func joins(text string) bool {
 	switch text {
 	case ",", "=", "+=", "-=", "*=", "/=", "%=", "|=", "&=", "+", "-", "*", "/", "%", "&&", "||", "??",
 		"?", ":", "=>", "(", "[", "{", ".", "?.", "==", "===", "!=", "!==", "<", ">", "<=", ">=", "&", "|",
 		"^", "!", "~", "->", "\\", "return", "await", "yield", "new", "typeof", "in", "of", "not", "and",
-		"or", "else", "elif", "if", "for", "while", "with", "except", "assert", "raise", "def", "class",
-		"lambda", "from", "import", "as", "@":
+		"or", "else", "elif", "if", "for", "while", "with", "except", "assert", "raise", "lambda", "from",
+		"import", "as", "@":
 		return true
 	}
 	return false
@@ -118,8 +126,7 @@ func statementRange(toks []lexeme, from, to int, python bool) []span {
 	}
 	for i := from; i < to; i++ {
 		t := toks[i]
-		switch t.text {
-		case "(", "[", "{":
+		if opensGroup(t.text) {
 			if t.text == "{" && depth == 0 && !python && jsBlockOpen(toks, i, start) {
 				end(i + 1)
 				close := matchClose(toks, i)
@@ -133,7 +140,8 @@ func statementRange(toks []lexeme, from, to int, python bool) []span {
 			}
 			depth++
 			continue
-		case ")", "]", "}":
+		}
+		if closesGroup(t.text) {
 			if depth > 0 {
 				depth--
 			}
@@ -198,7 +206,7 @@ func splitSpan(toks []lexeme, part span, sep string) []span {
 	var found []span
 	from := part.from
 	for i := part.from; i < part.to; i++ {
-		if toks[i].text == "(" || toks[i].text == "[" || toks[i].text == "{" {
+		if opensGroup(toks[i].text) {
 			if close := matchClose(toks, i); close >= 0 && close < part.to {
 				i = close
 			}
@@ -254,6 +262,15 @@ func render(toks []lexeme, part span) string {
 		parts = append(parts, text)
 	}
 	return strings.Join(parts, " ")
+}
+
+// trimEnd drops the punctuation a statement span keeps at its end, so `return joined;` answers the value it
+// returns instead of the semicolon that ends it.
+func trimEnd(toks []lexeme, part span, texts ...string) span {
+	for part.to > part.from && part.to <= len(toks) && anyOf(toks[part.to-1].text, texts) {
+		part.to--
+	}
+	return part
 }
 
 // containsAny reports whether a span mentions one of the wanted tokens.
@@ -323,10 +340,10 @@ func calleeAt(toks []lexeme, open int) callee {
 func matchOpen(toks []lexeme, close int) int {
 	depth := 0
 	for i := close; i >= 0; i-- {
-		switch toks[i].text {
-		case ")", "]", "}":
+		switch {
+		case closesGroup(toks[i].text):
 			depth++
-		case "(", "[", "{":
+		case opensGroup(toks[i].text):
 			depth--
 			if depth == 0 {
 				return i
@@ -443,12 +460,13 @@ var heuristicValidatorPrefixes = []string{"validate", "sanitize", "sanitise", "e
 // without a parser.
 var heuristicValidators = []string{
 	"parseInt", "parseFloat", "Number", "BigInt", "Boolean", "int", "float", "Decimal", "shlex.quote",
-	"quote", "escape", "realpath", "abspath", "decodeURIComponent", "encodeURIComponent",
+	"quote", "escape", "realpath", "abspath",
 }
 
-// isHeuristicValidator reports a call that cleans a value. decodeURIComponent is deliberately absent from the
-// languages' own lists: decoding is a rename, not a check, which is exactly the ordering defect a path guard
-// hides between.
+// isHeuristicValidator reports a call that cleans a value. decodeURIComponent and encodeURIComponent are
+// deliberately absent: decoding is a rename, not a check, which is exactly the ordering defect a path guard hides
+// between — `if (!userPath.includes("..")) return resolve(root, decodeURIComponent(userPath))` checks the raw
+// value and hands on the decoded one.
 func isHeuristicValidator(name string) bool {
 	if anyOf(name, heuristicValidators) {
 		return true

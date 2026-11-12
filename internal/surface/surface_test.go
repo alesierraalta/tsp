@@ -1158,3 +1158,243 @@ def probe(name):
 		}
 	}
 }
+
+// rowsOf answers every row one function produced, so a test can talk about a function instead of a sink kind.
+func rowsOf(report Report, function string) []Row {
+	var found []Row
+	for _, row := range report.Rows {
+		if row.Function == function {
+			found = append(found, row)
+		}
+	}
+	return found
+}
+
+// S9: the sink of a returned path is the caller's, so an exported function that joins an input into a path and
+// returns it is a row even when nothing in the function opens it. The guard is the one written here, and it
+// shows its own body one call deep, because a reader has to see what the check does not inspect.
+func TestAnExportedFunctionReturningAJoinedPathIsARow(t *testing.T) {
+	body := `package fixture
+
+import (
+	"errors"
+	"path/filepath"
+	"strings"
+)
+
+type Resolver struct{ root string }
+
+func (r *Resolver) inside(p string) bool {
+	return strings.HasPrefix(p, r.root)
+}
+
+func (r *Resolver) Resolve(requestPath string) (string, error) {
+	joined := filepath.Join(r.root, requestPath)
+	if !r.inside(joined) {
+		return "", errors.New("outside the root")
+	}
+	return joined, nil
+}
+
+func (r *Resolver) Bundle(name string) (string, error) {
+	if name == "" {
+		return "", errors.New("empty")
+	}
+	return filepath.Join(r.root, name), nil
+}
+
+func Echo(name string) string { return name }
+
+func internalName(name string) string { return filepath.Join("data", name) }
+`
+	dir := writeTree(t, map[string]string{"resolve.go": body})
+	report, err := probe(t, dir, "resolve.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolved := rowsOf(report, "Resolve")
+	if len(resolved) != 1 || resolved[0].Sink != SinkReturnedPath {
+		t.Fatalf("Resolve rows = %+v, want one %q row", resolved, SinkReturnedPath)
+	}
+	row := resolved[0]
+	if row.SinkLine != lineOf(t, body, "return joined, nil") || row.Input != "requestPath string" || row.Origin != OriginPublic {
+		t.Errorf("row = %+v, want the public parameter at the return line", row)
+	}
+	if !row.Guarded || !strings.Contains(row.Guard, "!r.inside(joined) -> ") {
+		t.Errorf("guard = %q, want the guard followed by the body it calls", row.Guard)
+	}
+	if row.GuardBody != "strings.HasPrefix(p, r.root)" {
+		t.Errorf("guard body = %q, want the body of inside", row.GuardBody)
+	}
+
+	bundled := rowsOf(report, "Bundle")
+	if len(bundled) != 1 || bundled[0].Sink != SinkReturnedPath {
+		t.Fatalf("Bundle rows = %+v, want one %q row", bundled, SinkReturnedPath)
+	}
+	if bundled[0].Guarded {
+		t.Errorf("row = %+v, want it unguarded: an empty check is presence, not containment", bundled[0])
+	}
+	if bundled[0].SinkLine != lineOf(t, body, `return filepath.Join(r.root, name), nil`) {
+		t.Errorf("row = %+v, want it at Bundle's return", bundled[0])
+	}
+
+	// A value handed back unchanged is not built here, and an unexported function's caller is inside the
+	// package, so neither is a returned row.
+	for _, function := range []string{"Echo", "internalName"} {
+		if rows := rowsOf(report, function); len(rows) != 0 {
+			t.Errorf("%s rows = %+v, want none", function, rows)
+		}
+	}
+}
+
+// A guard written as a call into another file of the package is still one call deep: the body lives in the
+// package, and the report reads it there.
+func TestAGoGuardBodyResolvesAcrossThePackage(t *testing.T) {
+	files := map[string]string{
+		"resolve.go": `package fixture
+
+import "path/filepath"
+
+func Read(name string) (string, error) {
+	p := filepath.Join("data", name)
+	if !inside(p) {
+		return "", nil
+	}
+	return p, nil
+}
+`,
+		"guard.go": `package fixture
+
+import "strings"
+
+func inside(p string) bool {
+	return strings.HasPrefix(p, "data/")
+}
+`,
+	}
+	dir := writeTree(t, files)
+	report, err := probe(t, dir, "resolve.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rowsOf(report, "Read")
+	if len(rows) != 1 || rows[0].Sink != SinkReturnedPath {
+		t.Fatalf("rows = %+v, want one returned path", rows)
+	}
+	if rows[0].GuardBody != `strings.HasPrefix(p, "data/")` {
+		t.Errorf("guard body = %q, want the body from the other file", rows[0].GuardBody)
+	}
+}
+
+// S9 in a lexer language: the returned path is the promise, and the guard's body is the sentence a reader has
+// to attack.
+func TestAJavaScriptReturnedPathAndItsGuardBody(t *testing.T) {
+	body := `import path from 'node:path';
+
+const ROOT = '/srv';
+
+function inside(p) {
+  return p.startsWith(ROOT + '/');
+}
+
+export function resolvePath(userPath) {
+  const joined = path.join(ROOT, userPath);
+  if (!inside(joined)) throw new Error('outside the root');
+  return joined;
+}
+
+export function echo(value) {
+  return value;
+}
+`
+	dir := writeTree(t, map[string]string{"paths.js": body})
+	report, err := probe(t, dir, "paths.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rowsOf(report, "resolvePath")
+	if len(rows) != 1 || rows[0].Sink != SinkReturnedPath {
+		t.Fatalf("resolvePath rows = %+v, want one %q row", rows, SinkReturnedPath)
+	}
+	if rows[0].SinkLine != lineOf(t, body, "return joined;") || rows[0].Input != "userPath" {
+		t.Errorf("row = %+v, want the parameter at the return line", rows[0])
+	}
+	if !rows[0].Guarded || rows[0].GuardBody == "" || !strings.Contains(rows[0].GuardBody, "startsWith") {
+		t.Errorf("row = %+v, want the guard's body resolved", rows[0])
+	}
+	if rows := rowsOf(report, "echo"); len(rows) != 0 {
+		t.Errorf("echo rows = %+v, want none: the value is handed back unchanged", rows)
+	}
+}
+
+// Markup built from an input and returned to the caller is the template-injection promise, and the escaper it
+// calls is the guard whose body a reader has to attack.
+func TestAJavaScriptReturnedMarkupIsARow(t *testing.T) {
+	body := "function escapeAttr(value) {\n" +
+		"  return String(value).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;' })[c]);\n" +
+		"}\n\n" +
+		"export function attr(name, value) {\n" +
+		"  return `${name}=\"${escapeAttr(value)}\"`;\n" +
+		"}\n"
+	dir := writeTree(t, map[string]string{"render.js": body})
+	report, err := probe(t, dir, "render.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rowsOf(report, "attr")
+	if len(rows) == 0 {
+		t.Fatalf("attr rows = %+v, want a returned markup row", report.Rows)
+	}
+	for _, row := range rows {
+		if row.Sink != SinkReturnedMarkup {
+			continue
+		}
+		if row.SinkLine != lineOf(t, body, "return `${name}") {
+			t.Errorf("row = %+v, want it at the return", row)
+		}
+		return
+	}
+	t.Fatalf("attr rows = %+v, want one %q row", rows, SinkReturnedMarkup)
+}
+
+// The same promise in Python: os.path.join hands the caller a path it did not check itself.
+func TestAPythonReturnedPathAndItsGuardBody(t *testing.T) {
+	body := `import os
+
+BASE = "/srv"
+
+
+def inside(p):
+    return p.startswith(BASE + "/")
+
+
+def resolve(user_path):
+    joined = os.path.join(BASE, user_path)
+    if not inside(joined):
+        raise ValueError("outside the root")
+    return joined
+
+
+def echo(value):
+    return value
+`
+	dir := writeTree(t, map[string]string{"paths.py": body})
+	report, err := probe(t, dir, "paths.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rowsOf(report, "resolve")
+	if len(rows) != 1 || rows[0].Sink != SinkReturnedPath {
+		t.Fatalf("resolve rows = %+v, want one %q row", rows, SinkReturnedPath)
+	}
+	if rows[0].SinkLine != lineOf(t, body, "    return joined") || rows[0].Input != "user_path" {
+		t.Errorf("row = %+v, want the parameter at the return line", rows[0])
+	}
+	if !rows[0].Guarded || !strings.Contains(rows[0].GuardBody, "startswith") {
+		t.Errorf("row = %+v, want the guard's body resolved", rows[0])
+	}
+	if rows := rowsOf(report, "echo"); len(rows) != 0 {
+		t.Errorf("echo rows = %+v, want none: the value is handed back unchanged", rows)
+	}
+}

@@ -474,3 +474,56 @@ func TestProbeSurfaceJSONMarksHeuristicRows(t *testing.T) {
 		t.Errorf("fidelity = %v, want go ast", report.Fidelity)
 	}
 }
+
+// S9 in JSON: an exported function that returns a joined path is a row, and the guard that stands in front of it
+// carries the decisive expression of the function it calls, so a reader sees what the check does not inspect.
+func TestProbeSurfaceJSONCarriesTheReturnedRowAndItsGuardBody(t *testing.T) {
+	body := `package fixture
+
+import (
+	"errors"
+	"path/filepath"
+	"strings"
+)
+
+func inside(p string) bool { return strings.HasPrefix(p, "/srv/") }
+
+func Resolve(name string) (string, error) {
+	p := filepath.Join("/srv", name)
+	if !inside(p) {
+		return "", errors.New("outside the root")
+	}
+	return p, nil
+}
+`
+	dir := writeFixture(t, "resolve.go", body)
+	code, out, stderr := captureStreams(t, func() int {
+		return runProbeSurface([]string{"--cwd", dir, "--paths", "resolve.go", "--json"})
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 for a guarded row: %s", code, stderr)
+	}
+	var report struct {
+		Rows []struct {
+			Function  string `json:"function"`
+			Sink      string `json:"sink"`
+			SinkLine  int    `json:"sink_line"`
+			Guard     string `json:"guard"`
+			Guarded   bool   `json:"guarded"`
+			GuardBody string `json:"guard_body"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("json: %v: %q", err, out)
+	}
+	if len(report.Rows) != 1 {
+		t.Fatalf("rows = %+v, want the one returned path", report.Rows)
+	}
+	row := report.Rows[0]
+	if row.Sink != "returned-path" || !row.Guarded || row.SinkLine != 16 {
+		t.Errorf("row = %+v, want the guarded returned path at the return statement", row)
+	}
+	if row.GuardBody != `strings.HasPrefix(p, "/srv/")` || !strings.Contains(row.Guard, "->") {
+		t.Errorf("guard = %q body = %q, want the guard followed by the body it calls", row.Guard, row.GuardBody)
+	}
+}

@@ -601,6 +601,7 @@ func (a *jsAnalysis) declarator(part span) {
 		}
 		a.bind(name, t)
 		a.noteSize(name, value)
+		a.noteBuilt(name, a.builtValue(value))
 	}
 }
 
@@ -624,6 +625,9 @@ func (a *jsAnalysis) forStatement(stmt span) {
 	}
 	inside := span{open + 1, close}
 	clauses := splitSpan(toks, inside, ";")
+	if len(clauses) == 0 {
+		return
+	}
 	init := clauses[0]
 	if init.empty() {
 		return
@@ -653,6 +657,7 @@ func (a *jsAnalysis) bindAssigned(name string, value span) {
 	}
 	a.bind(name, t)
 	a.noteSize(name, value)
+	a.noteBuilt(name, a.builtValue(value))
 }
 
 // patternNames answers the names a declaration pattern binds: the identifiers before the value, minus the
@@ -776,7 +781,9 @@ func (a *jsAnalysis) guardStatement(stmt span) {
 	if first.kind == tokIdent && anyOf(first.text, []string{"if", "while"}) && stmt.from+1 < stmt.to && toks[stmt.from+1].text == "(" {
 		open := stmt.from + 1
 		close := matchClose(toks, open)
-		if close >= 0 && a.leaves(a.blockAfter(stmt)) {
+		// A condition that only asks whether the value is there says nothing about what it contains, so it is
+		// not a check the reader can attack.
+		if close >= 0 && a.leaves(a.blockAfter(stmt, close)) && !presenceOnly(toks, span{open + 1, close}) {
 			a.noteGuard(span{open + 1, close}, first.line)
 		}
 	}
@@ -788,19 +795,19 @@ func (a *jsAnalysis) guardStatement(stmt span) {
 		if close < 0 {
 			continue
 		}
-		a.noteGuard(span{i + 1, close + 1}, toks[i].line)
+		a.noteGuard(span{i, close + 1}, toks[i].line)
 	}
 }
 
-// blockAfter answers the tokens of the block a header starts: the curly group when the header opens one, and
-// the rest of the statement when the check is written on one line.
-func (a *jsAnalysis) blockAfter(stmt span) span {
+// blockAfter answers the tokens a header's check says what to do about: the block it opens, or the rest of the
+// statement when the check is written on one line — `if (!inside(p)) throw ...` guards p exactly as loudly.
+func (a *jsAnalysis) blockAfter(stmt span, headerClose int) span {
 	if stmt.to > stmt.from && a.index.toks[stmt.to-1].text == "{" {
 		if close := matchClose(a.index.toks, stmt.to-1); close >= 0 {
 			return span{stmt.to, close}
 		}
 	}
-	return span{stmt.to, stmt.to}
+	return span{headerClose + 1, stmt.to}
 }
 
 // leaves reports a body that leaves the function: a throw, a return, an abort, or a break that drops the
@@ -809,13 +816,76 @@ func (a *jsAnalysis) leaves(part span) bool {
 	return containsAny(a.index.toks, part, "throw", "return", "abort", "exit", "break", "continue")
 }
 
-// noteGuard records one check and the names it mentions.
+// noteGuard records one check and the names it mentions, with the body of the function it calls when this file
+// defines it: the sentence a reader has to attack is what the check does.
 func (a *jsAnalysis) noteGuard(part span, line int) {
 	names := mentions(a.index.toks, part, nil)
 	if len(names) == 0 {
 		return
 	}
-	a.guards = append(a.guards, guard{line: line, text: render(a.index.toks, part), names: names})
+	a.guards = append(a.guards, guard{line: line, text: render(a.index.toks, part), body: a.guardBody(part), names: names})
+}
+
+// guardBody answers the decisive expression of the first function this file defines that a guard calls. One call
+// deep is the promise; a helper the guard calls in turn is not followed.
+func (a *jsAnalysis) guardBody(part span) string {
+	toks := a.index.toks
+	for i := part.from; i < part.to && i < len(toks); i++ {
+		if toks[i].text != "(" {
+			continue
+		}
+		c := calleeAt(toks, i)
+		if c.name() == "" {
+			continue
+		}
+		if body := a.decidedBy(c.name()); body != "" {
+			return body
+		}
+	}
+	return ""
+}
+
+// decidedBy answers the expression a named function of this file decides with: its first return value, or the
+// condition of its first if. A name this file does not define answers nothing and the guard prints as written.
+func (a *jsAnalysis) decidedBy(name string) string {
+	toks := a.index.toks
+	for _, fn := range a.index.functions {
+		if fn.name != name {
+			continue
+		}
+		for _, stmt := range a.index.stmts {
+			if stmt.from < fn.body.from || stmt.to > fn.body.to {
+				continue
+			}
+			first := toks[stmt.from]
+			if first.kind != tokIdent {
+				continue
+			}
+			switch first.text {
+			case "return":
+				return clip(strings.TrimSpace(strings.TrimSuffix(render(toks, span{stmt.from + 1, stmt.to}), ";")), 100)
+			case "if":
+				if condition := conditionOf(toks, stmt); !condition.empty() {
+					return clip(render(toks, condition), 100)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// conditionOf answers the parenthesised condition of an if statement.
+func conditionOf(toks []lexeme, stmt span) span {
+	for i := stmt.from; i < stmt.to && i < len(toks); i++ {
+		if toks[i].text != "(" {
+			continue
+		}
+		if close := matchClose(toks, i); close >= 0 && close < stmt.to {
+			return span{i + 1, close}
+		}
+		break
+	}
+	return span{stmt.to, stmt.to}
 }
 
 // emit finds the sinks each input reaches.
@@ -826,7 +896,167 @@ func (a *jsAnalysis) emit() {
 		a.templateSinks(stmt)
 		a.loopSink(stmt)
 		a.accumulationSink(stmt)
+		a.returnSink(stmt)
 	}
+}
+
+// returnSink reports the sink a caller receives: an exported function that returns a path, markup, a query or a
+// URL built from an input hands the dangerous value on, and the open happens somewhere this probe cannot see. A
+// value handed back unchanged is not built here and is not a row.
+func (a *jsAnalysis) returnSink(stmt span) {
+	toks := a.index.toks
+	first := toks[stmt.from]
+	if first.kind != tokIdent || first.text != "return" || !a.fn.exported {
+		return
+	}
+	value := trimEnd(toks, span{stmt.from + 1, stmt.to}, ";")
+	built := a.builtValue(value)
+	if built.kind == "" {
+		return
+	}
+	for _, t := range taintsOf(identsIn(toks, value), a.taints) {
+		a.addReturned(t, built, first.line)
+	}
+}
+
+// jsPathModules are the modules whose calls assemble or rewrite a path.
+var jsPathModules = []string{"path", "node:path", "path/posix", "path/win32", "upath"}
+
+// jsPathNames are the path operations whose result a caller treats as a location.
+var jsPathNames = []string{"join", "resolve", "normalize", "dirname", "basename", "relative", "toNamespacedPath"}
+
+// jsURLModules are the modules whose calls build a URL, and jsURLNames the operations that do.
+var jsURLModules = []string{"url", "node:url"}
+
+var jsURLNames = []string{"resolve", "format", "parse"}
+
+// jsConversions are the calls that only rename a value, so a returned one keeps the kind it was built with.
+var jsConversions = []string{"String", "Number", "Boolean", "toString", "toFixed", "trim"}
+
+// builtValue answers how a returned expression was built: what its literal bytes say, the path or URL operation
+// it performs, or the name it was assigned. A value handed to an arbitrary helper is not followed, because what
+// that helper does to it is not in this function.
+func (a *jsAnalysis) builtValue(part span) builtValue {
+	toks := a.index.toks
+	part = trimEnd(toks, trimParens(toks, part), ";")
+	if part.empty() || part.from >= len(toks) {
+		return builtValue{}
+	}
+	if part.to == part.from+1 && toks[part.from].kind == tokIdent {
+		return a.built[toks[part.from].text]
+	}
+	if built := a.literalBuiltValue(part); built.kind != "" {
+		return built
+	}
+	if built := a.callBuiltValue(part); built.kind != "" {
+		return built
+	}
+	if a.convertedOnly(part) {
+		return a.mentionedBuilt(part)
+	}
+	return builtValue{}
+}
+
+// callBuiltValue answers the path or URL call the returned expression is: the outermost one, because a path an
+// argument was built from is not what the value is.
+func (a *jsAnalysis) callBuiltValue(part span) builtValue {
+	c, ok := outermostCall(a.index.toks, part)
+	if !ok || c.name() == "" {
+		return builtValue{}
+	}
+	owner := c.owner()
+	if owner == "" {
+		owner = a.index.modules[c.name()]
+	}
+	if anyOf(owner, jsPathModules) && anyOf(c.name(), jsPathNames) {
+		return builtValue{kind: SinkReturnedPath, call: joined(c)}
+	}
+	if anyOf(owner, jsURLModules) && anyOf(c.name(), jsURLNames) {
+		return builtValue{kind: SinkReturnedURL, call: joined(c)}
+	}
+	if anyOf(c.name(), []string{"URL", "URLSearchParams", "WebSocket"}) &&
+		c.from >= 1 && a.index.toks[c.from-1].text == "new" {
+		return builtValue{kind: SinkReturnedURL, call: joined(c)}
+	}
+	return builtValue{}
+}
+
+// literalBuiltValue answers what the strings and template text of a returned expression say they build.
+func (a *jsAnalysis) literalBuiltValue(part span) builtValue {
+	toks := a.index.toks
+	for i := part.from; i < part.to && i < len(toks); i++ {
+		switch toks[i].kind {
+		case tokText:
+			if built := builtFromLiteral(strings.TrimSpace(toks[i].text)); built.kind != "" {
+				return built
+			}
+		case tokString:
+			if built := builtFromLiteral(unquote(toks[i].text)); built.kind != "" {
+				return built
+			}
+		}
+	}
+	return builtValue{}
+}
+
+// convertedOnly reports an expression that only renames or concatenates a value: a conversion call or an
+// addition. Anything else is an operation this probe does not follow.
+func (a *jsAnalysis) convertedOnly(part span) bool {
+	toks := a.index.toks
+	for i := part.from; i < part.to && i < len(toks); i++ {
+		if toks[i].text == "+" {
+			return true
+		}
+		if toks[i].text == "(" {
+			c := calleeAt(toks, i)
+			if !anyOf(c.name(), jsConversions) {
+				return false
+			}
+		}
+	}
+	return false
+}
+
+// mentionedBuilt answers the first built name a returned expression mentions.
+func (a *jsAnalysis) mentionedBuilt(part span) builtValue {
+	for _, name := range identsIn(a.index.toks, part) {
+		if built := a.built[name]; built.kind != "" {
+			return built
+		}
+	}
+	return builtValue{}
+}
+
+// outermostCall answers the call whose result an expression is: the paren at the expression's own depth, closed
+// at its end. A call inside an argument built a value this one consumed, not the value itself.
+func outermostCall(toks []lexeme, part span) (callee, bool) {
+	depth, at := 0, -1
+	for i := part.from; i < part.to && i < len(toks); i++ {
+		switch {
+		case opensGroup(toks[i].text):
+			if toks[i].text == "(" && depth == 0 {
+				at = i
+			}
+			depth++
+		case closesGroup(toks[i].text):
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	if at < 0 || matchClose(toks, at) != part.to-1 {
+		return callee{}, false
+	}
+	found := calleeAt(toks, at)
+	return found, found.name() != ""
+}
+
+// trimParens drops the parentheses a returned expression is wrapped in.
+func trimParens(toks []lexeme, part span) span {
+	for part.to-part.from >= 2 && toks[part.from].text == "(" && matchClose(toks, part.from) == part.to-1 {
+		part = span{part.from + 1, part.to - 1}
+	}
+	return part
 }
 
 // jsSinkCatalog is the JavaScript catalog: the callee a sink answers to, the object or module that owns it,
@@ -952,9 +1182,14 @@ func (a *jsAnalysis) propertySink(stmt span) {
 	}
 }
 
-// templateSinks reports a template literal that builds markup out of an input.
+// templateSinks reports a template literal that builds markup out of an input. A template a function returns is
+// the returned row's promise, so it is reported there instead of twice.
 func (a *jsAnalysis) templateSinks(stmt span) {
 	toks := a.index.toks
+	first := toks[stmt.from]
+	if first.kind == tokIdent && first.text == "return" {
+		return
+	}
 	for i := stmt.from; i < stmt.to; i++ {
 		if toks[i].text != "`" {
 			continue

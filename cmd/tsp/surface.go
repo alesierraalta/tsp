@@ -49,7 +49,7 @@ type surfaceFlags struct {
 }
 
 // surfaceHelp is what the probe answers when it is asked what it does.
-const surfaceHelp = "Usage of probe surface:\n  tsp probe surface [dir] [--cwd <dir>] [--base <ref>] [--paths <path> ...] [--json]\nLists, for the functions a change touches (or the paths given), every input and its origin, the sensitive\nsinks it reaches and whether a guard stands between them. --base compares that ref with the working tree.\nGo is read with go/ast; JavaScript, TypeScript and Python with a lexer, and their rows say heuristic.\nExit 1: an input reaches a sink unguarded; 0: every row is guarded or there is none; 2: nothing measurable\nor usage error. Never writes.\n"
+const surfaceHelp = "Usage of probe surface:\n  tsp probe surface [dir] [--cwd <dir>] [--base <ref>] [--paths <path> ...] [--json]\nLists, for the functions a change touches (or the paths given), every input and its origin, the sensitive\nsinks it reaches and whether a guard stands between them. --base compares that ref with the working tree.\nAn exported function that returns a path, markup, a query or a URL built from an input is a row too: the sink\nis its caller's, `returned-path` and its siblings say so. A guard that calls a function the same package or\nfile defines prints that function's decisive expression after an arrow.\nGo is read with go/ast; JavaScript, TypeScript and Python with a lexer, and their rows say heuristic.\nExit 1: an input reaches a sink unguarded; 0: every row is guarded or there is none; 2: nothing measurable\nor usage error. Never writes.\n"
 
 // pathsFlag collects a repeatable --paths value.
 type pathsFlag []string

@@ -58,7 +58,10 @@ type Row struct {
 	SinkLine     int    `json:"sink_line"`
 	Guard        string `json:"guard"`
 	Guarded      bool   `json:"guarded"`
-	Fidelity     string `json:"fidelity"`
+	// GuardBody is the decisive expression of the guard's own body when the guard calls a function this
+	// package or file defines, so a reader sees what the check does not inspect. It is one call deep.
+	GuardBody string `json:"guard_body,omitempty"`
+	Fidelity  string `json:"fidelity"`
 }
 
 // Report is what one probe measured.
@@ -111,6 +114,9 @@ type Extractor interface {
 type Source struct {
 	Path    string
 	Content []byte
+	// Siblings are the other files of the same package, which is where a Go guard's body one call deep is
+	// written. A language whose units are files instead of packages leaves it empty.
+	Siblings []Source
 }
 
 // Want says which lines of the file the change occupies; the zero value wants every line, which is how a new
@@ -351,6 +357,9 @@ func inventoryFiles(report *Report, root string, ranges map[string][]Range, d De
 	}
 	var rows []Row
 	read := 0
+	// A Go guard's body can live in a sibling file of the same package, so the package is read once per
+	// directory instead of once per file.
+	packages := map[string][]Source{}
 	for _, language := range sortedKeys(grouped) {
 		extractor, ok := extractorFor(language)
 		if !ok {
@@ -369,7 +378,11 @@ func inventoryFiles(report *Report, root string, ranges map[string][]Range, d De
 				report.Skipped = appendUnique(report.Skipped, "unreadable: "+rel)
 				continue
 			}
-			functions, err := extractor.Extract(Source{Path: rel, Content: body}, Want{Ranges: ranges[rel]})
+			source := Source{Path: rel, Content: body}
+			if language == "go" {
+				source.Siblings = packageFiles(packages, root, rel, d)
+			}
+			functions, err := extractor.Extract(source, Want{Ranges: ranges[rel]})
 			if err != nil {
 				report.Skipped = appendUnique(report.Skipped, "cannot parse: "+rel)
 				continue
@@ -387,6 +400,38 @@ func inventoryFiles(report *Report, root string, ranges map[string][]Range, d De
 		return nil, fmt.Errorf("%w: nothing in this change was measured (%s)", ErrUnusable, strings.Join(report.Skipped, "; "))
 	}
 	return rows, nil
+}
+
+// packageFiles answers the other Go files of rel's package, read once per directory. A file the probe cannot
+// read is left out instead of failing the report: the rows of the file it was asked about are still worth
+// having, and the guard then shows what it is called without its body.
+func packageFiles(cache map[string][]Source, root, rel string, d Deps) []Source {
+	dir := filepath.Dir(rel)
+	if sources, seen := cache[dir]; seen {
+		return sources
+	}
+	var sources []Source
+	entries, err := os.ReadDir(filepath.Join(root, dir))
+	if err == nil {
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || !strings.HasSuffix(name, ".go") || isTestSource(name) {
+				continue
+			}
+			path := filepath.ToSlash(filepath.Join(dir, name))
+			if path == rel {
+				continue
+			}
+			body, err := d.ReadFile(filepath.Join(root, path))
+			if err != nil {
+				continue
+			}
+			sources = append(sources, Source{Path: path, Content: body})
+		}
+	}
+	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Path < sources[j].Path })
+	cache[dir] = sources
+	return sources
 }
 
 // dedupe drops the rows one call produced twice and orders the rest so two runs print the same report,

@@ -23,6 +23,16 @@ const (
 	SinkTimezone     = "timezone"
 )
 
+// The returned-value kinds. The sink of a value an exported function builds and hands back is in the caller,
+// which this probe does not follow, so the promise is reported where the value leaves the function and the kind
+// says what the caller receives.
+const (
+	SinkReturnedPath   = "returned-path"
+	SinkReturnedMarkup = "returned-markup"
+	SinkReturnedQuery  = "returned-query"
+	SinkReturnedURL    = "returned-url"
+)
+
 // sinkRule is one line of the catalog: a call the value must not reach, and which arguments carry it.
 type sinkRule struct {
 	Kind string

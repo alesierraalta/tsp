@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"strconv"
 	"strings"
 )
 
@@ -23,12 +24,25 @@ func (GoExtractor) Language() string { return "go" }
 func (GoExtractor) Fidelity() string { return FidelityAST }
 
 // Extract inventories every function of the file that meets the change, methods included; a closure
-// assigned inside an inventoried function is read as part of that function.
+// assigned inside an inventoried function is read as part of that function. The other files of the package are
+// parsed into the same file set, because a guard written as a call into a sibling file is still one call deep.
 func (GoExtractor) Extract(src Source, want Want) ([]Function, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, src.Path, src.Content, 0)
 	if err != nil {
 		return nil, err
+	}
+	bodies := goDefinitionBodies(file)
+	for _, sibling := range src.Siblings {
+		parsed, err := parser.ParseFile(fset, sibling.Path, sibling.Content, 0)
+		if err != nil {
+			continue
+		}
+		for name, body := range goDefinitionBodies(parsed) {
+			if _, seen := bodies[name]; !seen {
+				bodies[name] = body
+			}
+		}
 	}
 	var functions []Function
 	for _, decl := range file.Decls {
@@ -45,10 +59,30 @@ func (GoExtractor) Extract(src Source, want Want) ([]Function, error) {
 			File: src.Path,
 			Name: fn.Name.Name,
 			Line: first,
-			Rows: inventory(fset, src.Path, fn),
+			Rows: inventory(fset, src.Path, fn, bodies),
 		})
 	}
 	return functions, nil
+}
+
+// goBodies maps a function or method name the package defines to its body, which is where a guard's decisive
+// expression is read from. A name is enough: a guard that calls a name this package writes is the call the
+// reader has to attack, and a library call has no body here at all.
+type goBodies map[string]*ast.BlockStmt
+
+// goDefinitionBodies collects the bodies one file defines.
+func goDefinitionBodies(file *ast.File) goBodies {
+	bodies := goBodies{}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		if _, seen := bodies[fn.Name.Name]; !seen {
+			bodies[fn.Name.Name] = fn.Body
+		}
+	}
+	return bodies
 }
 
 // goAnalysis is one function's inventory while it is being built. The books it writes to are the shared
@@ -57,6 +91,8 @@ type goAnalysis struct {
 	*flow
 	fset *token.FileSet
 	fn   *ast.FuncDecl
+	// bodies are the functions this package defines, which is what a guard's own body is read from.
+	bodies goBodies
 	// sizes are the names holding a length or a capacity the function computed, which bound a loop the same
 	// way len() itself does: `end := len(value)` scans value and cannot run past it.
 	sizes map[string]bool
@@ -67,11 +103,12 @@ type goAnalysis struct {
 
 // inventory reads one function: first the taints settle, then one pass collects the guards and another
 // looks for sinks, so a check written after a use still guards the sink it precedes.
-func inventory(fset *token.FileSet, path string, fn *ast.FuncDecl) []Row {
+func inventory(fset *token.FileSet, path string, fn *ast.FuncDecl, bodies goBodies) []Row {
 	a := &goAnalysis{
 		flow:   newFlow(path, fn.Name.Name, fset.Position(fn.Pos()).Line),
 		fset:   fset,
 		fn:     fn,
+		bodies: bodies,
 		sizes:  map[string]bool{},
 		status: map[string]bool{},
 	}
@@ -84,6 +121,7 @@ func inventory(fset *token.FileSet, path string, fn *ast.FuncDecl) []Row {
 	}
 	a.collect(fn.Body.List)
 	a.emit(fn.Body.List)
+	a.emitReturned()
 	return a.rows
 }
 
@@ -198,7 +236,14 @@ func (a *goAnalysis) assign(n *ast.AssignStmt) {
 			continue
 		}
 		a.noteSize(id.Name, t, rhs)
+		a.noteBuilt(id.Name, a.builtValue(rhs))
 		if a.statusResult(id.Name, n, i) {
+			a.bindVerdict(id.Name, t)
+			continue
+		}
+		// A name Go's convention reserves for an outcome holds the call's answer, not the value it was handed:
+		// `ok` from a map lookup says the key was there, not that the value behind it is safe.
+		if _, isCall := rhs.(*ast.CallExpr); !isCall && isVerdictName(id.Name) {
 			a.bindVerdict(id.Name, t)
 			continue
 		}
@@ -320,6 +365,7 @@ func (a *goAnalysis) declare(n *ast.DeclStmt) {
 			if t := a.taintOf(value.Values[i]); t != nil {
 				a.bind(name.Name, t)
 				a.noteSize(name.Name, t, value.Values[i])
+				a.noteBuilt(name.Name, a.builtValue(value.Values[i]))
 			}
 		}
 	}
@@ -350,6 +396,11 @@ func (a *goAnalysis) taintOf(expr ast.Expr) *taint {
 		return a.taintOf(e.Y)
 	case *ast.IndexExpr:
 		if t := a.taintOf(e.X); t != nil {
+			return t
+		}
+		// A value selected by the caller's key is the caller's choice of value: a manifest entry, a table
+		// row, an element the caller picked by index.
+		if t := a.taintOf(e.Index); t != nil {
 			return t
 		}
 		return a.sourceOf(expr)
@@ -479,16 +530,20 @@ func (a *goAnalysis) collect(stmts []ast.Stmt) {
 	})
 }
 
-// noteIfGuard records a condition whose body leaves the function: that is the shape of a check.
+// noteIfGuard records a condition whose body leaves the function: that is the shape of a check. A condition
+// that only asks whether a value is there is not one: emptiness says nothing about what the value contains.
 func (a *goAnalysis) noteIfGuard(n *ast.IfStmt) {
 	if !terminates(n.Body) {
+		return
+	}
+	if presenceCheck(n.Cond) {
 		return
 	}
 	names := a.mentioned(n.Cond)
 	if len(names) == 0 {
 		return
 	}
-	a.guards = append(a.guards, guard{line: a.line(n.Cond), text: a.text(n.Cond), names: names})
+	a.guards = append(a.guards, guard{line: a.line(n.Cond), text: a.text(n.Cond), body: a.guardBody(n.Cond), names: names})
 }
 
 // noteValidator records a call that cleans a value. filepath.Clean alone is not a boundary — it turns
@@ -518,6 +573,92 @@ func (a *goAnalysis) noteValidator(call *ast.CallExpr) {
 	a.guards = append(a.guards, guard{line: a.line(call), text: a.text(call), names: names})
 }
 
+// guardBody answers the decisive expression of the first call a guard makes that this package defines, so the
+// reader sees what the check does instead of what it is called. One call deep is the promise; a helper the
+// guard calls in turn is not followed.
+func (a *goAnalysis) guardBody(expr ast.Expr) string {
+	name := ""
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if name != "" {
+			return false
+		}
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		segments := chain(call.Fun)
+		if len(segments) == 0 {
+			return true
+		}
+		if _, defined := a.bodies[segments[len(segments)-1]]; defined {
+			name = segments[len(segments)-1]
+			return false
+		}
+		return true
+	})
+	body, ok := a.bodies[name]
+	if !ok {
+		return ""
+	}
+	return clip(a.decisive(body), 100)
+}
+
+// decisive answers the expression that decides a guard function: the value of its only return, or the condition
+// of its first return or if. Anything longer than that is the guard's whole body, which the reader has anyway.
+func (a *goAnalysis) decisive(body *ast.BlockStmt) string {
+	if len(body.List) == 1 {
+		if ret, ok := body.List[0].(*ast.ReturnStmt); ok && len(ret.Results) == 1 {
+			return a.text(ret.Results[0])
+		}
+	}
+	found := ""
+	ast.Inspect(body, func(node ast.Node) bool {
+		if found != "" {
+			return false
+		}
+		switch n := node.(type) {
+		case *ast.ReturnStmt:
+			if len(n.Results) == 1 {
+				found = a.text(n.Results[0])
+			}
+		case *ast.IfStmt:
+			found = a.text(n.Cond)
+		}
+		return true
+	})
+	return found
+}
+
+// presenceCheck reports a condition that only asks whether a value is empty: an empty string or a length of
+// zero. It says nothing about what the value contains, so it is not a guard; a nil check is not one of these,
+// because the error a parse returns is the verdict on the value it was handed.
+func presenceCheck(cond ast.Expr) bool {
+	compared, ok := cond.(*ast.BinaryExpr)
+	if !ok || (compared.Op != token.EQL && compared.Op != token.NEQ) {
+		return false
+	}
+	return emptyValue(compared.X) || emptyValue(compared.Y)
+}
+
+// emptyValue reports the expressions that stand for nothing written: an empty string, or a size of zero.
+func emptyValue(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		switch e.Kind {
+		case token.STRING:
+			text, err := strconv.Unquote(e.Value)
+			return err == nil && text == ""
+		case token.INT:
+			return e.Value == "0"
+		}
+	case *ast.CallExpr:
+		return sizeCall(e)
+	case *ast.UnaryExpr:
+		return emptyValue(e.X)
+	}
+	return false
+}
+
 // emit finds the sinks each input reaches, and the case-only comparisons that decide access.
 func (a *goAnalysis) emit(stmts []ast.Stmt) {
 	ast.Inspect(&ast.BlockStmt{List: stmts}, func(node ast.Node) bool {
@@ -533,6 +674,138 @@ func (a *goAnalysis) emit(stmts []ast.Stmt) {
 		}
 		return true
 	})
+}
+
+// emitReturned reports the sink a caller receives: an exported function that returns a path, markup, a query or a
+// URL built from an input hands the dangerous value on, and nothing in this function touches it. A closure's
+// return belongs to the closure, so the walk stops at one instead of crediting the enclosing function.
+func (a *goAnalysis) emitReturned() {
+	if !ast.IsExported(a.fn.Name.Name) {
+		return
+	}
+	ast.Inspect(a.fn.Body, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			a.noteReturn(n)
+		}
+		return true
+	})
+}
+
+// noteReturn reports the values one return statement hands back that carry an input and were built by something
+// the caller will use as a sink. A value handed back unchanged is not built here and is not a row, and a value
+// built from two parameters reports both: each one is a promise the caller receives.
+func (a *goAnalysis) noteReturn(n *ast.ReturnStmt) {
+	for _, result := range n.Results {
+		built := a.builtValue(result)
+		if built.kind == "" {
+			continue
+		}
+		for _, t := range a.taintsOf(result) {
+			a.addReturned(t, built, a.line(n))
+		}
+	}
+}
+
+// taintsOf answers every distinct input an expression carries, in the order the names are written.
+func (a *goAnalysis) taintsOf(expr ast.Expr) []*taint {
+	var names []string
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if id, ok := node.(*ast.Ident); ok {
+			names = append(names, id.Name)
+		}
+		return true
+	})
+	return taintsOf(names, a.taints)
+}
+
+// pathBuilders are the calls that assemble or rewrite a path: an exported function that returns one is promising
+// its caller where a file will be read or written.
+var pathBuilders = []string{"Join", "Clean", "Abs", "ToSlash", "FromSlash", "Dir", "Base", "Rel", "VolumeName"}
+
+// builtValue answers how an expression was built, when it was: the returned sink a caller receives for it. A
+// name answers what it was assigned, a literal what its bytes say, and a call the operation it performs.
+func (a *goAnalysis) builtValue(expr ast.Expr) builtValue {
+	switch e := expr.(type) {
+	case nil:
+		return builtValue{}
+	case *ast.Ident:
+		return a.built[e.Name]
+	case *ast.ParenExpr:
+		return a.builtValue(e.X)
+	case *ast.UnaryExpr:
+		return a.builtValue(e.X)
+	case *ast.StarExpr:
+		return a.builtValue(e.X)
+	case *ast.SliceExpr:
+		return a.builtValue(e.X)
+	case *ast.TypeAssertExpr:
+		return a.builtValue(e.X)
+	case *ast.BasicLit:
+		if e.Kind != token.STRING {
+			return builtValue{}
+		}
+		text, err := strconv.Unquote(e.Value)
+		if err != nil {
+			return builtValue{}
+		}
+		return builtFromLiteral(text)
+	case *ast.BinaryExpr:
+		if e.Op != token.ADD {
+			return builtValue{}
+		}
+		return firstBuilt(a.builtValue(e.X), a.builtValue(e.Y))
+	case *ast.CallExpr:
+		if built := a.callBuilt(e); built.kind != "" {
+			return built
+		}
+		if isConversion(e) {
+			for _, arg := range e.Args {
+				if built := a.builtValue(arg); built.kind != "" {
+					return built
+				}
+			}
+		}
+	}
+	return builtValue{}
+}
+
+// callBuilt answers the call that builds a value the caller will use as a sink: a path operation, or a format
+// string whose bytes carry markup, a statement, a command line or a URL.
+func (a *goAnalysis) callBuilt(call *ast.CallExpr) builtValue {
+	segments := chain(call.Fun)
+	if len(segments) == 0 {
+		return builtValue{}
+	}
+	last := segments[len(segments)-1]
+	if anyOf(segments[0], []string{"filepath", "path"}) && anyOf(last, pathBuilders) {
+		return builtValue{kind: SinkReturnedPath, call: strings.Join(segments, ".")}
+	}
+	if !isFormatCall(segments) {
+		return builtValue{}
+	}
+	literal, ok := call.Args[0].(*ast.BasicLit)
+	if !ok || literal.Kind != token.STRING {
+		return builtValue{}
+	}
+	text, err := strconv.Unquote(literal.Value)
+	if err != nil {
+		return builtValue{}
+	}
+	built := builtFromLiteral(text)
+	if built.kind == "" {
+		return builtValue{}
+	}
+	built.call = strings.Join(segments, ".")
+	return built
+}
+
+// isFormatCall reports the calls whose first argument is a template the rest of the arguments fill in.
+func isFormatCall(segments []string) bool {
+	last := segments[len(segments)-1]
+	return segments[0] == "fmt" && anyOf(last, []string{"Sprintf", "Sprint", "Sprintln"})
 }
 
 // sinkCall reports every argument a sink rule considers dangerous and that carries an input.

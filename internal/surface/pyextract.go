@@ -1,5 +1,7 @@
 package surface
 
+import "strings"
+
 // init registers the Python extractor. Nothing here runs an interpreter: the file is read by indentation the
 // way internal/findings/locate.go reads one, and its rows are marked heuristic because of it.
 func init() { register(PyExtractor{}) }
@@ -158,6 +160,7 @@ func (a *pyAnalysis) propagateStatement(stmt span) {
 		}
 		a.bind(name, t)
 		a.noteSize(name, span{eq + 1, stmt.to})
+		a.noteBuilt(name, a.builtValue(span{eq + 1, stmt.to}))
 	}
 }
 
@@ -326,7 +329,8 @@ func (a *pyAnalysis) guardStatement(stmt span) {
 			if body.empty() {
 				body = a.blockAfter(stmt)
 			}
-			if a.leaves(body) {
+			// A condition that only asks whether the value is there says nothing about what it contains.
+			if a.leaves(body) && !presenceOnly(toks, span{stmt.from + 1, colon}) {
 				a.noteGuard(span{stmt.from + 1, colon}, first.line)
 			}
 		}
@@ -339,7 +343,7 @@ func (a *pyAnalysis) guardStatement(stmt span) {
 		if close < 0 {
 			continue
 		}
-		a.noteGuard(span{i + 1, close + 1}, toks[i].line)
+		a.noteGuard(span{i, close + 1}, toks[i].line)
 	}
 }
 
@@ -386,13 +390,58 @@ func (a *pyAnalysis) leaves(part span) bool {
 	return containsAny(a.index.toks, part, "raise", "return", "abort", "exit", "continue", "break")
 }
 
-// noteGuard records one check and the names it mentions.
+// noteGuard records one check and the names it mentions, with the body of the function it calls when this file
+// defines it: what the check does is the sentence a reader has to attack.
 func (a *pyAnalysis) noteGuard(part span, line int) {
 	names := mentions(a.index.toks, part, nil)
 	if len(names) == 0 {
 		return
 	}
-	a.guards = append(a.guards, guard{line: line, text: render(a.index.toks, part), names: names})
+	a.guards = append(a.guards, guard{line: line, text: render(a.index.toks, part), body: a.guardBody(part), names: names})
+}
+
+// guardBody answers the decisive expression of the first function this file defines that a guard calls. One call
+// deep is the promise; a helper the guard calls in turn is not followed.
+func (a *pyAnalysis) guardBody(part span) string {
+	toks := a.index.toks
+	for i := part.from; i < part.to && i < len(toks); i++ {
+		if toks[i].kind != tokIdent || i+1 >= part.to || toks[i+1].text != "(" {
+			continue
+		}
+		if body := a.decidedBy(toks[i].text); body != "" {
+			return body
+		}
+	}
+	return ""
+}
+
+// decidedBy answers the expression a named function of this file decides with: its first return value, or the
+// condition of its first if. A name this file does not define answers nothing and the guard prints as written.
+func (a *pyAnalysis) decidedBy(name string) string {
+	toks := a.index.toks
+	for _, fn := range a.index.functions {
+		if fn.name != name {
+			continue
+		}
+		for _, stmt := range a.index.stmts {
+			if stmt.from < fn.body.from || stmt.to > fn.body.to {
+				continue
+			}
+			first := toks[stmt.from]
+			if first.kind != tokIdent {
+				continue
+			}
+			switch first.text {
+			case "return":
+				return clip(strings.TrimSpace(render(toks, span{stmt.from + 1, stmt.to})), 100)
+			case "if":
+				if colon := a.colonOf(stmt); colon > stmt.from {
+					return clip(strings.TrimSpace(render(toks, span{stmt.from + 1, colon})), 100)
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // emit finds the sinks each input reaches.
@@ -403,7 +452,127 @@ func (a *pyAnalysis) emit() {
 		a.loopSink(stmt)
 		a.allocationSink(stmt)
 		a.accumulationSink(stmt)
+		a.returnSink(stmt)
 	}
+}
+
+// returnSink reports the sink a caller receives: an exported function that returns a path, markup, a query or a
+// URL built from an input hands the dangerous value on, and the open happens somewhere this probe cannot see. A
+// value handed back unchanged is not built here and is not a row.
+func (a *pyAnalysis) returnSink(stmt span) {
+	toks := a.index.toks
+	first := toks[stmt.from]
+	if first.kind != tokIdent || first.text != "return" || !a.fn.exported {
+		return
+	}
+	value := span{stmt.from + 1, stmt.to}
+	built := a.builtValue(value)
+	if built.kind == "" {
+		return
+	}
+	for _, t := range taintsOf(identsIn(toks, value), a.taints) {
+		a.addReturned(t, built, first.line)
+	}
+}
+
+// pyPathPrefixes are the objects that assemble or rewrite a path.
+var pyPathPrefixes = []string{"os.path", "posixpath", "ntpath", "pathlib"}
+
+// pyPathNames are the path operations whose result a caller treats as a location.
+var pyPathNames = []string{"join", "abspath", "realpath", "normpath", "relpath", "dirname", "basename", "expanduser", "Path", "PurePath", "PosixPath", "WindowsPath"}
+
+// pyURLPrefixes are the objects that build a URL, and pyURLNames the operations that do.
+var pyURLPrefixes = []string{"urllib.parse", "urlparse"}
+
+var pyURLNames = []string{"urljoin", "urlencode", "urlunparse", "quote", "quote_plus"}
+
+// pyConversions are the calls that only rename a value, so a returned one keeps the kind it was built with.
+var pyConversions = []string{"str", "repr", "format", "strip", "lstrip", "rstrip", "lower", "upper", "read_text"}
+
+// builtValue answers how a returned expression was built: what its literal bytes say, the path or URL operation
+// it performs, or the name it was assigned. A value handed to an arbitrary helper is not followed, because what
+// that helper does to it is not in this function.
+func (a *pyAnalysis) builtValue(part span) builtValue {
+	toks := a.index.toks
+	part = trimEnd(toks, trimParens(toks, part), ";")
+	if part.empty() || part.from >= len(toks) {
+		return builtValue{}
+	}
+	if part.to == part.from+1 && toks[part.from].kind == tokIdent {
+		return a.built[toks[part.from].text]
+	}
+	if built := literalBuiltValue(toks, part); built.kind != "" {
+		return built
+	}
+	if built := a.callBuiltValue(part); built.kind != "" {
+		return built
+	}
+	if convertedOnly(toks, part, pyConversions) {
+		return mentionedBuilt(toks, part, a.built)
+	}
+	return builtValue{}
+}
+
+// callBuiltValue answers the path or URL call the returned expression is: the outermost one, because a path an
+// argument was built from is not what the value is.
+func (a *pyAnalysis) callBuiltValue(part span) builtValue {
+	toks := a.index.toks
+	c, ok := outermostCall(toks, part)
+	if !ok || c.name() == "" {
+		return builtValue{}
+	}
+	name := strings.Join(c.segments, ".")
+	owner := strings.Join(c.segments[:len(c.segments)-1], ".")
+	if anyOf(owner, pyPathPrefixes) && anyOf(c.name(), pyPathNames) {
+		return builtValue{kind: SinkReturnedPath, call: name}
+	}
+	if anyOf(owner, pyURLPrefixes) && anyOf(c.name(), pyURLNames) {
+		return builtValue{kind: SinkReturnedURL, call: name}
+	}
+	return builtValue{}
+}
+
+// literalBuiltValue answers what the strings and f-string text of an expression say they build.
+func literalBuiltValue(toks []lexeme, part span) builtValue {
+	for i := part.from; i < part.to && i < len(toks); i++ {
+		switch toks[i].kind {
+		case tokText:
+			if built := builtFromLiteral(strings.TrimSpace(toks[i].text)); built.kind != "" {
+				return built
+			}
+		case tokString:
+			if built := builtFromLiteral(unquote(toks[i].text)); built.kind != "" {
+				return built
+			}
+		}
+	}
+	return builtValue{}
+}
+
+// convertedOnly reports an expression that only renames or concatenates a value: an addition or one of the
+// conversions. Anything else is an operation this probe does not follow.
+func convertedOnly(toks []lexeme, part span, conversions []string) bool {
+	found := false
+	for i := part.from; i < part.to && i < len(toks); i++ {
+		if toks[i].text == "+" {
+			found = true
+			continue
+		}
+		if toks[i].kind == tokIdent && i+1 < part.to && toks[i+1].text == "(" && !anyOf(toks[i].text, conversions) {
+			return false
+		}
+	}
+	return found
+}
+
+// mentionedBuilt answers the first built name a returned expression mentions.
+func mentionedBuilt(toks []lexeme, part span, built map[string]builtValue) builtValue {
+	for _, name := range identsIn(toks, part) {
+		if value := built[name]; value.kind != "" {
+			return value
+		}
+	}
+	return builtValue{}
 }
 
 // pySinkCatalog is the Python catalog: the callee a sink answers to, the module or object that owns it, and
@@ -528,9 +697,14 @@ func (a *pyAnalysis) wholeSink(stmt span, kind, call string) {
 }
 
 // markupSink reports an f-string that builds markup out of an input, which is the shape a template injection
-// reaches a page through.
+// reaches a page through. A markup value a function returns is the returned row's promise, so it is reported
+// there instead of twice.
 func (a *pyAnalysis) markupSink(stmt span) {
 	toks := a.index.toks
+	first := toks[stmt.from]
+	if first.kind == tokIdent && first.text == "return" {
+		return
+	}
 	if !hasMarkup(toks, stmt) {
 		return
 	}

@@ -213,11 +213,41 @@ api.go:11 func Report(...)
 Each row is one input reaching one sink, with an empty verdict for the reader to fill. The origin says
 where the value came from: `public` or `internal` (an exported or unexported function's parameter),
 `http`, `cli`, `env`, `file`, `decode`, or `reader`. The sink kinds are `file`, `exec`, `sql`, `network`,
-`template`, `decode`, `regex`, `allocation`, `loop`, `accumulation`, `case` and `timezone`. Unguarded rows
+`template`, `decode`, `regex`, `allocation`, `loop`, `accumulation`, `case` and `timezone`, plus the four
+returned-value kinds below. Unguarded rows
 print first, because they are what you fix. Exit codes: **1** an input reaches a sink unguarded, **0** every
 row is guarded or there is none, **2** nothing measurable or a usage error. A change in a language the probe
 has no extractor for — today ruby, rust, java, c/c++ and shell — exits **2** with the language named, because
 "nothing was measured" is not "nothing is wrong".
+
+An exported function that builds a value from an input and hands it back is a row even when nothing in the
+function touches a dangerous call, because the sink is the caller's: `returned-path` (a `filepath.Join`,
+`filepath.Clean`, `filepath.Abs`, `path.Join` or a `path.join`/`resolve`/`os.path.join`/`pathlib` result),
+`returned-markup` (a string or template built around an input that carries a tag, an attribute or a format
+verb), `returned-query` (a statement or command line built the same way) and `returned-url` (a built URL, or a
+`new URL`). The row points at the return statement, guards apply as they do anywhere else, and a value handed
+back unchanged is not a row: a passthrough is not a promise the caller did not already have. When a guard is a
+call to a function the same package (Go) or the same file (JavaScript, Python) defines, the row prints that
+function's decisive expression after an arrow — `guard: !r.inside(joined) -> strings.HasPrefix(p, r.root)` —
+because the sentence a model has to attack is what the check does, not what it is called:
+
+```
+$ tsp probe surface --paths bench/cases/u01-asset-resolver/fixture
+asset.go:71 func Resolve(...)
+  Decode(requestPath) (decode) -> returned-path @ asset.go:89  guard: !r.inside(joined) -> strings.HasPrefix(p, r.root)  verdict: ___
+asset.go:93 func Bundle(...)
+  name string (public) -> returned-path @ asset.go:101  guard: none  verdict: ___
+```
+
+The returned kinds are one call deep and one function deep, and they are literal about what they claim. The
+outermost operation decides: a path an argument was built from is not the returned value, so
+`return open(os.path.join("data", name)).read()` is the file row it already was and not a returned path. A
+value passed through an arbitrary helper is not followed, because what that helper does to it is in another
+function; concatenation and a conversion (`string`, `String`, `str`) keep the kind. Markup is read from the
+bytes: a tag, or an attribute written `name="value"`, so a bracketed `<that file>` in prose is not one. A
+statement is read from its words, so `anywhere else` is not a `WHERE` clause. The body of a guard is read from
+the first call the guard makes that resolves in this package or file, truncated at about 100 characters, and a
+name holding a call's verdict (`err`, `ok`) is never the input a returned row reports.
 
 Three languages are read today, at two fidelities. Go is read with `go/ast`, so a Go row knows the shape of the
 call it found: `fidelity: ast`. JavaScript and TypeScript (`.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx`) and
@@ -250,7 +280,11 @@ that mentions the value — an `if` that leaves the function, or a call like `st
 interprocedural flow (a value washed through a helper, a struct field or a global), reflection, aliasing
 two names to one value, a guard that is present but wrong (a prefix check against an attacker-shaped root),
 and anything the type system would have to answer. `filepath.Clean` is deliberately not a guard on its own.
-`*_test.go`, `*.test.js`/`*.spec.js` and `test_*.py`/`*_test.py` files are not measured.
+A returned value is followed no further than the return statement: the probe does not know which caller opens
+the path or writes the markup, and it does not follow a value returned by one function into another. A
+presence check is not a guard either — `if name == ""` or `if (text.length === 0)` asks
+whether a value is there, not what it contains — while `if err != nil` after a parse still counts as a check
+on the parsed value. `*_test.go`, `*.test.js`/`*.spec.js` and `test_*.py`/`*_test.py` files are not measured.
 
 Each language also has its own blind spots, and the lexical ones are the reason a row says `heuristic`. The
 JavaScript and TypeScript reader is a lexer, not a parser: it finds top-level `function` declarations, arrows

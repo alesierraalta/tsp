@@ -15,10 +15,17 @@ type taint struct {
 
 // guard is one check seen in the function and the names its condition mentions.
 type guard struct {
-	line  int
-	text  string
+	line int
+	text string
+	// body is the decisive expression of the function the guard calls, when this package or file defines it:
+	// what the check actually does, which is where a weak check gives itself away.
+	body  string
 	names map[string]bool
 }
+
+// builtValue is how a value was built: the returned sink a caller receives for it, and the call or literal that
+// built it. A name with no entry holds the input itself, unchanged, which is not a returned sink.
+type builtValue struct{ kind, call string }
 
 // flow is the state one function's inventory shares across languages: the inputs it reads, the guards that
 // stand in the way, and the rows they produce. An extractor owns how a language is read; this owns the books,
@@ -29,12 +36,30 @@ type flow struct {
 	functionLine int
 	taints       map[string]*taint
 	guards       []guard
-	rows         []Row
+	// built records, per name that carries an input, how the value in it was built. It is what decides
+	// whether handing the value back is a returned sink.
+	built map[string]builtValue
+	rows  []Row
 }
 
 // newFlow opens the books for one function.
 func newFlow(path, function string, line int) *flow {
-	return &flow{path: path, function: function, functionLine: line, taints: map[string]*taint{}}
+	return &flow{
+		path:         path,
+		function:     function,
+		functionLine: line,
+		taints:       map[string]*taint{},
+		built:        map[string]builtValue{},
+	}
+}
+
+// noteBuilt records how a name's value was built, which is what a returned row is about. A name that holds a
+// call's verdict was not built by the call, so it never carries a returned sink.
+func (f *flow) noteBuilt(name string, value builtValue) {
+	if name == "" || name == "_" || isVerdictName(name) || value.kind == "" {
+		return
+	}
+	f.built[name] = value
 }
 
 // newTaint records one input.
@@ -61,9 +86,15 @@ func (f *flow) bindVerdict(name string, t *taint) {
 	f.taints[name] = t
 }
 
-// add records one row, with the guard that stands between the input's first use and this line.
+// add records one row, with the guard that stands between the input's first use and this line. A guard that
+// calls a function the extractor could read is printed with that function's decisive expression after an
+// arrow, because the sentence a reader has to attack is what the check does, not what it is called.
 func (f *flow) add(t *taint, kind, call string, line int) {
-	seen := f.guardFor(t, line)
+	text, body := f.guardFor(t, line)
+	seen := text
+	if body != "" {
+		seen = text + " -> " + body
+	}
 	f.rows = append(f.rows, Row{
 		File:         f.path,
 		Function:     f.function,
@@ -74,14 +105,15 @@ func (f *flow) add(t *taint, kind, call string, line int) {
 		SinkCall:     call,
 		SinkLine:     line,
 		Guard:        seen,
-		Guarded:      seen != "",
+		Guarded:      text != "",
+		GuardBody:    body,
 	})
 }
 
-// guardFor returns the guard text between an input's first use and a sink, preferring the closest one, or
-// an empty string when nothing between them mentions the value.
-func (f *flow) guardFor(t *taint, line int) string {
-	text, at := "", -1
+// guardFor returns the guard text and the guard's own body between an input's first use and a sink, preferring
+// the closest one, or two empty strings when nothing between them mentions the value.
+func (f *flow) guardFor(t *taint, line int) (string, string) {
+	text, body, at := "", "", -1
 	for _, g := range f.guards {
 		if g.line < t.first || g.line > line || g.line < at {
 			continue
@@ -89,9 +121,34 @@ func (f *flow) guardFor(t *taint, line int) string {
 		if !shares(g.names, t.values) {
 			continue
 		}
-		text, at = g.text, g.line
+		text, body, at = g.text, g.body, g.line
 	}
-	return text
+	return text, body
+}
+
+// addReturned records the row for an exported function handing a built value back to its caller.
+func (f *flow) addReturned(t *taint, built builtValue, line int) {
+	f.add(t, built.kind, built.call, line)
+}
+
+// taintsOf answers every distinct input the named values carry, in the order the names are written, so a value
+// built from two parameters reports both of them. A name holding a call's verdict is not the input: returning
+// `err` hands back what the call said, not the value it was given.
+func taintsOf(names []string, taints map[string]*taint) []*taint {
+	var found []*taint
+	seen := map[*taint]bool{}
+	for _, name := range names {
+		if isVerdictName(name) {
+			continue
+		}
+		t := taints[name]
+		if t == nil || seen[t] {
+			continue
+		}
+		seen[t] = true
+		found = append(found, t)
+	}
+	return found
 }
 
 // shares reports whether two name sets meet.
