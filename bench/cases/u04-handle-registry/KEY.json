@@ -1,0 +1,38 @@
+{
+  "id": "u04-handle-registry",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "family": "input-domain",
+  "request": "the handle-registry behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/handles.js",
+      "line": 15,
+      "class": "unicode-normalization-collision",
+      "keywords": ["normalization", "nfc", "nfd", "canonical", "duplicate"],
+      "description": "The registry key is the trimmed handle lowercased but never Unicode-normalized, so a decomposed spelling and a precomposed spelling of the same name are two keys, and two members hold handles that render identically although the README promises one entry per handle whatever its normalization.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D1 claim(NFD 'Zürich') then claim(NFC 'Zürich') -> second=threw handle taken: Zürich entries=1 renders=@Zürich",
+        "actual": "D1 claim(NFD 'Zürich') then claim(NFC 'Zürich') -> second=ok \"Zürich\" entries=2 renders=@Zürich,@Zürich"
+      },
+      "why_missed": "Every handle in the suite is typed in one normalization form, so the key function is exercised only where trimming and lowercasing are enough and the two spellings never meet."
+    },
+    {
+      "id": "D2",
+      "file": "src/handles.js",
+      "line": 11,
+      "class": "locale-dependent-case-folding",
+      "keywords": ["locale", "folding", "reserved", "turkish", "case"],
+      "description": "The reserved comparison folds the handle with toLocaleLowerCase in the dashboard's locale, so in a Turkish deployment I folds to a dotless ı and ADMIN no longer equals the reserved admin, and a reserved name is claimable.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D2 new Registry({ locale: 'tr' }).claim('ADMIN') -> threw reserved handle: ADMIN entries=0",
+        "actual": "D2 new Registry({ locale: 'tr' }).claim('ADMIN') -> ok \"ADMIN\" entries=1"
+      },
+      "why_missed": "The case test only runs the default en-US locale, where locale-dependent folding and language-independent folding agree on every handle it tries, so the locale parameter never changes an outcome."
+    }
+  ]
+}

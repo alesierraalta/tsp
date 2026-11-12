@@ -1,0 +1,38 @@
+{
+  "id": "u07-plugin-envelope",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "library",
+  "family": "security",
+  "request": "the plugin-envelope behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/envelope.js",
+      "line": 39,
+      "class": "prototype-pollution-merge",
+      "keywords": ["proto", "pollution", "merge", "key", "prototype"],
+      "description": "The merge walks the keys a decoded envelope names without refusing a prototype key, so an envelope carrying __proto__ reaches Object.prototype through the descent and every object in the process gains the attacker's property.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D1 merge({}, {\"__proto__\":{\"polluted\":\"yes\"}}) -> threw envelope: option __proto__ is not allowed ({}).polluted: undefined -> undefined",
+        "actual": "D1 merge({}, {\"__proto__\":{\"polluted\":\"yes\"}}) -> ok {} ({}).polluted: undefined -> yes"
+      },
+      "why_missed": "The suite merges option keys the plugin declares (timeoutMs, retries, headers) and never sends a key that names a prototype slot, so the descent is only exercised on the shape of object it was written for."
+    },
+    {
+      "id": "D2",
+      "file": "src/envelope.js",
+      "line": 69,
+      "class": "duplicate-key-overwrite",
+      "keywords": ["header", "duplicate", "repeated", "overwrite", "collision"],
+      "description": "headerMap assigns each line into the map by lowercased name, so a name that appears more than once keeps only the last value, although the README promises every value in order and Set-Cookie loses the session cookie.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D2 headerMap(['Set-Cookie: session=a','set-cookie: theme=dark']) -> ok {\"set-cookie\":[\"session=a\",\"theme=dark\"]}",
+        "actual": "D2 headerMap(['Set-Cookie: session=a','set-cookie: theme=dark']) -> ok {\"set-cookie\":\"theme=dark\"}"
+      },
+      "why_missed": "Every header list in the suite gives each name once, so the assignment is exercised only where a name cannot collide with an earlier one."
+    }
+  ]
+}

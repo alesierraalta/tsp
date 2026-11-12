@@ -1,0 +1,38 @@
+{
+  "id": "u01-asset-resolver",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "family": "security",
+  "request": "the asset-resolution behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "asset.go",
+      "line": 57,
+      "class": "path-prefix-without-separator",
+      "keywords": ["prefix", "separator", "sibling", "containment", "traversal"],
+      "description": "The containment check compares the joined path with the root by prefix only, so a sibling directory that merely shares the root's name (\"/srv/assets-v2\" for root \"/srv/assets\") satisfies the check and a resolved path escapes the root the README guarantees.",
+      "trigger": {
+        "input": "cd fixture && go run ../testdata/triggers/main.go",
+        "expected": "D1 Resolve(\"../assets-v2/key.pem\") -> err=assets: path leaves the root",
+        "actual": "D1 Resolve(\"../assets-v2/key.pem\") -> path=\"/srv/assets-v2/key.pem\" err=<nil>"
+      },
+      "why_missed": "The suite rejects \"../secrets/key.pem\", which joins to \"/srv/secrets/key.pem\" and fails the prefix check; nothing exercises a sibling directory whose name extends the root's, so the check looks exercised and correct."
+    },
+    {
+      "id": "D2",
+      "file": "asset.go",
+      "line": 101,
+      "class": "unguarded-second-entry-point",
+      "keywords": ["bundle", "manifest", "entry", "unchecked", "escape"],
+      "description": "Bundle joins a manifest target onto the root with no containment check at all, so a manifest entry that walks upwards returns a path outside the root, which the README promises for bundle paths exactly as for request paths.",
+      "trigger": {
+        "input": "cd fixture && go run ../testdata/triggers/main.go",
+        "expected": "D2 Bundle(\"admin\") with manifest admin=../../etc/passwd -> err=assets: path leaves the root",
+        "actual": "D2 Bundle(\"admin\") with manifest admin=../../etc/passwd -> path=\"/etc/passwd\" err=<nil>"
+      },
+      "why_missed": "Every bundle test uses a manifest entry the build emits (\"bundles/app.min.js\"), so the second path that reaches the filesystem is never handed a value that leaves the root."
+    }
+  ]
+}

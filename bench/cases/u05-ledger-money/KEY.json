@@ -1,0 +1,38 @@
+{
+  "id": "u05-ledger-money",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "library",
+  "family": "numeric",
+  "request": "the settlement-amount behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "money.go",
+      "line": 31,
+      "class": "binary-float-money-truncation",
+      "keywords": ["float", "truncation", "cents", "exact", "binary"],
+      "description": "ParseCents multiplies a binary float by 100 and truncates the result to an integer, so an amount that is not representable in binary loses a cent: \"1.15\" becomes 114, although the README promises the exact value in cents.",
+      "trigger": {
+        "input": "cd fixture && go run ../testdata/triggers/main.go",
+        "expected": "D1 ParseCents(\"1.15\") -> cents=115 (1.15) err=<nil>",
+        "actual": "D1 ParseCents(\"1.15\") -> cents=114 (1.14) err=<nil>"
+      },
+      "why_missed": "The suite parses amounts whose hundredths happen to be exactly representable (45.00, 0.05) and then round-trips them with FormatCents, so the truncation never changes a value the tests look at."
+    },
+    {
+      "id": "D2",
+      "file": "money.go",
+      "line": 49,
+      "class": "dropped-split-remainder",
+      "keywords": ["split", "remainder", "share", "sum", "cents"],
+      "description": "Split gives every share the truncated quotient and never hands out the remainder, so splitting a total that does not divide evenly loses cents: Split(1000, 3) returns shares that add up to 999 although the README promises their sum is the total.",
+      "trigger": {
+        "input": "cd fixture && go run ../testdata/triggers/main.go",
+        "expected": "D2 Split(1000, 3) -> shares=[334 333 333] sum=1000 err=<nil>",
+        "actual": "D2 Split(1000, 3) -> shares=[333 333 333] sum=999 err=<nil>"
+      },
+      "why_missed": "The only split test divides 1000 by 4, where the quotient is exact and the missing remainder is zero, so the invariant the README states is never checked against a total with a remainder."
+    }
+  ]
+}
