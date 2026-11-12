@@ -14,7 +14,8 @@
         "internal/mutate/",
         "internal/verify/",
         "internal/gitdiff/",
-        "internal/hookcmd/"
+        "internal/hookcmd/",
+        "internal/surface/"
       ],
       "imports": [
         "github.com/alesierraalta/tsp/internal/quality",
@@ -23,7 +24,8 @@
         "github.com/alesierraalta/tsp/internal/mutate",
         "github.com/alesierraalta/tsp/internal/verify",
         "github.com/alesierraalta/tsp/internal/gitdiff",
-        "github.com/alesierraalta/tsp/internal/hookcmd"
+        "github.com/alesierraalta/tsp/internal/hookcmd",
+        "github.com/alesierraalta/tsp/internal/surface"
       ]
     },
     {
