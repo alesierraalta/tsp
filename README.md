@@ -219,6 +219,15 @@ row is guarded or there is none, **2** nothing measurable or a usage error. A ch
 has no extractor for (today: anything but Go) exits **2** with the language named, because "nothing was
 measured" is not "nothing is wrong".
 
+A row is worth a probe only when the caller can make it worse. What a caller sends is an input; a
+`context.Context` or an `error` a parameter carries is a runtime handle, so it is not. An allocation or a loop
+sized by `len()`/`cap()` of a collection the function already holds — or by a length it computed from one — is
+proportional to data already in memory and is not a row either, while a scalar size or arithmetic on one stays
+one. `fmt.Fprintf` into a buffer the function declared builds a value, and whatever that value reaches is the
+row. And `if err != nil` guards the input only when the call that produced the error parsed the input
+(`strconv.Atoi`, `url.Parse`, `json.Unmarshal`) or a `validate*` helper took it; the status of an unrelated call
+says nothing about the value that call received.
+
 The data flow is *intra-function*: a value is followed through assignments, concatenation, `fmt.Sprintf`,
 `filepath.Join`, string operations, slicing and conversions inside one function, and a guard is a check
 that mentions the value — an `if` that leaves the function, or a call like `strconv.Atoi`, `regexp.QuoteMeta`,
