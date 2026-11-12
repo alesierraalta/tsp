@@ -36,6 +36,7 @@ func TestHelpFlagExitsZeroAndAnUnknownFlagStaysAUsageError(t *testing.T) {
 	for _, sub := range [][]string{
 		{"plan", "add-evidence"}, {"plan", "init"}, {"feedback"}, {"doctor"}, {"check"}, {"redcheck"},
 		{"bench", "run"}, {"bench", "adjudicate"}, {"sync"},
+		{"probe", "surface"},
 		{"findings"}, {"findings", "record"}, {"findings", "check"}, {"findings", "next"}, {"findings", "verdict"},
 	} {
 		for _, help := range []string{"-h", "--help"} {

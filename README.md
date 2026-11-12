@@ -192,6 +192,42 @@ cannot exist, and reporting one would be an opinion. Exit codes are the probe's 
 **0** clean, **2** nothing measurable — a repository without a declaration exits 2, because "no rule
 was enforced" is not "the architecture is clean". JavaScript and TypeScript imports are read without a parser — `from`, `require` and dynamic `import` are matched per line — so a cycle between two of them is not reported, and a specifier inside a comment counts at worst as one extra line.
 
+### Attack surface of the change
+
+`tsp probe surface [dir] [--cwd <dir>] [--base <ref>] [--paths <path> ...] [--json]` asks which inputs
+this change's functions read, which sensitive sinks each one reaches, and whether a guard stands between
+the two. `--paths` inventories the files or directories you name instead of the change, and `--base`
+compares that ref with the working tree, so it runs before you commit.
+
+```
+$ tsp probe surface --base main
+surface: 3 row(s) in 3 function(s), 2 unguarded; heuristic: data flow is intra-function; a guard is a check that mentions the input, not proof it is correct
+api.go:20 func Migrate(...)
+  n int (public) -> allocation @ api.go:21  guard: none  verdict: ___
+api.go:25 func handle(...)
+  r.URL.Query().Get("cmd") (http) -> exec @ api.go:27  guard: none  verdict: ___
+api.go:11 func Report(...)
+  name string (public) -> file @ api.go:17  guard: !strings.HasPrefix(clean, "reports/")  verdict: ___
+```
+
+Each row is one input reaching one sink, with an empty verdict for the reader to fill. The origin says
+where the value came from: `public` or `internal` (an exported or unexported function's parameter),
+`http`, `cli`, `env`, `file`, `decode`, or `reader`. The sink kinds are `file`, `exec`, `sql`, `network`,
+`template`, `decode`, `regex`, `allocation`, `loop`, `accumulation`, `case` and `timezone`. Unguarded rows
+print first, because they are what you fix. Exit codes: **1** an input reaches a sink unguarded, **0** every
+row is guarded or there is none, **2** nothing measurable or a usage error. A change in a language the probe
+has no extractor for (today: anything but Go) exits **2** with the language named, because "nothing was
+measured" is not "nothing is wrong".
+
+The data flow is *intra-function*: a value is followed through assignments, concatenation, `fmt.Sprintf`,
+`filepath.Join`, string operations, slicing and conversions inside one function, and a guard is a check
+that mentions the value — an `if` that leaves the function, or a call like `strconv.Atoi`, `regexp.QuoteMeta`,
+`html.EscapeString` or a `validate*`/`sanitize*` helper — not proof the check is correct. What it cannot see:
+interprocedural flow (a value washed through a helper, a struct field or a global), reflection, aliasing
+two names to one value, a guard that is present but wrong (a prefix check against an attacker-shaped root),
+and anything the type system would have to answer. `filepath.Clean` is deliberately not a guard on its own.
+`*_test.go` files are not measured.
+
 ## How it works
 
 Four pictures of the same system: the pieces, the decision the gate takes at every Stop, the testing
@@ -569,6 +605,7 @@ Additional commands:
 | `tsp probe env [dir] [--json]` | Reports undelivered environment settings (read-only). |
 | `tsp probe quality [--cwd <dir>] [--base <ref>]` | Reports complexity and copied blocks inside the lines a change touches, and names the languages it cannot measure. Exit 0 clean, 1 findings, 2 nothing measurable. |
 | `tsp probe arch [--cwd <dir>] [--base <ref>] [--rules <file>]` | Reports the import edges a change added that `.tsp-arch.json` refuses. Exit 0 clean, 1 findings, 2 nothing measurable. |
+| `tsp probe surface [--cwd <dir>] [--base <ref>] [--paths <path>] [--json]` | Reports the inputs a change's functions read, the sensitive sinks each one reaches, and the guard between them (Go; other languages are named as unmeasured). Exit 0 every row guarded or none, 1 an input reaches a sink unguarded, 2 nothing measurable. |
 | `tsp plan upgrade [--run <slug>] [--path <path>]` | Upgrades a plan to the current contract. |
 | `tsp bench adjudicate` | Records or shows decisions for finding rows; undecided rows stay pending. |
 
