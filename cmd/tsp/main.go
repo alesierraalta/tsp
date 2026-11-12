@@ -1125,38 +1125,44 @@ func runDoctor(args []string) int {
 
 // selfDir is the directory put first on a spawned agent's PATH, so the agent runs this build when the
 // skill tells it to call `tsp plan init`.
-func selfDir() string {
+// The returned func removes whatever was staged for the run and must be called when the run ends.
+func selfDir() (string, func()) {
 	exe, err := os.Executable()
 	if err != nil {
-		return ""
+		return "", func() {}
 	}
 	if abs, err := filepath.Abs(exe); err == nil {
 		exe = abs
 	}
-	dir, err := agentBinDir(exe)
+	dir, cleanup, err := agentBinDir(exe)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tsp: %v; the agent will run whatever tsp is on PATH\n", err)
-		return filepath.Dir(exe)
+		return filepath.Dir(exe), func() {}
 	}
-	return dir
+	return dir, cleanup
 }
 
 // agentBinDir returns a directory whose `tsp` is exe. The agent calls `tsp` by name, so a build saved under
 // another name would otherwise lose to the installed one without a word; such a build gets a directory of its
-// own holding a `tsp` link to it.
-func agentBinDir(exe string) (string, error) {
-	name := strings.TrimSuffix(filepath.Base(exe), ".exe")
-	if name == "tsp" {
-		return filepath.Dir(exe), nil
+// own holding a `tsp` link to it, removed by the returned func.
+func agentBinDir(exe string) (string, func(), error) {
+	stem, ext := filepath.Base(exe), ""
+	if e := filepath.Ext(stem); strings.EqualFold(e, ".exe") {
+		stem, ext = strings.TrimSuffix(stem, e), ".exe"
+	}
+	if strings.EqualFold(stem, "tsp") {
+		return filepath.Dir(exe), func() {}, nil
 	}
 	dir, err := os.MkdirTemp("", "tsp-agent-bin-")
 	if err != nil {
-		return "", fmt.Errorf("cannot stage %s as tsp: %w", exe, err)
+		return "", nil, fmt.Errorf("cannot stage %s as tsp: %w", exe, err)
 	}
-	if err := os.Symlink(exe, filepath.Join(dir, "tsp"+strings.TrimPrefix(filepath.Base(exe), name))); err != nil {
-		return "", fmt.Errorf("cannot stage %s as tsp: %w", exe, err)
+	cleanup := func() { os.RemoveAll(dir) }
+	if err := os.Symlink(exe, filepath.Join(dir, "tsp"+ext)); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("cannot stage %s as tsp: %w", exe, err)
 	}
-	return dir, nil
+	return dir, cleanup, nil
 }
 
 func runCheck(args []string) int {
@@ -2260,6 +2266,8 @@ func runBenchRun(args []string) int {
 		fmt.Fprintln(os.Stderr, "bench run: --runner gentle-review reviews a change, so it needs --as-change")
 		return 2
 	}
+	binDir, unstage := selfDir()
+	defer unstage()
 	_, code := bench.Run(bench.Options{
 		CasesGlob: *cases, Model: *model, EscalateModel: *escalateModel, Rounds: *rounds, Sessions: *sessions, FixLoop: *fixLoop, AsChange: *asChange, EmptyBase: *emptyBase, RecordNudge: *recordNudge, PinFrom: *pinFrom, Runner: *runner, Runs: *runs, Prompt: *prompt, MaxTurns: *maxTurns,
 		Families:     commaList(*families),
@@ -2267,7 +2275,7 @@ func runBenchRun(args []string) int {
 		Timeout:      *timeout,
 		SuiteTimeout: *suiteTimeout, MaxCostUSD: *maxCost, Out: *out, BenchDir: *benchDir,
 		SkillFile: skillFile,
-		ConfigDir: cfgDir, BinDir: selfDir(), Workers: *workers, ConfigMode: configModeFor(*runner, *agentConfig),
+		ConfigDir: cfgDir, BinDir: binDir, Workers: *workers, ConfigMode: configModeFor(*runner, *agentConfig),
 		DryRun: *dryRun, Keep: *keep, Retries: *retries, RetryDelay: *retryDelay, Log: os.Stdout,
 	})
 	// The results line is a promise about a file: a run that matched no case, or one whose record could not be
