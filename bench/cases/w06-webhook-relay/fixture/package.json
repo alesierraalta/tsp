@@ -1,0 +1,11 @@
+{
+  "name": "webhook-relay",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Outbound webhook relay: delivery queue, signed posts, import hooks",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test"
+  }
+}

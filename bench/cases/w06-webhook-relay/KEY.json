@@ -1,0 +1,38 @@
+{
+  "id": "w06-webhook-relay",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "worker",
+  "family": "security",
+  "request": "the delivery target guard and the post-import hook behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/egress/webhook.js",
+      "line": 36,
+      "class": "internal-address-check-on-raw-url",
+      "keywords": ["internal", "egress", "hostname", "userinfo", "webhook"],
+      "description": "WebhookClient.prepare runs the internal-address rules against the raw URL text instead of the parsed hostname, so a URL whose text starts with a public host but whose authority is a loopback address is posted, although Relay.enqueue and the dispatcher both validate with assertTarget, which checks the parsed hostname.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D1 Relay.deliverNow({url: 'https://example.com@127.0.0.1:8080/hook'}) -> blocked egress blocked: 127.0.0.1 is an internal address",
+        "actual": "D1 Relay.deliverNow({url: 'https://example.com@127.0.0.1:8080/hook'}) -> posted to 127.0.0.1"
+      },
+      "why_missed": "Every internal target the suite refuses puts the dotted address at the front of the URL, which is the shape the raw-text rules match, so the check looks like it is reading the host the request reaches."
+    },
+    {
+      "id": "D2",
+      "file": "src/jobs/hooks.js",
+      "line": 18,
+      "class": "shell-command-injection",
+      "keywords": ["hook", "shell", "argument", "injection", "child_process"],
+      "description": "The post-import hook joins the interpreter, the hook script and the payload name into one command string and runs it through a shell, while src/hooks/runner.js validates every argument with assertHookArgument and spawns without a shell; the payload name is a plain token by contract, so a name carrying a semicolon runs a second command.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D2 runPostImportHook('payload.json; printf relay-injected') -> blocked unsafe hook argument: payload.json; printf relay-injected",
+        "actual": "D2 runPostImportHook('payload.json; printf relay-injected') -> stdout \"tagged payload.json\\nrelay-injected\""
+      },
+      "why_missed": "The suite runs the hook with payload.json, where a shell and a spawn produce the same output, and checks assertHookArgument on its own, so the one path that never calls it is exercised only on a name the shell reads as a single word."
+    }
+  ]
+}
