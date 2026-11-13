@@ -304,7 +304,11 @@ func TestCorpusSuitesAreGreenOnEveryVariant(t *testing.T) {
 func TestCorpusShipsEveryFixtureFile(t *testing.T) {
 	// A case ignored by a .gitignore pattern (the repo's own bin/ once was) passes in the authoring
 	// worktree and breaks on any clean checkout, so the corpus gate must notice before CI does.
-	out, err := exec.Command("git", "ls-files", "--others", "--ignored", "--exclude-standard", "bench/cases").Output()
+	root, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Skipf("git could not find the repository root: %v", err)
+	}
+	out, err := exec.Command("git", "-C", strings.TrimSpace(string(root)), "ls-files", "--others", "--ignored", "--exclude-standard", "bench/cases").Output()
 	if err != nil {
 		t.Skipf("git could not list ignored files: %v", err)
 	}
