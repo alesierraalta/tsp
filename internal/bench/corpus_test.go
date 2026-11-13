@@ -3,6 +3,7 @@ package bench
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -298,4 +299,18 @@ func TestCorpusSuitesAreGreenOnEveryVariant(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestCorpusShipsEveryFixtureFile(t *testing.T) {
+	// A case ignored by a .gitignore pattern (the repo's own bin/ once was) passes in the authoring
+	// worktree and breaks on any clean checkout, so the corpus gate must notice before CI does.
+	out, err := exec.Command("git", "ls-files", "--others", "--ignored", "--exclude-standard", "bench/cases").Output()
+	if err != nil {
+		t.Skipf("git could not list ignored files: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return
+	}
+	t.Fatalf("%d file(s) under bench/cases are git-ignored and would not ship: %s", len(lines), strings.Join(lines[:min(len(lines), 5)], ", "))
 }
