@@ -19,3 +19,7 @@ bench/.agent-config/
 
 # Local-only tests (no-excess-tests routing destination): never committed.
 testLocales/
+
+# A case fixture is shipped whole: its bin/ scripts are part of the case.
+!bench/cases/*/fixture/bin/
+!bench/cases/*/fixture/bin/**
