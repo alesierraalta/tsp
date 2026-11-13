@@ -1,0 +1,12 @@
+{
+  "name": "content-hub",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless content hub with a plugin host, template themes and an import/export pipeline",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test",
+    "render": "node bin/render.mjs"
+  }
+}
