@@ -1,0 +1,12 @@
+{
+  "name": "event-ingest",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Event ingest API with quotas, rollups, billing and egress rules",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test",
+    "replay": "node bin/replay.mjs"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "x05-event-ingest",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "http",
+  "family": "security",
+  "request": "the reservation capacity and the invoice total behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/quota/reserve.js",
+      "line": 40,
+      "class": "input-bounded-allocation",
+      "keywords": ["reservation", "samples", "limits", "allocation", "capacity"],
+      "description": "planCapacity checks the requested rows against the plan's max_rows and then sizes a Float64Array from the samples number the caller named, while reserve() and planBatch() both pass rows and samples through assertWithinLimits first, so one request for 900000 samples on the growth plan allocates a 900000-slot array although that plan accepts 100000.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D1 ReservationBook().planCapacity('acme', {rows: 10, samples: 900000}) -> blocked 900000 samples exceed the 100000 this plan accepts",
+        "actual": "D1 ReservationBook().planCapacity('acme', {rows: 10, samples: 900000}) -> reserved 900000 slots on the growth plan"
+      },
+      "why_missed": "The suite reserves and plans with numbers a plan accepts (rows 10, samples 100), where the array it allocates is small whatever the guard does, and asserts the limit refusals on reserve() directly, so the one entry point that never calls assertWithinLimits is only exercised inside the limits."
+    },
+    {
+      "id": "D2",
+      "file": "src/billing/invoice.js",
+      "line": 35,
+      "class": "money-accumulated-in-dollars",
+      "keywords": ["invoice", "cents", "rounding", "total", "money"],
+      "description": "totalCents sums each line's charge as a fractional dollar amount and truncates the sum to cents once, while lineCents rounds every line to whole cents, sumCents adds those whole numbers, and StatementBook.build accumulates the same way, so an invoice of two 5-sample lines reports 1 cent although its own line items add up to 2.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D2 Invoice(two 5-sample lines).total_cents -> 2 (its lines sum to 2)",
+        "actual": "D2 Invoice(two 5-sample lines).total_cents -> 1 (its lines sum to 2)"
+      },
+      "why_missed": "The suite issues invoices whose lines charge whole cents already (2000 events at 35 cents per thousand is 70), where summing dollars and summing cents agree, so the truncation only shows on a line whose own charge is a fraction of a cent."
+    }
+  ]
+}
