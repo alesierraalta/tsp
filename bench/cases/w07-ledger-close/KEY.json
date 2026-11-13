@@ -1,0 +1,1 @@
+{"id":"w07-ledger-close","language":"go","suite":"go test ./...","surface":"http","control":"clean","request":"the ingest-close-and-statement behaviour","defects":[]}
