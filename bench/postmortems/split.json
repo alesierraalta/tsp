@@ -243,5 +243,21 @@
    "w07"
   ],
   "note": "w01-w03 and w07 go, w04-w06 node; w07 is the clean control. Case ids take a slug suffix when built (w01-<slug>); the numbers fix the split."
+ },
+ "batch6": {
+  "rule": "Decided before any case was built or measured. Skill text may be written only from train-case misses; held-out cases only measure.",
+  "decided": "2026-11-13, before any x* case existed (issue #451)",
+  "train": [
+   "x01",
+   "x04"
+  ],
+  "held_out": [
+   "x02",
+   "x03",
+   "x05",
+   "x06",
+   "x07"
+  ],
+  "note": "x01-x03 and x07 go, x04-x06 node; x07 is the clean control. Case ids take a slug suffix when built (x01-<slug>); the numbers fix the split."
  }
 }
