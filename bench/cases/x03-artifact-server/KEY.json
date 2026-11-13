@@ -1,0 +1,50 @@
+{
+  "id": "x03-artifact-server",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "worker",
+  "family": "security",
+  "request": "the webhook fan-out and the artifact packaging path",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "internal/notify/broadcast.go",
+      "line": 72,
+      "class": "egress-guard-skipped-on-the-fan-out-path",
+      "keywords": [
+        "broadcast",
+        "endpoint",
+        "netguard",
+        "metadata",
+        "allowlist"
+      ],
+      "description": "Relay.Broadcast posts each event to the endpoint a subscription stores after checking only that its text begins with https://, while the guarded delivery path (Relay.Deliver), the re-delivery route and every retry parse the URL with netguard and refuse a host that is not on the allowlist or that is a private, loopback, link-local or metadata address, so a subscription whose endpoint is https://169.254.169.254/latest/meta-data/iam/security-credentials/ is posted to by a broadcast although the README promises that every path that sends a delivery makes that decision on the parsed URL before anything is signed or sent.",
+      "trigger": {
+        "input": "cd bench/cases/x03-artifact-server && sh testdata/triggers/run.sh fixture  (variants: run.sh all | keep-D1 | keep-D2)",
+        "expected": "D1 BroadcastEvent(https://169.254.169.254/latest/meta-data/iam/security-credentials/) -> delivered=0 refused=1 posted=[] reason=\"notify: the endpoint is not allowed: netguard: endpoint is not allowed: \\\"169.254.169.254\\\" is a private or metadata address\"",
+        "actual": "D1 BroadcastEvent(https://169.254.169.254/latest/meta-data/iam/security-credentials/) -> delivered=1 refused=0 posted=[https://169.254.169.254/latest/meta-data/iam/security-credentials/] reason=\"\""
+      },
+      "why_missed": "Every delivery test subscribes an endpoint whose host is the allowlisted one, so the prefix test and the guard agree on every value the suite sends; the guard itself has its own tests, which makes the policy look exercised while the fan-out path never consults it, and the metadata address only appears in the trigger harness."
+    },
+    {
+      "id": "D2",
+      "file": "internal/packaging/repackage.go",
+      "line": 21,
+      "class": "shell-composition-with-an-artifact-name",
+      "keywords": [
+        "repackage",
+        "shell",
+        "argv",
+        "injection",
+        "artifact"
+      ],
+      "description": "Packer.Repackage builds the packaging command by concatenating the artifact's name into a string handed to sh -c, while the tar, zip and bundle kinds hand the name to a tool as one argument of an argv list started without a shell, so an artifact named report.csv;printf pwned>injected.txt makes the shell run a second command and packs nothing, although the README promises that a tool runs with an argument list and that no stage builds a command string from a value a sender wrote.",
+      "trigger": {
+        "input": "cd bench/cases/x03-artifact-server && sh testdata/triggers/run.sh fixture  (variants: run.sh all | keep-D1 | keep-D2)",
+        "expected": "D2 Repackage(\"report.csv;printf pwned>injected.txt\") -> ok=true injected=false entries=[report.csv;printf pwned>injected.txt] reason=\"\"",
+        "actual": "D2 Repackage(\"report.csv;printf pwned>injected.txt\") -> ok=true injected=true entries=[] reason=\"\""
+      },
+      "why_missed": "The packaging tests repack artifacts whose names the pipeline itself wrote (report.csv, bundle.tar), where a shell and an argv list produce the same archive, and the bundle kind's own test asserts the argv a runner received, which covers the sibling path and never the repackage command."
+    }
+  ]
+}

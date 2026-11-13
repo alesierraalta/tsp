@@ -1,0 +1,50 @@
+{
+  "id": "x02-billing-gateway",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "http",
+  "family": "security",
+  "request": "the usage export and the mid-cycle seat proration",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "internal/reports/export.go",
+      "line": 29,
+      "class": "concatenated-sql-filter-on-one-export-route",
+      "keywords": [
+        "injection",
+        "export",
+        "status",
+        "concatenation",
+        "tenant"
+      ],
+      "description": "ExportCSV builds its WHERE clause by concatenating the request's status filter into the statement text, while every sibling report builds its statement with query.Builder and binds the value, so the injected filter is parsed as SQL and the export returns the usage rows of every tenant, although the README promises that a filter value is bound as an argument, that a report declares the values its filters accept, and that no report widens past the caller's tenant.",
+      "trigger": {
+        "input": "cd bench/cases/x02-billing-gateway && sh testdata/triggers/run.sh fixture  (variants: run.sh all | keep-D1 | keep-D2)",
+        "expected": "D1 GET /api/reports/usage/export.csv?status=archived' OR '1'='1 -> status=400 error=bad request: reports: export: query: filter \"status\" does not accept \"archived' OR '1'='1\" (accepted: recorded, billed, archived)",
+        "actual": "D1 GET /api/reports/usage/export.csv?status=archived' OR '1'='1 -> status=200 rows=7 tenants=[acme globex]"
+      },
+      "why_missed": "Every export test asks for a status the store carries and reads the tenant column of its own rows, so a statement built by concatenation answers correctly for every value the suite sends; only a value outside the accepted set changes the answer, and the sibling reports that do refuse it are reached through a different route."
+    },
+    {
+      "id": "D2",
+      "file": "internal/proration/seats.go",
+      "line": 110,
+      "class": "float-proration-that-drops-the-remainder",
+      "keywords": [
+        "proration",
+        "float64",
+        "remainder",
+        "seat",
+        "rounding"
+      ],
+      "description": "SeatChange.Charge scales a whole-cycle amount to the days left in the cycle by converting to float64 and truncating the product, while the credit for removing the same seats, the trial conversion, the add-on and the cancellation note all go through the shared minor-unit split, which keeps the arithmetic in integers and rounds the half minor unit up, so the charge for adding five seats for seven of thirty days is one cent less than the credit for removing them, although the README promises that every proration path goes through that one computation and that a charge and the credit that undoes it agree to the minor unit.",
+      "trigger": {
+        "input": "cd bench/cases/x02-billing-gateway && sh testdata/triggers/run.sh fixture  (variants: run.sh all | keep-D1 | keep-D2)",
+        "expected": "D2 POST /api/subscriptions/sub-000000000000000000000001/seats {\"seats\":10} -> status=200 charge=1167 minor (11.67 EUR)",
+        "actual": "D2 POST /api/subscriptions/sub-000000000000000000000001/seats {\"seats\":10} -> status=200 charge=1166 minor (11.66 EUR)"
+      },
+      "why_missed": "The seat tests add seats on the first day of a cycle, where the whole-cycle price is multiplied by a factor of one and the float path and the shared split agree exactly; the part-cycle change exists only in the trigger harness, and its cent of difference needs an amount whose share of the cycle falls on a half minor unit."
+    }
+  ]
+}
