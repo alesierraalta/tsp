@@ -72,11 +72,13 @@ it with the part of each citation before the colon.
 ## Findings
 
 A rejected or wontfix finding is a known non-issue: it is never re-proposed unless the fingerprint
-of its cited files changed; when a run skips it, it cites the row. Severity is the consequence class
-(`references/prioritization.md`); always state whether data is safe. A `confirmed` or `fixed`
-finding names the promoted test that asserts the promised behaviour, so it is red on the current
-code and green once fixed (rule 13); a test written the other way round is a characterization
-test and says so in its name. A finding that never got a test stays `open`, reason `not pinned`.
+of its cited files changed; when a run skips it, it cites the row. Severity is the consequence
+class: money moved or lost, data destroyed or corrupted, a permission or tenant boundary, a
+silently wrong answer a human will act on, a visible error, cosmetic; always state whether data is
+safe. A `confirmed` or `fixed` finding names the promoted test that asserts the promised behaviour,
+so it is red on the current code and green once fixed (rule 13); a test written the other way round
+is a characterization test and says so in its name. A finding that never got a test stays `open`,
+reason `not pinned`.
 The fingerprint cell holds the `assets/fingerprint.sh` output, one or more git SHAs, `-` when none
 is recorded, or `pending` while the value is owed; `plan check` refuses anything else.
 
@@ -140,7 +142,7 @@ inapplicable cells. Plans without this section remain valid.
 
 ## Evidence ledger
 
-One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under
+One row per conclusion you executed and observed (`observado`). `razonado` items go under
 "Hypotheses" below, never here.
 
 `Admit` holds ONE bare shell command, with no backticks and no placeholders, because `Executed` is
@@ -216,7 +218,8 @@ an Evidence id the ledger does not carry.
 
 ## Calibration history
 
-One row per calibration run (`references/calibration.md`); never overwritten.
+One row per calibration run — defects seeded from a key the run never reads, recall measured against
+that key — and never overwritten.
 
 | Date | Skill version | K | Found | Recall | Misses (file:line operator, why) | False positives |
 |---|---|---|---|---|---|---|

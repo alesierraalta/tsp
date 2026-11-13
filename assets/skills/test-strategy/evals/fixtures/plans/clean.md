@@ -71,7 +71,7 @@ Statuses: open · confirmed · fixed · rejected · wontfix.
 
 ## Evidence ledger
 
-One row per `observado` conclusion (`references/evidence.md`). `razonado` items go under
+One row per conclusion you executed and observed (`observado`). `razonado` items go under
 "Hypotheses" below, never here.
 
 | Id | Claim | Executed | Inputs and parameters | Observed | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |
@@ -84,7 +84,8 @@ One row per `observado` conclusion (`references/evidence.md`). `razonado` items 
 
 ## Calibration history
 
-One row per calibration run (`references/calibration.md`); never overwritten.
+One row per calibration run — defects seeded from a key the run never reads, recall measured against
+that key — and never overwritten.
 
 | Date | Skill version | K | Found | Recall | Misses (file:line operator, why) | False positives |
 |---|---|---|---|---|---|---|

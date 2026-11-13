@@ -4,7 +4,7 @@ description: "Trigger: database testing, migration testing, schema migration, up
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.2"
+  version: "1.2.1"
 ---
 
 ## Activation Contract
@@ -40,7 +40,7 @@ Full text and rationale: [references/invariants.md](references/invariants.md).
 6. **Query budget** declared with provenance and enforced with native counters; a missing applicable budget is a blocker.
 7. **Foreign key index audit** under the active dialect and workload; unverified required index fails closed.
 8. **Teardown and isolation**: isolated transactions with rollback, or clean containers per suite.
-9. **Evidence**: every finding carries an executed evidence record per `~/.claude/skills/test-strategy/references/evidence.md`; no finding from reading alone.
+9. **Evidence**: every finding carries an executed evidence record per `~/.claude/skills/test-strategy/SKILL.md` (invariant 1); no finding from reading alone.
 
 ## Decision Gates
 

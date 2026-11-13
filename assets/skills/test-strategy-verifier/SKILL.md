@@ -4,7 +4,7 @@ description: "Trigger: terminé la implementación, implementation done, a code 
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "0.2.10"
+  version: "0.2.11"
   requires_tsp: "0.9.0"
   scope: [common]
   auto_invoke: "After ODD finishes an implementation and before the RDD review or declaring done: run `tsp check` with one `--paths` per changed production source path (e.g. `tsp check --paths a.go --paths b.go`), say the verdict in one line, then run the full test-strategy flow when it is owed and loop with `tsp findings next` until it answers done or stop. No production source from this work means no implementation, so no TSP."
@@ -81,7 +81,7 @@ not truncate it to a quick check and do not stop at a green suite. The flow is t
 plan: inventory the change, sweep layers, rank targets, and execute each target through sandboxed
 probes with executed evidence — no finding from reading alone. The verification reports what was
 validated and what was NOT reachable, and every finding carries an executed evidence record per
-`~/.claude/skills/test-strategy/references/evidence.md`.
+`~/.claude/skills/test-strategy/SKILL.md` (invariant 1).
 
 Treat this as verification, not as a new implementation: fix only what the flow proves broken,
 and only through the loop below, which decides when the change is done.
