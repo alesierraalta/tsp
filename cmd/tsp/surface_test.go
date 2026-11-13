@@ -104,7 +104,7 @@ func TestProbeSurfaceReportsAnUnguardedRowOnARealChange(t *testing.T) {
 	}
 	for _, want := range []string{
 		"1 row(s) in 1 function(s), 1 unguarded",
-		"heuristic: data flow is intra-function; a guard is a check that mentions the input, not proof it is correct",
+		"heuristic: data flow is intra-function plus one call into a helper; a guard is a check that mentions the input, not proof it is correct",
 		"app.go:8 func Load(...)",
 		"name string (public) -> file @ app.go:10  guard: none  verdict: ___",
 	} {
@@ -349,7 +349,7 @@ func TestProbeSurfaceReportsAnUnguardedJavaScriptRow(t *testing.T) {
 		"fidelity: javascript heuristic",
 		"load.js:3 func load(...)",
 		"name (public) -> file @ load.js:4  guard: none  verdict: ___",
-		"heuristic: data flow is intra-function",
+		"heuristic: data flow is intra-function plus one call into a helper",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)

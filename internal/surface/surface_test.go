@@ -1398,3 +1398,342 @@ def echo(value):
 		t.Errorf("echo rows = %+v, want none: the value is handed back unchanged", rows)
 	}
 }
+
+// S12: a value built in a helper of the same package and handed to a sink there is the caller's promise. The
+// flow is followed one hop — far enough to see the sink, not far enough to invent one.
+func TestAnInputPassedToAPackageHelperThatReachesASinkIsARow(t *testing.T) {
+	files := map[string]string{
+		"read.go": `package fixture
+
+import "os"
+
+func openBuilt(p string) (*os.File, error) {
+	return os.Open("data/" + p)
+}
+
+func Load(name string) (*os.File, error) {
+	return openBuilt(name)
+}
+
+func openPath(p string) (*os.File, error) {
+	return os.Open(p)
+}
+
+func Read(name string) (*os.File, error) {
+	return openPath(name)
+}
+
+func passthrough(p string) (*os.File, error) {
+	return openPath(p)
+}
+
+func ReadTwo(name string) (*os.File, error) {
+	return passthrough(name)
+}
+`,
+	}
+	dir := writeTree(t, files)
+	report, err := probe(t, dir, "read.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rowsOf(report, "Load")
+	if len(rows) != 1 || rows[0].Sink != SinkFile {
+		t.Fatalf("Load rows = %+v, want one %q row", rows, SinkFile)
+	}
+	if rows[0].SinkLine != lineOf(t, files["read.go"], "return openBuilt(name)") {
+		t.Errorf("sink line = %d, want the call the input was handed to", rows[0].SinkLine)
+	}
+	if !strings.Contains(rows[0].SinkCall, "openBuilt") || rows[0].Input != "name string" {
+		t.Errorf("row = %+v, want the parameter named at the helper call", rows[0])
+	}
+	// A helper that hands the parameter straight to the file call adds nothing the caller did not write, and
+	// the hop stops at one: forwarding the value to another helper is not followed.
+	for _, function := range []string{"Read", "ReadTwo"} {
+		if rows := rowsOf(report, function); len(rows) != 0 {
+			t.Errorf("%s rows = %+v, want none: a pass-through helper adds nothing", function, rows)
+		}
+	}
+}
+
+// A guard written inside the helper is the check standing in front of the sink, so the caller's row carries
+// it instead of claiming the input is unguarded.
+func TestAPackageHelperCarriesItsOwnGuardIntoTheCallersRow(t *testing.T) {
+	body := `package fixture
+
+import (
+		"os"
+		"strings"
+)
+
+func openInside(p string) (*os.File, error) {
+		full := "data/" + p
+		if !strings.HasPrefix(full, "data/") {
+			return nil, os.ErrNotExist
+		}
+		return os.Open(full)
+}
+
+func Load(name string) (*os.File, error) {
+		return openInside(name)
+}
+`
+	dir := writeTree(t, map[string]string{"load.go": body})
+	report, err := probe(t, dir, "load.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rowsOf(report, "Load")
+	if len(rows) != 1 || rows[0].Sink != SinkFile {
+		t.Fatalf("Load rows = %+v, want one %q row", rows, SinkFile)
+	}
+	if !rows[0].Guarded || !strings.Contains(rows[0].Guard, "HasPrefix") {
+		t.Errorf("row = %+v, want the helper's own check as the guard", rows[0])
+	}
+}
+
+// S12: a statement executor is a method whose name says so, not only one of eight spelled-out names. The
+// statement text is built by concatenation, so nothing between the filter and the query is a bound argument.
+func TestAConcatenatedStatementReachingAQueryTextCallIsARow(t *testing.T) {
+	body := `package fixture
+
+type DB struct{}
+
+func (db *DB) QueryText(statement string) (int, error) { return 0, nil }
+
+func Export(db *DB, tenant, status string) (int, error) {
+	where := "tenant = '" + tenant + "'"
+	if status != "" {
+		where += " AND status = '" + status + "'"
+	}
+	statement := "SELECT id FROM events WHERE " + where
+	return db.QueryText(statement)
+}
+`
+	dir := writeTree(t, map[string]string{"export.go": body})
+	report, err := probe(t, dir, "export.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rowsOf(report, "Export")
+	var sql []Row
+	for _, row := range rows {
+		if row.Sink == SinkSQL {
+			sql = append(sql, row)
+		}
+	}
+	if len(sql) == 0 {
+		t.Fatalf("Export rows = %+v, want a %q row for the concatenated statement", rows, SinkSQL)
+	}
+	if sql[0].SinkLine != lineOf(t, body, "return db.QueryText(statement)") {
+		t.Errorf("sink line = %d, want the QueryText call", sql[0].SinkLine)
+	}
+	named := false
+	for _, row := range sql {
+		if row.Input == "tenant string" || row.Input == "status string" {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("rows = %+v, want the parameter the statement was built from", sql)
+	}
+}
+
+// S12: a case-folding comparison is the access decision, so it cannot also be the guard that makes it safe.
+// The row is unguarded even though the comparison is what the row is about.
+func TestACaseFoldedAccessCheckIsAnUnguardedCaseSink(t *testing.T) {
+	body := `package fixture
+
+import "strings"
+
+type Token struct{ Subject string }
+type Principal struct{ Subject string }
+
+var accounts = []Principal{{Subject: "kelvin"}}
+
+func Resolve(tok Token) (Principal, error) {
+	for _, account := range accounts {
+		if strings.EqualFold(account.Subject, tok.Subject) {
+			return account, nil
+		}
+	}
+	return Principal{}, nil
+}
+`
+	dir := writeTree(t, map[string]string{"resolve.go": body})
+	report, err := probe(t, dir, "resolve.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rowsOf(report, "Resolve")
+	var cases []Row
+	for _, row := range rows {
+		if row.Sink == SinkCase {
+			cases = append(cases, row)
+		}
+	}
+	if len(cases) != 1 {
+		t.Fatalf("Resolve rows = %+v, want one %q row", rows, SinkCase)
+	}
+	if cases[0].Guarded || cases[0].Guard != "" {
+		t.Errorf("row = %+v, want the fold comparison reported as the sink it is, not as its own guard", cases[0])
+	}
+	if cases[0].SinkLine != lineOf(t, body, "strings.EqualFold") {
+		t.Errorf("sink line = %d, want the EqualFold line", cases[0].SinkLine)
+	}
+	if !report.Blocking() {
+		t.Error("an unguarded case-folding access check must block")
+	}
+}
+
+// S12: not every Date near an input is a time zone promise. A timestamp that is built and formatted is a
+// rendering; the row belongs to the time that decides something.
+func TestAJavaScriptTimezoneRowNeedsTheTimeToDecideSomething(t *testing.T) {
+	body := `export function stamp(value) {
+  return new Date(value).toISOString();
+}
+
+export function expired(value, limit) {
+  return new Date(value) <= new Date(limit);
+}
+`
+	dir := writeTree(t, map[string]string{"dates.js": body})
+	report, err := probe(t, dir, "dates.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := rowsOf(report, "stamp"); len(rows) != 0 {
+		t.Errorf("stamp rows = %+v, want none: formatting a timestamp decides nothing", rows)
+	}
+	rows := rowsOf(report, "expired")
+	if len(rows) == 0 {
+		t.Fatalf("expired rows = %+v, want a %q row", report.Rows, SinkTimezone)
+	}
+	for _, row := range rows {
+		if row.Sink != SinkTimezone {
+			t.Errorf("row = %+v, want the comparison reported as %q", row, SinkTimezone)
+		}
+	}
+}
+
+// S12: a computed key written into a map the function just built is a rename of where the value sits. The
+// prototype that matters is one the caller owns.
+func TestAJavaScriptComputedKeyNeedsATargetTheCallerOwns(t *testing.T) {
+	body := `export function collect(rows) {
+  const out = {};
+  for (const [key, value] of Object.entries(rows)) out[key] = value;
+  return out;
+}
+
+export function apply(target, patch) {
+  for (const key of Object.keys(patch)) target[key] = patch[key];
+  return target;
+}
+`
+	dir := writeTree(t, map[string]string{"keys.js": body})
+	report, err := probe(t, dir, "keys.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows := rowsOf(report, "collect"); len(rows) != 0 {
+		t.Errorf("collect rows = %+v, want none: the object is a map this function built", rows)
+	}
+	rows := rowsOf(report, "apply")
+	if len(rows) != 1 || rows[0].Sink != SinkDecode {
+		t.Fatalf("apply rows = %+v, want one %q row", rows, SinkDecode)
+	}
+}
+
+// S12: one input reaching one kind of sink is one promise, however many statements the lexer walks. A report
+// that repeats the same paragraph per statement is the noise a small model pays turns for.
+func TestAJavaScriptInputReachingOneKindIsOneRow(t *testing.T) {
+	body := `export function span(value) {
+  const first = new Date(value).getTime();
+  const second = new Date(value).getTime() + 1;
+  if (first > second) throw new Error('out of order');
+  return second - first;
+}
+`
+	dir := writeTree(t, map[string]string{"span.js": body})
+	report, err := probe(t, dir, "span.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rowsOf(report, "span")
+	if len(rows) != 1 {
+		t.Fatalf("span rows = %d (%+v), want one row for one input reaching one kind", len(rows), rows)
+	}
+	if rows[0].SinkLine != lineOf(t, body, "const first = new Date(value)") {
+		t.Errorf("sink line = %d, want the first statement the input reaches the kind at", rows[0].SinkLine)
+	}
+}
+
+// S12: a method this file writes for itself is not the statement executor the catalog is about. `prepare`
+// names a database call on a receiver that is one, and a helper on the object this file defines.
+func TestAJavaScriptOwnHelperNamedLikeAStatementCallIsNotASQLRow(t *testing.T) {
+	body := `export class Relay {
+  prepare(delivery) {
+    return { host: delivery.url };
+  }
+
+  send(delivery, db) {
+    const plan = this.prepare(delivery);
+    return db.query('SELECT ' + plan.host);
+  }
+}
+`
+	dir := writeTree(t, map[string]string{"relay.js": body})
+	report, err := probe(t, dir, "relay.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range report.Rows {
+		if row.Sink != SinkSQL {
+			continue
+		}
+		if strings.Contains(row.SinkCall, "this.prepare") {
+			t.Errorf("row = %+v, want no statement call for the file's own helper", row)
+		}
+		if !strings.Contains(row.SinkCall, "query") {
+			t.Errorf("row = %+v, want the statement the database was handed", row)
+		}
+	}
+}
+
+// A library call is not a helper of this package even when a function here shares its name: `os.Remove` is the
+// standard library's, and the file's imports are what tells them apart.
+func TestALibraryCallThatSharesAPackageFunctionNameIsNotAHop(t *testing.T) {
+	body := `package fixture
+
+import (
+	"errors"
+	"os"
+	"strings"
+)
+
+var errOutside = errors.New("outside /tmp")
+
+func Remove(name string) error {
+	if !strings.HasPrefix(name, "/tmp/") {
+		return errOutside
+	}
+	return os.Remove(name)
+}
+
+func Cleanup(name string) error {
+	return os.Remove(name)
+}
+`
+	dir := writeTree(t, map[string]string{"remove.go": body})
+	report, err := probe(t, dir, "remove.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := rowsOf(report, "Cleanup")
+	if len(rows) != 1 || rows[0].Sink != SinkFile {
+		t.Fatalf("Cleanup rows = %+v, want one %q row: os.Remove is the library's call", rows, SinkFile)
+	}
+	if rows[0].SinkCall != "os.Remove" || rows[0].Guarded {
+		t.Errorf("row = %+v, want the library call itself with no guard borrowed from the file's own Remove", rows[0])
+	}
+}

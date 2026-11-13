@@ -201,7 +201,7 @@ compares that ref with the working tree, so it runs before you commit.
 
 ```
 $ tsp probe surface --base main
-surface: 3 row(s) in 3 function(s), 2 unguarded; fidelity: go ast; heuristic: data flow is intra-function; a guard is a check that mentions the input, not proof it is correct
+surface: 3 row(s) in 3 function(s), 2 unguarded; fidelity: go ast; heuristic: data flow is intra-function plus one call into a helper; a guard is a check that mentions the input, not proof it is correct
 api.go:20 func Migrate(...)
   n int (public) -> allocation @ api.go:21  guard: none  verdict: ___
 api.go:25 func handle(...)
@@ -214,7 +214,9 @@ Each row is one input reaching one sink, with an empty verdict for the reader to
 where the value came from: `public` or `internal` (an exported or unexported function's parameter),
 `http`, `cli`, `env`, `file`, `decode`, or `reader`. The sink kinds are `file`, `exec`, `sql`, `network`,
 `template`, `decode`, `regex`, `allocation`, `loop`, `accumulation`, `case` and `timezone`, plus the four
-returned-value kinds below. Unguarded rows
+returned-value kinds below. A `sql` sink is a statement executor, which is a method named `Query`, `Exec` or
+`Prepare` and the names they continue in CamelCase — `db.QueryText(stmt)` runs a statement as much as
+`db.Query` does, while `Execute` is a template and `this.prepare(delivery)` is this file's own helper. Unguarded rows
 print first, because they are what you fix. Exit codes: **1** an input reaches a sink unguarded, **0** every
 row is guarded or there is none, **2** nothing measurable or a usage error. A change in a language the probe
 has no extractor for — today ruby, rust, java, c/c++ and shell — exits **2** with the language named, because
@@ -273,26 +275,47 @@ a `Session`, a `cursor`, a `self` is a handle rather than an input, a name holdi
 `ok`, `exists`) is not a guard for the value that call received, and a loop or an allocation bounded by
 `length`/`len()` of a collection already in memory is proportional.
 
-The data flow is *intra-function*: a value is followed through assignments, concatenation, `fmt.Sprintf`,
-`filepath.Join`, string operations, slicing and conversions inside one function, and a guard is a check
+The data flow is *intra-function, one call deep*: a value is followed through assignments, concatenation,
+`fmt.Sprintf`, `filepath.Join`, string operations, slicing and conversions inside one function, and a value the
+function hands to another function of the same package — or the same file, for a lexer language — is followed
+into that helper once, so a row says `name string -> file @ load.go:12` with `openBuilt -> os.Open` as the call.
+The hop is one call wide and it is why a statement built in a helper and run there is still the caller's
+promise; a helper the helper calls in turn is two functions away and is not followed. A guard is a check
 that mentions the value — an `if` that leaves the function, or a call like `strconv.Atoi`, `regexp.QuoteMeta`,
-`html.EscapeString` or a `validate*`/`sanitize*` helper — not proof the check is correct. What it cannot see:
-interprocedural flow (a value washed through a helper, a struct field or a global), reflection, aliasing
+`html.EscapeString` or a `validate*`/`sanitize*` helper — not proof the check is correct, and a guard the helper
+writes is the one the caller's row shows, because that is where the input was examined. What it still cannot
+see: flow through a struct field, a global or a reflection call, flow two helpers deep, reflection, aliasing
 two names to one value, a guard that is present but wrong (a prefix check against an attacker-shaped root),
 and anything the type system would have to answer. `filepath.Clean` is deliberately not a guard on its own.
-A returned value is followed no further than the return statement: the probe does not know which caller opens
-the path or writes the markup, and it does not follow a value returned by one function into another. A
+The hop adds nothing for a helper that hands the parameter straight to a file call (`copyFile(dest)` ->
+`os.Remove(dest)`), because the caller already wrote that it passed a path to something that touches it, and a
+loop, an allocation or a fold inside the helper is the helper's own arithmetic over values it already holds and
+keeps its own row. A returned value is followed no further than the return statement: the probe does not know
+which caller opens the path or writes the markup, and it does not follow a value returned by one function into
+another. A
 presence check is not a guard either — `if name == ""` or `if (text.length === 0)` asks
 whether a value is there, not what it contains — while `if err != nil` after a parse still counts as a check
-on the parsed value. `*_test.go`, `*.test.js`/`*.spec.js` and `test_*.py`/`*_test.py` files are not measured.
+on the parsed value. A check written on the sink's own line is not a guard for it: a case-folding comparison
+*is* the access decision a `case` row is about, so the same expression cannot also be the answer that makes it
+safe, and the row prints unguarded. `*_test.go`, `*.test.js`/`*.spec.js` and `test_*.py`/`*_test.py` files are
+not measured.
 
 Each language also has its own blind spots, and the lexical ones are the reason a row says `heuristic`. The
 JavaScript and TypeScript reader is a lexer, not a parser: it finds top-level `function` declarations, arrows
 bound to a name, `class` methods, and reads a callback nobody named as part of the function it lives in; it does
 not resolve types, generics or JSX text, it does not follow a call to the class that defines the method, and a
 name-written flow means `order.items` is reported as `order`. A computed key (`obj[key] = value`),
-`Object.assign` and `_.merge` are reported as the prototype-pollution sink; a spread (`{ ...input }`) is
-deliberately not a row, because copying own properties cannot reach a prototype. Sinks spelled inside a string,
+`Object.assign` and `_.merge` are reported as the prototype-pollution sink, and only into an object the caller
+owns: a key written into a map the function just built (`const out = {}`) is a rename, not a prototype its
+caller holds, and destructuring (`const [a, b] = pair`) binds names instead of writing one. A spread
+(`{ ...input }`) is deliberately not a row, because copying own properties cannot reach a prototype. A `Date`
+is a `timezone` row only when the input decides a time: the value is compared, or a calendar setter
+(`setHours`, `setDate`, `setFullYear`) moves it. Building and formatting a timestamp (`new Date(x).toISOString()`)
+decides nothing on its own and is not a row, and a locale or zone the caller passes to `Intl`/`toLocale*` is the
+other shape of the same sink. One row per input and sink kind is reported per function, so a flow the lexer
+walks through several statements is one promise rather than the same paragraph repeated. A method this file
+writes for itself is not a statement executor: `this.prepare(delivery)` prepares a delivery, while `db.query`
+and `pool.prepare` are the statement calls the catalog is about. Sinks spelled inside a string,
 a comment, a regex literal or the literal part of a template are never rows, while a template's `${...}`
 interpolations are code. The Python reader is an indentation scan over the same lexer: it sees `def` and
 `async def`, methods included, drops `self` and `cls`, keeps an f-string's `{...}` expressions as code, and

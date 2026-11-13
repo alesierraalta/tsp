@@ -38,6 +38,10 @@ type sinkRule struct {
 	Kind string
 	// Names are the last segment of the callee: Open, Command, Query.
 	Names []string
+	// Stems are name prefixes that make a call the sink too, continued by nothing or by an upper-case
+	// letter: a statement executor is written QueryText or ExecBatch as often as Query, while Execute is a
+	// template and PrepareStatement a noun.
+	Stems []string
 	// Pkgs pins the rule to a package when the name alone is too common (Open, Parse, Get).
 	Pkgs []string
 	// From is the first argument index that carries the sensitive value; 1 skips a writer or format.
@@ -56,7 +60,7 @@ type sinkRule struct {
 var sinkCatalog = []sinkRule{
 	{Kind: SinkFile, Names: []string{"Open", "OpenFile", "Create", "ReadFile", "WriteFile", "Remove", "RemoveAll", "Mkdir", "MkdirAll", "Stat", "Lstat", "ReadDir", "Truncate", "Chmod", "Chown"}, Pkgs: []string{"os", "ioutil"}},
 	{Kind: SinkExec, Names: []string{"Command", "CommandContext", "StartProcess"}, Pkgs: []string{"exec", "os"}},
-	{Kind: SinkSQL, Names: []string{"Query", "QueryContext", "Exec", "ExecContext", "QueryRow", "QueryRowContext", "Prepare", "PrepareContext"}},
+	{Kind: SinkSQL, Names: []string{"Query", "QueryContext", "Exec", "ExecContext", "QueryRow", "QueryRowContext", "Prepare", "PrepareContext"}, Stems: []string{"Query", "Exec", "Prepare"}},
 	{Kind: SinkNetwork, Names: []string{"Get", "Post", "PostForm", "NewRequest", "NewRequestWithContext", "Head", "Do"}, Pkgs: []string{"http"}},
 	{Kind: SinkNetwork, Names: []string{"Dial", "DialTimeout", "DialTCP", "LookupHost"}, Pkgs: []string{"net"}},
 	{Kind: SinkNetwork, Names: []string{"Parse", "ParseRequestURI", "ParseQuery"}, Pkgs: []string{"url"}},
@@ -71,7 +75,8 @@ var sinkCatalog = []sinkRule{
 
 // matches reports whether a call answers to this rule.
 func (r sinkRule) matches(segments []string, call *ast.CallExpr, text func(ast.Expr) string) bool {
-	if !anyOf(segments[len(segments)-1], r.Names) {
+	last := segments[len(segments)-1]
+	if !anyOf(last, r.Names) && !byStem(last, r.Stems) {
 		return false
 	}
 	if len(r.Pkgs) > 0 && !anyOf(segments[0], r.Pkgs) {
@@ -92,6 +97,22 @@ func (r sinkRule) matches(segments []string, call *ast.CallExpr, text func(ast.E
 		return false
 	}
 	return true
+}
+
+// byStem reports a name a stem introduces: the stem itself, or the stem and a CamelCase word after it, which is
+// how a method that runs a statement is written. A stem followed by a lower-case letter is a longer word and
+// not this call: `Execute` is a template, not a statement.
+func byStem(name string, stems []string) bool {
+	for _, stem := range stems {
+		if !strings.HasPrefix(name, stem) {
+			continue
+		}
+		rest := name[len(stem):]
+		if rest == "" || (rest[0] >= 'A' && rest[0] <= 'Z') {
+			return true
+		}
+	}
+	return false
 }
 
 // isLocalAddress reports &name: the address of something this function builds, not a stream its caller chose.

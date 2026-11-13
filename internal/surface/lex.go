@@ -500,6 +500,9 @@ type callRule struct {
 	Owners []string
 	// Ctor requires the call to be a construction, which is how `new RegExp` is told from `x.RegExp`.
 	Ctor bool
+	// NotOwners name receivers that make this the file's own helper instead of the sink the rule describes:
+	// `this.prepare(delivery)` prepares a delivery, it does not run a statement.
+	NotOwners []string
 	// From is the first argument that carries the sensitive value.
 	From int
 	// Whole reports a sink the whole statement decides: a case folding only counts in a comparison, so its
@@ -516,12 +519,15 @@ func (r callRule) matches(c callee, isNew bool, bindings map[string]string) bool
 	if r.Ctor && !isNew {
 		return false
 	}
-	if len(r.Owners) == 0 {
-		return true
-	}
 	owner := c.owner()
 	if owner == "" {
 		owner = bindings[c.name()]
+	}
+	if anyOf(owner, r.NotOwners) {
+		return false
+	}
+	if len(r.Owners) == 0 {
+		return true
 	}
 	return anyOf(owner, r.Owners)
 }

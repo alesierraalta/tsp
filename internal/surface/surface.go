@@ -3,8 +3,9 @@
 //
 // The probe answers a question a reviewer has to answer anyway — which of these inputs, made hostile,
 // does something dangerous? — deterministically, so a small model can start from a list instead of an
-// intuition. It also says out loud how shallow that list is: the flow is traced inside one function and a
-// guard is a check that mentions the input, not proof the check is correct.
+// intuition. It also says out loud how shallow that list is: the flow is traced inside one function and one
+// call into a helper of the same package, and a guard is a check that mentions the input, not proof the check
+// is correct.
 package surface
 
 import (
@@ -24,7 +25,7 @@ var ErrUnusable = errors.New("surface probe unusable")
 
 // Heuristic is the sentence every report carries, in text and in JSON: the reader has to know how little
 // the flow analysis claims before acting on a row.
-const Heuristic = "data flow is intra-function; a guard is a check that mentions the input, not proof it is correct"
+const Heuristic = "data flow is intra-function plus one call into a helper; a guard is a check that mentions the input, not proof it is correct"
 
 // The origins an input can have. A parameter is public or internal by the function's own name, because
 // that is what decides who can call it; the rest name the door the value came through.
@@ -217,7 +218,7 @@ func newReport() Report {
 		Fidelity:  map[string]string{},
 		NotChecked: []string{
 			"test files: the probe inventories shipped code, so *_test.go, *.test.js/*.spec.js and *_test.py/test_*.py functions are not measured",
-			"interprocedural flow: an input passing through a helper, a struct field, a global or a reflection call is not followed, and two names holding one value are not aliased",
+			"flow deeper than one helper: an input handed to a function of the same package (or the same file) is followed once, but a value passing through a struct field, a global, a reflection call or a second helper is not, and two names holding one value are not aliased",
 		},
 	}
 }

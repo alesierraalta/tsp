@@ -90,7 +90,13 @@ func (f *flow) bindVerdict(name string, t *taint) {
 // calls a function the extractor could read is printed with that function's decisive expression after an
 // arrow, because the sentence a reader has to attack is what the check does, not what it is called.
 func (f *flow) add(t *taint, kind, call string, line int) {
-	text, body := f.guardFor(t, line)
+	text, body := f.guardFor(t, call, line)
+	f.addGuarded(t, kind, call, line, text, body)
+}
+
+// addGuarded records one row with a guard the caller already read: a row found one hop away carries the check
+// the helper wrote, because that is where the input was examined.
+func (f *flow) addGuarded(t *taint, kind, call string, line int, text, body string) {
 	seen := text
 	if body != "" {
 		seen = text + " -> " + body
@@ -111,11 +117,16 @@ func (f *flow) add(t *taint, kind, call string, line int) {
 }
 
 // guardFor returns the guard text and the guard's own body between an input's first use and a sink, preferring
-// the closest one, or two empty strings when nothing between them mentions the value.
-func (f *flow) guardFor(t *taint, line int) (string, string) {
+// the closest one, or two empty strings when nothing between them mentions the value. A check written on the
+// sink's own line is not one of them: a case-folding comparison is the access decision this row is about, so
+// the same expression cannot also be the check that makes the decision safe.
+func (f *flow) guardFor(t *taint, call string, line int) (string, string) {
 	text, body, at := "", "", -1
 	for _, g := range f.guards {
 		if g.line < t.first || g.line > line || g.line < at {
+			continue
+		}
+		if g.line == line && isSinkExpression(g.text, call) {
 			continue
 		}
 		if !shares(g.names, t.values) {
@@ -124,6 +135,17 @@ func (f *flow) guardFor(t *taint, line int) (string, string) {
 		text, body, at = g.text, g.body, g.line
 	}
 	return text, body
+}
+
+// isSinkExpression reports a guard that is the sink's own call: the condition and the sink are one expression,
+// so the check is the promise a reader has to attack rather than the answer to it. A lexer renders a guard with
+// a space around every token, so the spaces are what makes the two spellings comparable.
+func isSinkExpression(text, call string) bool {
+	if call == "" {
+		return false
+	}
+	squashed := strings.ReplaceAll(text, " ", "")
+	return squashed == call || strings.HasPrefix(squashed, call+"(") || strings.HasPrefix(squashed, call+"[")
 }
 
 // addReturned records the row for an exported function handing a built value back to its caller.

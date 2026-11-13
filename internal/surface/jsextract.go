@@ -459,12 +459,18 @@ type jsAnalysis struct {
 	fn     jsRange
 	sizes  map[string]bool
 	nested []span
+	// fresh names the objects and arrays this function created empty, because a key written into a container the
+	// function just built is a map entry, not a prototype its caller owns.
+	fresh map[string]bool
+	// dates names the values this function read the clock into, so a time zone row can ask whether the time
+	// decides anything instead of counting every Date construction near an input.
+	dates map[string]bool
 }
 
 // jsInventory reads one function: the parameters settle first, then the flow, the guards and the sinks, in that
 // order, so a check written after a use still guards the sink it precedes.
 func jsInventory(index *jsIndex, path string, fn jsRange) []Row {
-	a := &jsAnalysis{flow: newFlow(path, fn.name, fn.line), index: index, fn: fn, sizes: map[string]bool{}}
+	a := &jsAnalysis{flow: newFlow(path, fn.name, fn.line), index: index, fn: fn, sizes: map[string]bool{}, fresh: map[string]bool{}, dates: map[string]bool{}}
 	a.nested = jsNested(index.functions, fn)
 	a.seed()
 	for pass := 0; pass < 3; pass++ {
@@ -472,7 +478,26 @@ func jsInventory(index *jsIndex, path string, fn jsRange) []Row {
 	}
 	a.collectGuards()
 	a.emit()
+	a.collapse()
 	return a.rows
+}
+
+// collapse keeps one row per input and sink kind. A lexer walks statements, so the same promise would otherwise
+// print once per statement that carries it, and the reader pays turns for the repetition instead of the
+// promise. The first statement the input reaches the kind at is the one kept, because it is where the flow
+// starts.
+func (a *jsAnalysis) collapse() {
+	seen := map[string]bool{}
+	kept := make([]Row, 0, len(a.rows))
+	for _, row := range a.rows {
+		key := row.Input + "|" + row.Sink + "|" + row.SinkCall
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		kept = append(kept, row)
+	}
+	a.rows = kept
 }
 
 // jsNested names the functions declared inside this one, whose code belongs to them, not to the parent.
@@ -590,6 +615,10 @@ func (a *jsAnalysis) declarator(part span) {
 	if value.empty() {
 		return
 	}
+	for _, name := range names {
+		a.noteFresh(name, value)
+		a.noteDate(name, value)
+	}
 	t := a.taintOf(value)
 	if t == nil {
 		return
@@ -602,6 +631,31 @@ func (a *jsAnalysis) declarator(part span) {
 		a.bind(name, t)
 		a.noteSize(name, value)
 		a.noteBuilt(name, a.builtValue(value))
+	}
+}
+
+// noteFresh remembers a name bound to an object or array this function created empty: `const out = {}` is a map
+// the function owns, so a key written into it cannot reach a prototype its caller holds.
+func (a *jsAnalysis) noteFresh(name string, value span) {
+	toks := a.index.toks
+	part := trimParens(toks, value)
+	if part.empty() {
+		return
+	}
+	if anyOf(toks[part.from].text, []string{"{", "["}) && matchClose(toks, part.from) == part.from+1 {
+		a.fresh[name] = true
+	}
+}
+
+// jsTimeOperations are the calls that read a clock or a calendar: a value one of them produced is a time, and a
+// time that is compared or moved is a promise the zone can break.
+var jsTimeOperations = []string{"Date", "toDate", "getTime", "getFullYear", "getMonth", "getDate", "getDay",
+	"getHours", "getMinutes", "getSeconds", "getTimezoneOffset", "valueOf"}
+
+// noteDate remembers a name this function put a time in.
+func (a *jsAnalysis) noteDate(name string, value span) {
+	if containsAny(a.index.toks, value, jsTimeOperations...) {
+		a.dates[name] = true
 	}
 }
 
@@ -942,6 +996,9 @@ func (a *jsAnalysis) builtValue(part span) builtValue {
 	if part.empty() || part.from >= len(toks) {
 		return builtValue{}
 	}
+	if verdictExpression(toks, part) {
+		return builtValue{}
+	}
 	if part.to == part.from+1 && toks[part.from].kind == tokIdent {
 		return a.built[toks[part.from].text]
 	}
@@ -979,6 +1036,31 @@ func (a *jsAnalysis) callBuiltValue(part span) builtValue {
 		return builtValue{kind: SinkReturnedURL, call: joined(c)}
 	}
 	return builtValue{}
+}
+
+// verdictExpression reports an expression whose value is a verdict rather than the value it built: a negation, or
+// a comparison at the expression's own depth. `!rules.blocksInternal(url)` answers yes or no, so the caller
+// receives a boolean and not the text anything could open or render.
+func verdictExpression(toks []lexeme, part span) bool {
+	depth := 0
+	for i := part.from; i < part.to && i < len(toks); i++ {
+		switch {
+		case opensGroup(toks[i].text):
+			depth++
+		case closesGroup(toks[i].text):
+			depth--
+		}
+		if depth != 0 {
+			continue
+		}
+		if anyOf(toks[i].text, []string{"===", "!==", "==", "!=", "<", ">", "<=", ">=", "&&", "||"}) {
+			return true
+		}
+		if i == part.from && toks[i].text == "!" {
+			return true
+		}
+	}
+	return false
 }
 
 // literalBuiltValue answers what the strings and template text of a returned expression say they build.
@@ -1065,7 +1147,7 @@ func trimParens(toks []lexeme, part span) span {
 var jsSinkCatalog = []callRule{
 	{Kind: SinkFile, Owners: append(jsFileOwners, "fs", "node:fs", "fs/promises", "node:fs/promises"), Names: jsFileNames},
 	{Kind: SinkExec, Owners: []string{"child_process", "node:child_process", "childProcess", "cp"}, Names: []string{"exec", "execSync", "spawn", "spawnSync", "execFile", "execFileSync", "fork"}},
-	{Kind: SinkSQL, Names: []string{"query", "execute", "executemany", "prepare", "raw"}},
+	{Kind: SinkSQL, Names: []string{"query", "execute", "executemany", "prepare", "raw"}, NotOwners: []string{"this"}},
 	{Kind: SinkNetwork, Owners: []string{"http", "node:http", "https", "node:https", "axios", "got", "superagent", "undici", "request", "net", "dns", "tls"}, Names: []string{"get", "post", "put", "patch", "delete", "head", "request", "fetch"}},
 	{Kind: SinkNetwork, Owners: []string{"", "window", "globalThis"}, Names: []string{"fetch"}},
 	{Kind: SinkNetwork, Ctor: true, Names: []string{"URL", "URLSearchParams", "WebSocket"}},
@@ -1132,9 +1214,14 @@ func (a *jsAnalysis) callSinks(stmt span) {
 				if rule.Kind == SinkAllocation && a.proportional(arg) {
 					continue
 				}
-				if t := a.taintOf(arg); t != nil {
-					a.add(t, rule.Kind, joined(callee), toks[i].line)
+				t := a.taintOf(arg)
+				if t == nil {
+					continue
 				}
+				if rule.Kind == SinkTimezone && !a.decides(t) {
+					continue
+				}
+				a.add(t, rule.Kind, joined(callee), toks[i].line)
 			}
 		}
 	}
@@ -1156,6 +1243,55 @@ func (a *jsAnalysis) wholeSink(stmt span, kind, call string) {
 // joined renders a callee the way the report names it.
 func joined(c callee) string { return strings.Join(c.segments, ".") }
 
+// decides reports a time an input decides: the function compares a time it read against something, or moves it
+// with a calendar setter. A date that is only built, formatted or handed back renders a timestamp — nothing
+// depends on which zone it was read in — so it is not a row.
+func (a *jsAnalysis) decides(t *taint) bool {
+	toks := a.index.toks
+	for _, stmt := range a.body() {
+		if !mentionsTaint(toks, stmt, t, a.taints) {
+			continue
+		}
+		aboutTime := a.mentionsDate(toks, stmt) || containsAny(toks, stmt, jsTimeOperations...)
+		if !aboutTime {
+			continue
+		}
+		if containsAny(toks, stmt, jsCalendarMutations...) {
+			return true
+		}
+		if containsAny(toks, stmt, "<", ">", "<=", ">=", "===", "!==", "==", "!=") {
+			return true
+		}
+	}
+	return false
+}
+
+// mentionsDate reports a span that mentions a time this function read or moved, which is what a comparison has
+// to be about to make the zone matter.
+func (a *jsAnalysis) mentionsDate(toks []lexeme, part span) bool {
+	for _, name := range identsIn(toks, part) {
+		if a.dates[name] {
+			return true
+		}
+	}
+	return false
+}
+
+// jsCalendarMutations are the Date setters that move a timestamp. Reading a day and moving it is the calendar
+// question the zone decides, so a mutation counts where a formatting call does not.
+var jsCalendarMutations = []string{"setDate", "setMonth", "setFullYear", "setHours", "setMinutes", "setSeconds",
+	"setMilliseconds", "setUTCDate", "setUTCMonth", "setUTCFullYear", "setUTCHours", "setUTCMinutes", "setUTCSeconds"}
+
+// mentionsTaint reports a span that mentions a name carrying this input.
+func mentionsTaint(toks []lexeme, part span, t *taint, taints map[string]*taint) bool {
+	for _, name := range identsIn(toks, part) {
+		if taints[name] == t {
+			return true
+		}
+	}
+	return false
+}
+
 // propertySink reports the sinks written as a property write: markup assigned to innerHTML, and a computed key
 // written into an object, which is the prototype-pollution shape. A spread is deliberately not one of them:
 // `{ ...input }` copies own properties and can never reach a prototype, so a row there is a probe nobody can
@@ -1175,11 +1311,35 @@ func (a *jsAnalysis) propertySink(stmt span) {
 			if close < 0 || close+1 >= stmt.to || toks[close+1].text != "=" {
 				continue
 			}
+			if bindingList(toks, stmt, i) || a.freshTarget(toks, i) {
+				continue
+			}
 			if t := a.taintOf(span{i + 1, close}); t != nil {
 				a.add(t, SinkDecode, "["+render(toks, span{i + 1, close})+"] =", toks[close].line)
 			}
 		}
 	}
+}
+
+// bindingList reports `const [a, b] = ...` and `[a, b] = ...`: destructuring binds names, so there is no key and
+// no prototype behind it. A write into an object is written on the object, which is a name or a call.
+func bindingList(toks []lexeme, stmt span, at int) bool {
+	if at == stmt.from {
+		return true
+	}
+	return anyOf(toks[at-1].text, []string{"const", "let", "var", ","})
+}
+
+// freshTarget reports a key written into a container this function created empty. The prototypes that matter are
+// the ones a caller holds; a map the function built and returns is its own.
+func (a *jsAnalysis) freshTarget(toks []lexeme, at int) bool {
+	if at < 1 || toks[at-1].kind != tokIdent {
+		return false
+	}
+	if at >= 2 && anyOf(toks[at-2].text, []string{".", "?."}) {
+		return false
+	}
+	return a.fresh[toks[at-1].text]
 }
 
 // templateSinks reports a template literal that builds markup out of an input. A template a function returns is

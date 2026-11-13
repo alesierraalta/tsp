@@ -1,6 +1,7 @@
 package surface
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/printer"
@@ -33,6 +34,7 @@ func (GoExtractor) Extract(src Source, want Want) ([]Function, error) {
 		return nil, err
 	}
 	bodies := goDefinitionBodies(file)
+	imports := goImportedNames(file)
 	for _, sibling := range src.Siblings {
 		parsed, err := parser.ParseFile(fset, sibling.Path, sibling.Content, 0)
 		if err != nil {
@@ -42,6 +44,9 @@ func (GoExtractor) Extract(src Source, want Want) ([]Function, error) {
 			if _, seen := bodies[name]; !seen {
 				bodies[name] = body
 			}
+		}
+		for name := range goImportedNames(parsed) {
+			imports[name] = true
 		}
 	}
 	var functions []Function
@@ -59,16 +64,40 @@ func (GoExtractor) Extract(src Source, want Want) ([]Function, error) {
 			File: src.Path,
 			Name: fn.Name.Name,
 			Line: first,
-			Rows: inventory(fset, src.Path, fn, bodies),
+			Rows: inventory(fset, src.Path, fn, bodies, imports),
 		})
 	}
 	return functions, nil
 }
 
-// goBodies maps a function or method name the package defines to its body, which is where a guard's decisive
-// expression is read from. A name is enough: a guard that calls a name this package writes is the call the
-// reader has to attack, and a library call has no body here at all.
-type goBodies map[string]*ast.BlockStmt
+// goImportedNames answers the names the file imports under, which is what tells `os.Remove` — a library call
+// that happens to be spelled like a function here — from a call into this package.
+func goImportedNames(file *ast.File) map[string]bool {
+	names := map[string]bool{}
+	for _, spec := range file.Imports {
+		if spec.Name != nil {
+			if spec.Name.Name != "." && spec.Name.Name != "_" {
+				names[spec.Name.Name] = true
+			}
+			continue
+		}
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			continue
+		}
+		if at := strings.LastIndex(path, "/"); at >= 0 {
+			path = path[at+1:]
+		}
+		names[path] = true
+	}
+	return names
+}
+
+// goBodies maps a function or method name the package defines to its declaration, which is where a guard's
+// decisive expression is read from and where an input handed to it one hop away is followed. A name is enough:
+// a guard that calls a name this package writes is the call the reader has to attack, and a library call has no
+// body here at all.
+type goBodies map[string]*ast.FuncDecl
 
 // goDefinitionBodies collects the bodies one file defines.
 func goDefinitionBodies(file *ast.File) goBodies {
@@ -79,7 +108,7 @@ func goDefinitionBodies(file *ast.File) goBodies {
 			continue
 		}
 		if _, seen := bodies[fn.Name.Name]; !seen {
-			bodies[fn.Name.Name] = fn.Body
+			bodies[fn.Name.Name] = fn
 		}
 	}
 	return bodies
@@ -99,18 +128,33 @@ type goAnalysis struct {
 	// status are the names this function uses for a call's verdict, learned once before the flow settles so a
 	// later `err := helper(x)` is read the same way as the `x, err := helper(...)` that taught it.
 	status map[string]bool
+	// hopped are the input-and-helper combinations a row was already recorded for, so one helper is one row.
+	hopped map[string]bool
+	// imports names the packages this file imports, so a library call spelled like a function here is not read
+	// as a call into this package.
+	imports map[string]bool
+	// params names this function's parameters, so a sink on one of them is a call that adds nothing: the caller
+	// already knows it handed a path to something that opens it.
+	params map[string]bool
+	// direct marks the rows whose sink was handed a parameter unchanged, which is what a hop over a thin wrapper
+	// would repeat.
+	direct map[int]bool
 }
 
 // inventory reads one function: first the taints settle, then one pass collects the guards and another
 // looks for sinks, so a check written after a use still guards the sink it precedes.
-func inventory(fset *token.FileSet, path string, fn *ast.FuncDecl, bodies goBodies) []Row {
+func inventory(fset *token.FileSet, path string, fn *ast.FuncDecl, bodies goBodies, imports map[string]bool) []Row {
 	a := &goAnalysis{
-		flow:   newFlow(path, fn.Name.Name, fset.Position(fn.Pos()).Line),
-		fset:   fset,
-		fn:     fn,
-		bodies: bodies,
-		sizes:  map[string]bool{},
-		status: map[string]bool{},
+		flow:    newFlow(path, fn.Name.Name, fset.Position(fn.Pos()).Line),
+		fset:    fset,
+		fn:      fn,
+		bodies:  bodies,
+		imports: imports,
+		sizes:   map[string]bool{},
+		status:  map[string]bool{},
+		hopped:  map[string]bool{},
+		params:  map[string]bool{},
+		direct:  map[int]bool{},
 	}
 	a.seed()
 	a.markStatus(fn.Body)
@@ -121,6 +165,7 @@ func inventory(fset *token.FileSet, path string, fn *ast.FuncDecl, bodies goBodi
 	}
 	a.collect(fn.Body.List)
 	a.emit(fn.Body.List)
+	a.emitHelpers(fn.Body.List)
 	a.emitReturned()
 	return a.rows
 }
@@ -143,6 +188,7 @@ func (a *goAnalysis) seed() {
 			if text != "" {
 				label = name.Name + " " + text
 			}
+			a.params[name.Name] = true
 			a.bind(name.Name, a.newTaint(label, origin, a.functionLine))
 		}
 	}
@@ -600,7 +646,7 @@ func (a *goAnalysis) guardBody(expr ast.Expr) string {
 	if !ok {
 		return ""
 	}
-	return clip(a.decisive(body), 100)
+	return clip(a.decisive(body.Body), 100)
 }
 
 // decisive answers the expression that decides a guard function: the value of its only return, or the condition
@@ -808,6 +854,136 @@ func isFormatCall(segments []string) bool {
 	return segments[0] == "fmt" && anyOf(last, []string{"Sprintf", "Sprint", "Sprintln"})
 }
 
+// emitHelpers follows an input one hop into a helper this package defines: a value the caller hands to a
+// function of the same package, which builds it into something a sink there takes, is a promise this caller
+// makes. One hop is the promise — a helper the helper calls in turn lives two functions away and is not
+// followed — and a guard the helper writes is the check the caller's row carries, because that is where the
+// input was examined. A sink the transition itself already found is not repeated.
+func (a *goAnalysis) emitHelpers(stmts []ast.Stmt) {
+	ast.Inspect(&ast.BlockStmt{List: stmts}, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		a.hop(call)
+		return true
+	})
+}
+
+// hop reads one call into a helper of this package with the caller's inputs bound to the helper's parameters,
+// and records the sinks the helper reaches with them at the call that handed them over. A call the file's
+// imports own is a library call, whatever a function here is named.
+func (a *goAnalysis) hop(call *ast.CallExpr) {
+	segments := chain(call.Fun)
+	name := calleeName(call)
+	if len(segments) > 1 && a.imports[segments[0]] {
+		return
+	}
+	decl, defined := a.bodies[name]
+	if !defined || decl == nil || decl.Body == nil {
+		return
+	}
+	helper := &goAnalysis{
+		flow:    newFlow(a.path, a.function, a.functionLine),
+		fset:    a.fset,
+		fn:      decl,
+		bodies:  nil,
+		imports: a.imports,
+		sizes:   map[string]bool{},
+		status:  map[string]bool{},
+		hopped:  map[string]bool{},
+		params:  map[string]bool{},
+		direct:  map[int]bool{},
+	}
+	helperseed(helper, decl, call, a)
+	helperBody := decl.Body.List
+	for pass := 0; pass < 3; pass++ {
+		helper.propagate(helperBody)
+	}
+	helper.collect(helperBody)
+	helper.emit(helperBody)
+	for i, row := range helper.rows {
+		if !hopKind(row.Sink) {
+			continue
+		}
+		// A helper that hands the parameter straight to a file call adds nothing the caller did not write: the
+		// caller already knows it passed a path to something that opens, removes or stats it. What a hop is for
+		// is the value the helper builds or interprets on the way.
+		if row.Sink == SinkFile && helper.direct[i] {
+			continue
+		}
+		a.addHop(row, name, a.line(call))
+	}
+}
+
+// helperseed binds a helper's parameters to the values the caller handed over: each one carries the input the
+// argument carries, under its own name, so the helper's flow reads as the helper's code.
+func helperseed(helper *goAnalysis, decl *ast.FuncDecl, call *ast.CallExpr, caller *goAnalysis) {
+	at := 0
+	for _, field := range decl.Type.Params.List {
+		width := len(field.Names)
+		if width == 0 {
+			width = 1
+		}
+		for i := 0; i < width; i++ {
+			if at >= len(call.Args) {
+				return
+			}
+			t := caller.taintOf(call.Args[at])
+			at++
+			if t == nil || i >= len(field.Names) {
+				continue
+			}
+			helper.params[field.Names[i].Name] = true
+			// The input starts where the helper starts: its checks are written in the helper's own lines, and
+			// the caller's line numbers mean nothing here.
+			helper.bind(field.Names[i].Name, helper.newTaint(t.label, t.origin, helper.line(decl)))
+		}
+	}
+}
+
+// hopKinds are the sinks a hop is for: the value leaves the caller's hands and something dangerous is done with
+// it. A loop, an allocation or a fold inside the helper is the helper's own arithmetic over values it already
+// holds, and the helper's own row already says so.
+var hopKinds = map[string]bool{
+	SinkFile: true, SinkExec: true, SinkSQL: true, SinkNetwork: true, SinkTemplate: true, SinkRegex: true,
+	SinkTimezone: true, SinkDecode: true,
+}
+
+// hopKind reports a sink a caller's row is worth one hop away.
+func hopKind(kind string) bool { return hopKinds[kind] }
+
+// addHop records one sink a helper reached with the caller's input, at the call. The caller's own guard wins
+// when it wrote one, and the helper's check is what the row shows otherwise. One input reaching one kind of
+// sink through one helper is one promise, however many statements the helper walks.
+func (a *goAnalysis) addHop(row Row, helper string, line int) {
+	t := a.taintLabel(row.Input)
+	if t == nil {
+		return
+	}
+	key := fmt.Sprintf("%s|%s|%s", row.Input, row.Sink, helper)
+	if a.hopped[key] {
+		return
+	}
+	a.hopped[key] = true
+	text, body := a.guardFor(t, row.SinkCall, line)
+	if text == "" && row.Guard != "" {
+		text, body = row.Guard, row.GuardBody
+	}
+	a.addGuarded(t, row.Sink, helper+" -> "+row.SinkCall, line, text, body)
+}
+
+// taintLabel answers the input this function reads under one label, which is how a row found in a helper is
+// attached back to the value the caller holds.
+func (a *goAnalysis) taintLabel(label string) *taint {
+	for _, t := range a.taints {
+		if t.label == label {
+			return t
+		}
+	}
+	return nil
+}
+
 // sinkCall reports every argument a sink rule considers dangerous and that carries an input.
 func (a *goAnalysis) sinkCall(call *ast.CallExpr) {
 	segments := chain(call.Fun)
@@ -826,9 +1002,18 @@ func (a *goAnalysis) sinkCall(call *ast.CallExpr) {
 			if t == nil {
 				continue
 			}
+			direct := a.bareParameter(call.Args[i])
 			a.add(t, rule.Kind, a.text(call.Fun), a.line(call))
+			a.direct[len(a.rows)-1] = direct
 		}
 	}
+}
+
+// bareParameter reports a value handed to a sink exactly as the function received it: it adds nothing to the
+// input, so a row about it is about the call the caller itself wrote.
+func (a *goAnalysis) bareParameter(expr ast.Expr) bool {
+	id, ok := expr.(*ast.Ident)
+	return ok && a.params[id.Name]
 }
 
 // noteLoop reports a loop whose bound is an input: the caller decides how long this runs.
