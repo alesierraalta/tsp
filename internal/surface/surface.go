@@ -202,6 +202,9 @@ func newReport() Report {
 // line of an untracked file, or every line of the paths the caller named.
 func scope(opts Options, d Deps) (string, map[string][]Range, error) {
 	if len(opts.Paths) > 0 {
+		if opts.Base != "" {
+			return "", nil, fmt.Errorf("%w: --base and --paths cannot be combined: --paths inventories the named files whole, --base measures the change, so name one or the other", ErrUnusable)
+		}
 		return pathScope(opts, d)
 	}
 	root, err := gitdiff.Root(opts.Cwd, d.Git)

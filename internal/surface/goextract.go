@@ -402,6 +402,9 @@ func (a *goAnalysis) taintOf(expr ast.Expr) *taint {
 		if t := a.callTaint(e); t != nil {
 			return t
 		}
+		if t := a.receiverTaint(e); t != nil {
+			return t
+		}
 		for _, arg := range e.Args {
 			if t := a.taintOf(arg); t != nil {
 				return t
@@ -410,6 +413,86 @@ func (a *goAnalysis) taintOf(expr ast.Expr) *taint {
 		return a.sourceOf(expr)
 	}
 	return nil
+}
+
+// receiverTaint carries an input through the receiver of a method: `q := r.URL.Query(); q.Get("cmd")`
+// holds the same attacker-shaped value as the call it came from, so the receiver is read as well.
+func (a *goAnalysis) receiverTaint(call *ast.CallExpr) *taint {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+	return a.taintOf(selector.X)
+}
+
+// taintsOf returns every distinct input an expression carries. A sink reports one row per input, because
+// filepath.Join(a, b) fed by two caller parameters carries both, and a guard on one says nothing about the
+// other.
+func (a *goAnalysis) taintsOf(expr ast.Expr) []*taint {
+	var found []*taint
+	seen := map[*taint]bool{}
+	collect := func(t *taint) {
+		if t == nil || seen[t] {
+			return
+		}
+		seen[t] = true
+		found = append(found, t)
+	}
+	var walk func(ast.Expr)
+	walk = func(e ast.Expr) {
+		switch v := e.(type) {
+		case nil:
+			return
+		case *ast.ParenExpr:
+			walk(v.X)
+		case *ast.UnaryExpr:
+			walk(v.X)
+		case *ast.StarExpr:
+			walk(v.X)
+		case *ast.SliceExpr:
+			walk(v.X)
+		case *ast.TypeAssertExpr:
+			walk(v.X)
+		case *ast.BinaryExpr:
+			walk(v.X)
+			walk(v.Y)
+		case *ast.CompositeLit:
+			for _, element := range v.Elts {
+				walk(element)
+			}
+			collect(a.taintOf(e))
+		case *ast.CallExpr:
+			collect(a.callTaint(v))
+			collect(a.receiverTaint(v))
+			for _, arg := range v.Args {
+				walk(arg)
+			}
+			collect(a.sourceOf(v))
+		default:
+			collect(a.taintOf(e))
+		}
+	}
+	walk(expr)
+	return found
+}
+
+// noteBufferWrite carries a write into a local buffer to the buffer's name. The write is not a sink of its
+// own, but whatever the buffer reaches later is: fmt.Fprintf(&buf, "%s", input) has to leave buf tainted.
+func (a *goAnalysis) noteBufferWrite(call *ast.CallExpr, from int) {
+	unary, ok := call.Args[0].(*ast.UnaryExpr)
+	if !ok {
+		return
+	}
+	target, ok := unary.X.(*ast.Ident)
+	if !ok {
+		return
+	}
+	for i := from; i < len(call.Args); i++ {
+		for _, t := range a.taintsOf(call.Args[i]) {
+			a.bind(target.Name, t)
+			return
+		}
+	}
 }
 
 // callTaint reads the calls that either pass a taint along (a conversion, a builder) or introduce one
@@ -579,15 +662,17 @@ func (a *goAnalysis) sinkCall(call *ast.CallExpr) {
 		if !rule.matches(segments, call, a.text) {
 			continue
 		}
+		if rule.LocalWriter && len(call.Args) > 0 && isLocalAddress(call.Args[0]) {
+			a.noteBufferWrite(call, rule.From)
+			continue
+		}
 		for i := rule.From; i < len(call.Args); i++ {
 			if rule.Kind == SinkAllocation && a.proportional(call.Args[i]) {
 				continue
 			}
-			t := a.taintOf(call.Args[i])
-			if t == nil {
-				continue
+			for _, t := range a.taintsOf(call.Args[i]) {
+				a.add(t, rule.Kind, a.text(call.Fun), a.line(call))
 			}
-			a.add(t, rule.Kind, a.text(call.Fun), a.line(call))
 		}
 	}
 }

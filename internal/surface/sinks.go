@@ -75,9 +75,6 @@ func (r sinkRule) matches(segments []string, call *ast.CallExpr, text func(ast.E
 			}
 		}
 	}
-	if r.LocalWriter && len(call.Args) > 0 && isLocalAddress(call.Args[0]) {
-		return false
-	}
 	if r.From >= len(call.Args) {
 		return false
 	}

@@ -692,3 +692,94 @@ func inspect(name string) error { return nil }
 		t.Fatalf("row = %+v, want unguarded: err is the call's status, not the name", row)
 	}
 }
+
+// --base asks for a change and --paths for whole files: honouring one and ignoring the other would report a
+// working-tree inventory as the requested comparison.
+func TestBaseAndPathsTogetherAreRefused(t *testing.T) {
+	body := `package fixture
+import "os"
+
+func Load(name string) (*os.File, error) { return os.Open(name) }
+`
+	dir := writeTree(t, map[string]string{"load.go": body})
+	report, err := Run(context.Background(), Options{Cwd: dir, Base: "HEAD", Paths: []string{"load.go"}})
+	if err == nil || !strings.Contains(err.Error(), "--base") || !strings.Contains(err.Error(), "--paths") {
+		t.Fatalf("err = %v rows = %+v, want a refusal naming both flags", err, report.Rows)
+	}
+}
+
+// fmt.Fprintf into a local buffer is not a sink, but what the buffer reaches is: the name has to keep the input
+// or the exec below looks clean while running caller text.
+func TestABufferFedByAnInputCarriesItToWhatTheBufferReaches(t *testing.T) {
+	body := `package fixture
+import (
+	"fmt"
+	"os/exec"
+	"strings"
+)
+
+func Script(name string) {
+	var s strings.Builder
+	fmt.Fprintf(&s, "echo %s", name)
+	_, _ = exec.Command("sh", "-c", s.String()).Output()
+}
+`
+	dir := writeTree(t, map[string]string{"script.go": body})
+	report, err := probe(t, dir, "script.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := rowFor(t, report, SinkExec); row.Input != "name string" || row.Guarded || !report.Blocking() {
+		t.Errorf("row = %+v blocking=%v, want the caller's name running unguarded", row, report.Blocking())
+	}
+}
+
+// A query held in a local variable is still the caller's value, so the receiver has to be read.
+func TestAQueryReceiverCarriesTheInput(t *testing.T) {
+	body := `package fixture
+
+import (
+	"net/http"
+	"os/exec"
+)
+
+func Run(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	_, _ = exec.Command("sh", "-c", q.Get("cmd")).Output()
+}
+`
+	dir := writeTree(t, map[string]string{"run.go": body})
+	report, err := probe(t, dir, "run.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := rowFor(t, report, SinkExec); row.Origin != OriginHTTP || row.Guarded || !report.Blocking() {
+		t.Errorf("row = %+v blocking=%v, want the HTTP input reaching exec unguarded", row, report.Blocking())
+	}
+}
+
+// Two caller parameters into one join are two inputs: the guard on one says nothing about the other.
+func TestTwoCallerParametersIntoOneJoinAreTwoRows(t *testing.T) {
+	body := `package fixture
+
+import (
+	"os"
+	"path/filepath"
+)
+
+func Load(dir, name string) (*os.File, error) {
+	if validateName(dir) != nil {
+		return nil, nil
+	}
+	return os.Open(filepath.Join(dir, name))
+}
+`
+	dir := writeTree(t, map[string]string{"load.go": body})
+	report, err := probe(t, dir, "load.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Rows) != 2 || report.Unguarded() != 1 {
+		t.Fatalf("rows = %+v, want two file rows, one guarded and one not", report.Rows)
+	}
+}
