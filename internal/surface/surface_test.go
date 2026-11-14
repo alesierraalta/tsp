@@ -771,7 +771,8 @@ func Load(dir, name string) (*os.File, error) {
 	if validateName(dir) != nil {
 		return nil, nil
 	}
-	return os.Open(filepath.Join(dir, name))
+	joined := filepath.Join(dir, name)
+	return os.Open(joined)
 }
 `
 	dir := writeTree(t, map[string]string{"load.go": body})
@@ -781,5 +782,35 @@ func Load(dir, name string) (*os.File, error) {
 	}
 	if len(report.Rows) != 2 || report.Unguarded() != 1 {
 		t.Fatalf("rows = %+v, want two file rows, one guarded and one not", report.Rows)
+	}
+}
+
+// A method call carries both a receiver and its arguments, and the argument is the value that reached this
+// function: reading the receiver first would let a check on the request mask an unchecked parameter.
+func TestAnArgumentIsReadBeforeTheReceiver(t *testing.T) {
+	body := `package fixture
+import (
+	"net/http"
+	"os/exec"
+	"strings"
+)
+
+func Run(r *http.Request, cmd string) {
+	q := r.URL.Query()
+	if validateName(cmd) != nil {
+		return
+	}
+	out := strings.TrimSpace(q.Get(cmd))
+	_, _ = exec.Command("sh", "-c", out).Output()
+}
+`
+	dir := writeTree(t, map[string]string{"run.go": body})
+	report, err := probe(t, dir, "run.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rowFor(t, report, SinkExec)
+	if row.Input != "cmd string" || !row.Guarded {
+		t.Errorf("row = %+v, want the guarded argument, not the request receiver", row)
 	}
 }

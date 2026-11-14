@@ -72,6 +72,9 @@ type goAnalysis struct {
 	fn     *ast.FuncDecl
 	fnLine int
 	taints map[string]*taint
+	// spill holds the inputs a name carries besides the first one: filepath.Join(dir, name) has two, and
+	// keeping only one would hide the other from every sink the name reaches.
+	spill map[string][]*taint
 	// sizes are the names holding a length or a capacity the function computed, which bound a loop the same
 	// way len() itself does: `end := len(value)` scans value and cannot run past it.
 	sizes map[string]bool
@@ -85,7 +88,7 @@ type goAnalysis struct {
 // inventory reads one function: first the taints settle, then one pass collects the guards and another
 // looks for sinks, so a check written after a use still guards the sink it precedes.
 func inventory(fset *token.FileSet, path string, fn *ast.FuncDecl) []Row {
-	a := &goAnalysis{fset: fset, path: path, fn: fn, fnLine: fset.Position(fn.Pos()).Line, taints: map[string]*taint{}, sizes: map[string]bool{}, status: map[string]bool{}}
+	a := &goAnalysis{fset: fset, path: path, fn: fn, fnLine: fset.Position(fn.Pos()).Line, taints: map[string]*taint{}, spill: map[string][]*taint{}, sizes: map[string]bool{}, status: map[string]bool{}}
 	a.seed()
 	a.markStatus(fn.Body)
 	// Three rounds because a name can be assigned before the value that taints it is named: the flow a
@@ -237,6 +240,9 @@ func (a *goAnalysis) assign(n *ast.AssignStmt) {
 			continue
 		}
 		a.bind(id.Name, t)
+		for _, extra := range a.taintsOf(rhs)[1:] {
+			a.spill[id.Name] = append(a.spill[id.Name], extra)
+		}
 	}
 }
 
@@ -402,13 +408,13 @@ func (a *goAnalysis) taintOf(expr ast.Expr) *taint {
 		if t := a.callTaint(e); t != nil {
 			return t
 		}
-		if t := a.receiverTaint(e); t != nil {
-			return t
-		}
 		for _, arg := range e.Args {
 			if t := a.taintOf(arg); t != nil {
 				return t
 			}
+		}
+		if t := a.receiverTaint(e); t != nil {
+			return t
 		}
 		return a.sourceOf(expr)
 	}
@@ -468,6 +474,11 @@ func (a *goAnalysis) taintsOf(expr ast.Expr) []*taint {
 				walk(arg)
 			}
 			collect(a.sourceOf(v))
+		case *ast.Ident:
+			collect(a.taints[v.Name])
+			for _, extra := range a.spill[v.Name] {
+				collect(extra)
+			}
 		default:
 			collect(a.taintOf(e))
 		}
@@ -488,10 +499,15 @@ func (a *goAnalysis) noteBufferWrite(call *ast.CallExpr, from int) {
 		return
 	}
 	for i := from; i < len(call.Args); i++ {
-		for _, t := range a.taintsOf(call.Args[i]) {
-			a.bind(target.Name, t)
-			return
+		carried := a.taintsOf(call.Args[i])
+		if len(carried) == 0 {
+			continue
 		}
+		a.bind(target.Name, carried[0])
+		for _, extra := range carried[1:] {
+			a.spill[target.Name] = append(a.spill[target.Name], extra)
+		}
+		return
 	}
 }
 
