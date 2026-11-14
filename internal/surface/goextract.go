@@ -237,12 +237,12 @@ func (a *goAnalysis) assign(n *ast.AssignStmt) {
 		a.noteSize(id.Name, t, rhs)
 		if a.statusResult(id.Name, n, i) {
 			a.bindStatus(id.Name, t)
+			delete(a.spill, id.Name)
 			continue
 		}
+		extras := a.taintsOf(rhs)[1:]
 		a.bind(id.Name, t)
-		for _, extra := range a.taintsOf(rhs)[1:] {
-			a.spill[id.Name] = append(a.spill[id.Name], extra)
-		}
+		a.spill[id.Name] = extras
 	}
 }
 
@@ -504,9 +504,7 @@ func (a *goAnalysis) noteBufferWrite(call *ast.CallExpr, from int) {
 			continue
 		}
 		a.bind(target.Name, carried[0])
-		for _, extra := range carried[1:] {
-			a.spill[target.Name] = append(a.spill[target.Name], extra)
-		}
+		a.spill[target.Name] = carried[1:]
 		return
 	}
 }

@@ -814,3 +814,36 @@ func Run(r *http.Request, cmd string) {
 		t.Errorf("row = %+v, want the guarded argument, not the request receiver", row)
 	}
 }
+
+// A name holds what it was last assigned: a rebind replaces the inputs a name carries instead of adding to
+// them, or a value that no longer flows keeps blocking the report forever.
+func TestARebindReplacesTheInputsANameCarries(t *testing.T) {
+	body := `package fixture
+import (
+	"os"
+	"path/filepath"
+)
+
+func Load(dir, name, other, third string) (*os.File, error) {
+	if validateName(dir) != nil {
+		return nil, nil
+	}
+	target := filepath.Join(dir, name)
+	target = filepath.Join(other, third)
+	return os.Open(target)
+}
+`
+	dir := writeTree(t, map[string]string{"load.go": body})
+	report, err := probe(t, dir, "load.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range report.Rows {
+		if row.Input == "name string" {
+			t.Fatalf("rows = %+v, want no row from the value the rebind dropped", report.Rows)
+		}
+	}
+	if len(report.Rows) != 2 {
+		t.Fatalf("rows = %+v, want the two inputs of the second join", report.Rows)
+	}
+}
