@@ -1,0 +1,95 @@
+diff --git a/cmd/rdd-plus/execgroup_other.go b/cmd/rdd-plus/execgroup_other.go
+new file mode 100644
+index 00000000..0a7cb507
+--- /dev/null
++++ b/cmd/rdd-plus/execgroup_other.go
+@@ -0,0 +1,19 @@
++//go:build !unix
++
++package main
++
++import "os/exec"
++
++// processGroup cannot set a process group outside Unix, so only the direct process ends at the deadline.
++// WaitDelay still bounds the wait for the pipes a descendant left open.
++func processGroup(cmd *exec.Cmd) {
++	cmd.Cancel = func() error { return killGroup(cmd) }
++}
++
++// killGroup ends the direct process where there is no group to end.
++func killGroup(cmd *exec.Cmd) error {
++	if cmd.Process == nil {
++		return nil
++	}
++	return cmd.Process.Kill()
++}
+diff --git a/cmd/rdd-plus/execgroup_unix.go b/cmd/rdd-plus/execgroup_unix.go
+new file mode 100644
+index 00000000..78b2822b
+--- /dev/null
++++ b/cmd/rdd-plus/execgroup_unix.go
+@@ -0,0 +1,26 @@
++//go:build unix
++
++package main
++
++import (
++	"os/exec"
++	"syscall"
++)
++
++// processGroup puts the shell in its own process group and points the deadline at that group, so a
++// descendant that inherited the row's output pipes is ended with it instead of holding them open.
++func processGroup(cmd *exec.Cmd) {
++	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
++	cmd.Cancel = func() error { return killGroup(cmd) }
++}
++
++// killGroup ends the group the shell leads, falling back to the direct process when no group is left.
++func killGroup(cmd *exec.Cmd) error {
++	if cmd.Process == nil {
++		return nil
++	}
++	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
++		return cmd.Process.Kill()
++	}
++	return nil
++}
+diff --git a/cmd/rdd-plus/main.go b/cmd/rdd-plus/main.go
+index dbd47d32..f5c701d6 100644
+--- a/cmd/rdd-plus/main.go
++++ b/cmd/rdd-plus/main.go
+@@ -517,6 +517,10 @@ func admitIDs(csv string) []string {
+ 	return ids
+ }
+ 
++// waitDelayAfterKill is how long the output pipes may stay open once the shell is gone: the gap between the
++// kill and the copy of its output finishing, so a row that hits its bound is still reported as one.
++const waitDelayAfterKill = 2 * time.Second
++
+ // runShell runs one admitted command through `sh -c`, so quoting, word splitting, and redirection
+ // behave the way the ledger's shell commands intend, and points both streams at one buffer so the
+ // observation is the single stream a row's digest is pinned against. This runs an arbitrary shell
+@@ -526,12 +530,22 @@ func admitIDs(csv string) []string {
+ func runShell(ctx context.Context, dir, command string) (string, error) {
+ 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+ 	cmd.Dir = dir
++	processGroup(cmd)
++	// A bytes.Buffer is served through an operating-system pipe whose copy finishes only at end of file, and
++	// the deadline ends the shell, not a descendant that inherited the write end: without WaitDelay that
++	// descendant keeps Run blocked past --timeout and no timeout line is ever printed.
++	cmd.WaitDelay = waitDelayAfterKill
+ 	var buf bytes.Buffer
+ 	cmd.Stdout, cmd.Stderr = &buf, &buf
+ 	err := cmd.Run()
++	// The row is over, so what the shell left behind is reaped here rather than left running past it.
++	defer killGroup(cmd)
+ 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+ 		return buf.String(), fmt.Errorf("run %q: %w", command, context.DeadlineExceeded)
+ 	}
++	if errors.Is(err, exec.ErrWaitDelay) {
++		return buf.String(), fmt.Errorf("run %q: the command left a process holding its output, so the row's one stream never closed: %w", command, err)
++	}
+ 	return buf.String(), err
+ }
+ 

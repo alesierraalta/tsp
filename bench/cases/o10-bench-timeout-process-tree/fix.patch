@@ -1,0 +1,71 @@
+diff --git a/internal/bench/pertest.go b/internal/bench/pertest.go
+index 06bcc977..7be60a29 100644
+--- a/internal/bench/pertest.go
++++ b/internal/bench/pertest.go
+@@ -41,6 +41,7 @@ func runCapture(dir string, argv []string, timeout time.Duration) (int, string)
+ 	defer cancel()
+ 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+ 	cmd.Dir = dir
++	boundProcessTree(cmd)
+ 	var buf bytes.Buffer
+ 	cmd.Stdout, cmd.Stderr = &buf, &buf
+ 	err := cmd.Run()
+diff --git a/internal/bench/proc_other.go b/internal/bench/proc_other.go
+new file mode 100644
+index 00000000..35bfa74c
+--- /dev/null
++++ b/internal/bench/proc_other.go
+@@ -0,0 +1,14 @@
++//go:build !linux && !darwin
++
++package bench
++
++import (
++	"os/exec"
++	"time"
++)
++
++// boundProcessTree has no process groups to kill here; it still stops Wait from blocking on a pipe a
++// surviving child holds open.
++func boundProcessTree(cmd *exec.Cmd) {
++	cmd.WaitDelay = 2 * time.Second
++}
+diff --git a/internal/bench/proc_unix.go b/internal/bench/proc_unix.go
+new file mode 100644
+index 00000000..4e0ccf6d
+--- /dev/null
++++ b/internal/bench/proc_unix.go
+@@ -0,0 +1,21 @@
++//go:build linux || darwin
++
++package bench
++
++import (
++	"os/exec"
++	"syscall"
++	"time"
++)
++
++// boundProcessTree makes a context timeout end the whole tree a suite started, not only its first process.
++// node --test runs each test file in its own worker: killing the parent alone leaves a worker that loops on a
++// planted defect running for hours, and it holds the output pipe open so Wait never returns. The suite gets
++// its own process group, the cancel kills that group, and Wait stops waiting on the pipe shortly after.
++func boundProcessTree(cmd *exec.Cmd) {
++	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
++	cmd.Cancel = func() error {
++		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
++	}
++	cmd.WaitDelay = 2 * time.Second
++}
+diff --git a/internal/bench/scaffold.go b/internal/bench/scaffold.go
+index 0e511618..c7fc2bad 100644
+--- a/internal/bench/scaffold.go
++++ b/internal/bench/scaffold.go
+@@ -82,6 +82,7 @@ func RunSuite(ws, suite string, timeout time.Duration) (SuiteResult, error) {
+ 	defer cancel()
+ 	cmd := exec.CommandContext(ctx, fields[0], fields[1:]...)
+ 	cmd.Dir = ws
++	boundProcessTree(cmd)
+ 	var buf bytes.Buffer
+ 	cmd.Stdout, cmd.Stderr = &buf, &buf
+ 	err = cmd.Run()

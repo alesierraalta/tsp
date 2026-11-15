@@ -1,0 +1,15 @@
+diff --git a/internal/plan/plan.go b/internal/plan/plan.go
+index 5c42153f..a5022a84 100644
+--- a/internal/plan/plan.go
++++ b/internal/plan/plan.go
+@@ -48,7 +48,9 @@ func Init(path string, force bool) error {
+ }
+ 
+ var (
+-	pathCiteRe  = regexp.MustCompile(`[A-Za-z0-9_./\\-]+\.[A-Za-z][A-Za-z0-9]*:\d+`)
++	// A path:line cites a file with an extension, a dotfile (.gitignore:1), or a conventional
++	// extensionless build file (Makefile:3). A bare word:digits stays out, so localhost:8080 is no cite.
++	pathCiteRe  = regexp.MustCompile(`(?:[A-Za-z0-9_./\\-]*\.[A-Za-z][A-Za-z0-9]*|(?:[A-Za-z0-9_./\\-]*/)?\b(?i:Makefile|GNUmakefile|Dockerfile|Containerfile|Jenkinsfile|Justfile|Procfile|Gemfile|Rakefile|Vagrantfile|Brewfile|Tiltfile|Caddyfile)):\d+`)
+ 	placeholder = regexp.MustCompile(`^(?i)(|-|—|n/?a|none|\(none\)|tbd)$`)
+ 	// A finding whose verdict asserts the defect is real owes a test that holds it.
+ 	settledStatus = regexp.MustCompile(`(?i)\b(confirmed|fixed)\b`)

@@ -1,0 +1,58 @@
+diff --git a/internal/plan/plan.go b/internal/plan/plan.go
+index f7edf7bc..1489aff2 100644
+--- a/internal/plan/plan.go
++++ b/internal/plan/plan.go
+@@ -57,6 +57,17 @@ var (
+ 	lightShapeRe = regexp.MustCompile(`^(.+?)[ \t]*·[ \t]*touches[ \t]*(.*)$`)
+ )
+ 
++// findingsStatuses is the Findings status vocabulary the plan documents. It is the membership the
++// checker enforces; FindingsStatusList spells the same list for every message that has to offer it.
++var findingsStatuses = map[string]bool{
++	"open": true, "confirmed": true, "fixed": true, "rejected": true, "wontfix": true,
++}
++
++// FindingsStatusList is the closed Findings vocabulary in one string, so the list a reader is shown is
++// the list the checker enforces: a status the vocabulary does not carry (`resolved`) is answered rather
++// than silently read as `open`.
++const FindingsStatusList = "open, confirmed, fixed, rejected, wontfix"
++
+ // Check reads a plan and returns everything that breaks the contract, most structural first.
+ // Every breach that names a row or a cell carries its file line, so the reader opens the plan at the row
+ // instead of grepping for the text the message quotes.
+@@ -122,7 +133,11 @@ func CheckDocument(doc string) []string {
+ 				}
+ 			}
+ 		}
+-		if settledStatus.MatchString(cell(r.cells, iStatus)) && (iPin < 0 || placeholder.MatchString(cell(r.cells, iPin))) {
++		status, breach := findingStatus(cell(r.cells, iStatus))
++		if breach != "" {
++			problems = append(problems, fmt.Sprintf("line %d: finding %s %s", r.line, id, breach))
++		}
++		if settledStatus.MatchString(status) && (iPin < 0 || placeholder.MatchString(cell(r.cells, iPin))) {
+ 			problems = append(problems, fmt.Sprintf("line %d: finding %s is settled but names no pinning test", r.line, id))
+ 		}
+ 	}
+@@ -132,6 +147,22 @@ func CheckDocument(doc string) []string {
+ 	return problems
+ }
+ 
++// findingStatus reads a Findings status cell against the closed vocabulary the plan documents. It is the
++// breach the check used to hide: the old `confirmed|fixed` regex read `resolved` as unsettled, so the row
++// silently stopped owing the test that holds its verdict and the plan still passed. The returned status
++// is trimmed and lowercased for the settled rule; the breach, when there is one, is ready to follow the
++// finding id.
++func findingStatus(raw string) (string, string) {
++	status := strings.ToLower(strings.TrimSpace(raw))
++	switch {
++	case status == "":
++		return "", "has no status: one of " + FindingsStatusList
++	case !findingsStatuses[status]:
++		return status, fmt.Sprintf("status \"%s\" is not one of: %s", quote(raw), FindingsStatusList)
++	}
++	return status, ""
++}
++
+ // LightActivated reports whether a plan declares a scoped run that passes every Light-specific rule.
+ // The bench reads activation from here, so an ordinary plan, a detected defect, or a line that merely
+ // looks like a declaration is never a scoped run.

@@ -1,0 +1,28 @@
+diff --git a/internal/plan/plan.go b/internal/plan/plan.go
+index d4ffe5f6..8c3e7134 100644
+--- a/internal/plan/plan.go
++++ b/internal/plan/plan.go
+@@ -448,6 +448,12 @@ func recordCell(doc, id, column, label, value string) (string, error) {
+ 	for _, line := range strings.Split(body, "\n") {
+ 		t := strings.TrimSpace(line)
+ 		if !strings.HasPrefix(t, "|") {
++			// A blank line inside the section is not the end of its table, and table skips it too: stopping
++			// here refused a row the reader can see.
++			if t == "" {
++				lineStart += len(line) + 1
++				continue
++			}
+ 			if seenHeader {
+ 				break
+ 			}
+@@ -918,7 +924,9 @@ func table(sec string) (rows [][]string, header []string) {
+ 	for _, l := range strings.Split(sec, "\n") {
+ 		t := strings.TrimSpace(l)
+ 		if !strings.HasPrefix(t, "|") {
+-			if header != nil {
++			// A blank line inside the section is not the end of its table. scanTable tolerates one, so stopping
++			// here dropped rows the checker had just validated, and dropped them without saying so.
++			if t != "" && header != nil {
+ 				break
+ 			}
+ 			continue

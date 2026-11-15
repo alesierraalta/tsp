@@ -129,6 +129,39 @@ Node fixtures run with `node --test` (ESM, no dependencies). Go fixtures run wit
 (standard library only). Python cases are also accepted with a `pytest` or `python -m pytest`
 suite. Every suite is green with the defects present.
 
+### Own-history cases (o*), shipped by reference
+
+```
+bench/cases/<id>/
+  KEY.json          the answer key, as above; `source` names the series snapshot, tsp-own-history@<main sha>
+  SOURCE.json       {"repo": "https://github.com/alesierraalta/tsp", "commit": "<parent sha>", "patch": "fix.patch"}
+  fix.patch         the fix commit's Go diff without its test files, applied with -p1
+```
+
+An own-history case is one of this repository's own bug-fix commits, one defect each. `SOURCE.json` names the
+fix's parent as the fixture and `fix.patch` is the source half of the commit, so `fix/all` is the parent plus
+the fix and nothing else: the test the commit came with is deliberately left out, because it is the oracle.
+The defect line is where the defective statement sits in the parent, and `defects[0].trigger.input` plants
+that commit's own test and runs it — red on `fixture/`, green on `fix/all`. Provenance sits in
+`defects[0].description`: the fix commit and its date, so a reading can be cut by date. Like `r*`, nothing is
+vendored: a fixture is this repository's whole tree at the parent (~2,700 files), built into
+`~/.cache/tsp/bench-cases` on first use, and each key's `suite` is the one package the fix and its test live
+in rather than `go test ./...`, so a reading stays a package build per case.
+
+The candidate pool is the `fix` commits whose Go source change is at most 80 lines and that changed a test —
+152 of them when this series was taken. Cases were kept only when the corpus check passed: the suite green on
+`fixture/` and on `fix/all`, and that commit's own test red on the fixture. A commit whose source half does not
+stand alone (the fix renames a function its existing tests call, or only its test updates carry the contract)
+was dropped rather than shipping a `fix/all` that does not compile or a defect nothing distinguishes.
+
+Contamination: this repository is public, so a model may have read the fix, its test, or the commit message
+during training. The commits date from 2026-09 to 2026-11 and every case records its fix and date, so a reading
+can be compared against a model's knowledge cutoff. The fixture is also the repository that carries the rest of
+the corpus, so an `o*` workspace contains other cases' `KEY.json` files — the sealed key of the case being run
+is not among them, but a flow can read the corpus it ships beside. A reading of `o*` is its own series: the
+case set differs from `h*` and `r*`, so `bench compare` starts a new series instead of reporting a delta, and
+its digest is not comparable with a hard23 reading.
+
 ## Fixed versions
 
 `fix/all/` holds the corrected version of every file named in `KEY.json`, and nothing else. For a
