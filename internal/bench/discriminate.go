@@ -100,6 +100,11 @@ func Discriminate(caseDir, ws string, key Key, timeout time.Duration) CatchResul
 		res.Notes = append(res.Notes, "the agent added or changed no test file")
 		return res
 	}
+	// A test file the suite's build constraints leave out contributes no test name, so the run would read
+	// exactly like one where the agent wrote nothing. Naming it keeps that miss attributable.
+	for _, rel := range uncompiledGoTestFiles(ws, tests, key.Suite) {
+		res.Notes = append(res.Notes, "test file not compiled in the suite run: "+rel)
+	}
 	onAll, code, out, err := testsOn(fixture, all, ws, tests, key.Suite, timeout)
 	if err != nil {
 		res.Notes = append(res.Notes, "fix/all: "+err.Error())
