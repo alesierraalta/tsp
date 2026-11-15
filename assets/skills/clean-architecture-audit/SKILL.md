@@ -4,7 +4,7 @@ description: "Trigger: clean architecture, architecture audit, layer conformance
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.2"
+  version: "1.2.1"
 ---
 
 ## Activation Contract
@@ -27,7 +27,7 @@ When invoked by `test-strategy` in PLAN mode: do not execute. Return target rows
 4. **Cycles are strongly connected components of size > 1**, not "any import inside the same package". Domain-to-domain imports are legal; only a cycle is a finding.
 5. **Unearned interface**: one implementation and no process boundary is theater, EXCEPT a consumer-owned port that exists for a test double, a second adapter (present or planned), or a team/process boundary. Those are the seam and stay.
 6. **Complexity is a finding only when the target configures a limit** (linter or analyzer config); report the score against that limit. Invent no default threshold.
-7. **Evidence**: every finding carries an executed record per `~/.claude/skills/test-strategy/references/evidence.md` (the conformance run output); no finding from reading alone.
+7. **Evidence**: every finding carries an executed record per `~/.claude/skills/test-strategy/SKILL.md` (invariant 1; the conformance run output); no finding from reading alone.
 8. **Architecture-contract mutants only**: break a boundary on purpose and the conformance test must go red. General mutation testing belongs to `exploit-testing`.
 
 ## Decision Gates
