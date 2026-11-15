@@ -210,6 +210,44 @@ func TestRedcheckFalsifyRefusesWithoutASourceDiff(t *testing.T) {
 	}
 }
 
+// A save that fails leaves the fix in the working tree, so the run must not claim it saved anything: an agent
+// that trusted the claim would hand-revert the only copy of its fix. The files it names as still changed are
+// the ones git still reports, never the ones the command meant to restore.
+func TestRedcheckFalsifyDoesNotClaimASaveThatFailed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the CLI and runs go test")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+	bin := buildCLI(t)
+	dir := redcheckRepo(t, "package rc\n\nimport \"testing\"\n\nfunc TestOrderIsSorted(t *testing.T) {\n\tif Order() != \"abc\" {\n\t\tt.Fatal(Order())\n\t}\n}\n")
+	if err := os.WriteFile(filepath.Join(dir, "order.go"), []byte("package rc\n\nfunc Order() string { return \"abc\" }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.ReadFile(filepath.Join(dir, "order.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A file where the patch directory must go makes the save fail.
+	if err := os.WriteFile(filepath.Join(dir, ".git", "tsp"), []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out := runRedcheckArgs(t, bin, dir, "--falsify")
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 (nothing could be judged)\n%s", code, out)
+	}
+	if strings.Contains(out, "saved the candidate fix:") {
+		t.Errorf("the run claims it saved a patch that never landed:\n%s", out)
+	}
+	if !strings.Contains(out, "still changed: order.go") {
+		t.Errorf("output must name the source the failed save left in the tree:\n%s", out)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "order.go")); err != nil || string(got) != string(source) {
+		t.Fatalf("the failed save left no copy of the fix: %q, %v", got, err)
+	}
+}
+
 func runRedcheckArgs(t *testing.T, bin, dir string, extra ...string) (int, string) {
 	t.Helper()
 	cmd := exec.Command(bin, append([]string{"redcheck", "--cwd", dir}, extra...)...)

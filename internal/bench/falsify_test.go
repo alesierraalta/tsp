@@ -234,6 +234,142 @@ func TestFalsifySavesUnderTheLinkedWorktreesGitDir(t *testing.T) {
 	}
 }
 
+// gitDo runs git in dir and fails the test when it exits non-zero.
+func gitDo(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// A staged version of a source file that differs from both HEAD and the worktree has no home in the patch: it
+// is the worktree that `git diff HEAD` holds, and `git restore --staged --worktree` would drop the staged one
+// without a copy anywhere. The command refuses before it saves or restores anything, and names the files.
+func TestFalsifyRefusesWhenTheIndexAndTheWorktreeDisagree(t *testing.T) {
+	dir := redCheckRepo(t)
+	writeFile(t, dir, "agent_test.go", falsifyAgentTests)
+	writeFile(t, dir, "order.go", "package rc\n\nfunc Order() string { return \"staged\" }\n")
+	gitDo(t, dir, "add", "order.go")
+	falsifyFix(t, dir)
+	worktree := readFile(t, filepath.Join(dir, "order.go"))
+	_, err := Falsify(dir, "", time.Minute)
+	if err == nil {
+		t.Fatal("Falsify accepted a source file whose staged version differs from the worktree, and lost it")
+	}
+	for _, want := range []string{"order.go", "stage or unstage consistently, then rerun"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+	if got := readFile(t, filepath.Join(dir, "order.go")); string(got) != string(worktree) {
+		t.Fatalf("a refused run rewrote the source:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git", "tsp")); !os.IsNotExist(err) {
+		t.Fatalf("a refused run saved a patch under the git dir: %v", err)
+	}
+}
+
+// Staging the fix and leaving the worktree at the same version is one version, not three: the patch holds it
+// and the restore puts it back, so the refusal above must not fire.
+func TestFalsifyAcceptsAFixThatIsOnlyStaged(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go test")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+	dir := redCheckRepo(t)
+	writeFile(t, dir, "agent_test.go", falsifyAgentTests)
+	falsifyFix(t, dir)
+	gitDo(t, dir, "add", "order.go")
+	rep, err := Falsify(dir, "", 2*time.Minute)
+	if err != nil {
+		t.Fatalf("Falsify refused a fix that is only staged: %v", err)
+	}
+	if patch := string(readFile(t, rep.Patch)); !strings.Contains(patch, `+func Order() string { return "abc" }`) {
+		t.Fatalf("the patch does not hold the staged fix:\n%s", patch)
+	}
+	if got, want := readFile(t, filepath.Join(dir, "order.go")), headFile(t, dir, "order.go"); string(got) != string(want) {
+		t.Fatalf("the source after the run = %q, want HEAD's %q", got, want)
+	}
+	if status := gitStatus(t, dir); strings.Contains(status, "order.go") {
+		t.Fatalf("the staged source is not back at HEAD:\n%s", status)
+	}
+}
+
+// A source file whose name holds a glob character has to be restored as that exact path. Given to git as a
+// pathspec, `a*.go` also matches the agent's test file, and the restore silently reverts the tests the command
+// promises never to touch while its proof still passes.
+func TestFalsifyRestoresTheNamedPathNeverItsGlobMatches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go test")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+	dir := redCheckRepo(t)
+	// HEAD tracks a source file named after a glob, and the test file the agent will edit: both match `a*.go`.
+	writeFile(t, dir, "a*.go", "package rc\n\nfunc Helper() string { return \"one\" }\n")
+	writeFile(t, dir, "agent_test.go", "package rc\n\nimport \"testing\"\n\nfunc TestHelper(t *testing.T) {\n\tif Helper() == \"\" {\n\t\tt.Fatal()\n\t}\n}\n")
+	gitDo(t, dir, "add", "-A")
+	gitDo(t, dir, "commit", "-qm", "a source file with a glob in its name")
+	writeFile(t, dir, "agent_test.go", falsifyAgentTests)
+	falsifyFix(t, dir)
+	writeFile(t, dir, "a*.go", "package rc\n\nfunc Helper() string { return \"two\" }\n")
+	agentTests := readFile(t, filepath.Join(dir, "agent_test.go"))
+	rep, err := Falsify(dir, "", 2*time.Minute)
+	if err != nil {
+		t.Fatalf("Falsify: %v", err)
+	}
+	if got := readFile(t, filepath.Join(dir, "agent_test.go")); string(got) != string(agentTests) {
+		t.Fatalf("the restore expanded the glob and reverted the test file it never restores:\n%s", got)
+	}
+	if want := []string{"a*.go", "order.go"}; !reflect.DeepEqual(rep.Restored, want) {
+		t.Fatalf("restored = %v, want %v", rep.Restored, want)
+	}
+	if got, want := readFile(t, filepath.Join(dir, "a*.go")), headFile(t, dir, "a*.go"); string(got) != string(want) {
+		t.Fatalf("the glob-named source after the run = %q, want HEAD's %q", got, want)
+	}
+}
+
+// A submodule change in the source set cannot be reproduced from a patch, and restoring it half-succeeds: the
+// index goes back to HEAD while the submodule's checkout does not. The command refuses before it touches the
+// tree rather than promising a restore it cannot prove.
+func TestFalsifyRefusesASubmoduleChange(t *testing.T) {
+	dir := redCheckRepo(t)
+	sub := filepath.Join(dir, "vendor", "lib")
+	writeFile(t, sub, "f.txt", "one\n")
+	gitDo(t, sub, "init", "-q")
+	gitDo(t, sub, "add", "-A")
+	gitDo(t, sub, "commit", "-qm", "one")
+	gitDo(t, dir, "add", "vendor/lib")
+	gitDo(t, dir, "commit", "-qm", "a submodule at HEAD")
+	writeFile(t, sub, "f.txt", "two\n")
+	gitDo(t, sub, "add", "-A")
+	gitDo(t, sub, "commit", "-qm", "two")
+	gitDo(t, dir, "add", "vendor/lib")
+	writeFile(t, dir, "agent_test.go", falsifyAgentTests)
+	falsifyFix(t, dir)
+	source := readFile(t, filepath.Join(dir, "order.go"))
+	_, err := Falsify(dir, "", time.Minute)
+	if err == nil {
+		t.Fatal("Falsify claimed to save and restore a submodule change it cannot reproduce")
+	}
+	for _, want := range []string{"submodule changes are not supported", "vendor/lib"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+	if got := readFile(t, filepath.Join(dir, "order.go")); string(got) != string(source) {
+		t.Fatalf("a refused run rewrote the source:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git", "tsp")); !os.IsNotExist(err) {
+		t.Fatalf("a refused run saved a patch under the git dir: %v", err)
+	}
+}
+
 func gitStatus(t *testing.T, dir string) string {
 	t.Helper()
 	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
@@ -241,4 +377,93 @@ func gitStatus(t *testing.T, dir string) string {
 		t.Fatalf("git status: %v", err)
 	}
 	return string(out)
+}
+
+// The patch is the only copy of the candidate fix from the moment the restore starts, so it has to be on disk
+// and complete before anything is undone: the save syncs the file and its directory, then the restore runs.
+func TestFalsifySavesTheCompletePatchBeforeItRestores(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go test")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+	dir := redCheckRepo(t)
+	writeFile(t, dir, "agent_test.go", falsifyAgentTests)
+	falsifyFix(t, dir)
+	head := string(headFile(t, dir, "order.go"))
+	var atRestore string
+	falsifyBeforeRestore = func(patch string) {
+		atRestore = patch
+		data := readFile(t, patch)
+		if !strings.Contains(string(data), `+func Order() string { return "abc" }`) {
+			t.Errorf("the patch on disk is not the candidate fix:\n%s", data)
+		}
+		tmp, err := filepath.Glob(filepath.Join(filepath.Dir(patch), "*.tmp"))
+		if err != nil || len(tmp) != 0 {
+			t.Errorf("leftover temp files beside the patch: %v, %v", tmp, err)
+		}
+		if got := string(readFile(t, filepath.Join(dir, "order.go"))); got == head {
+			t.Errorf("the source was already restored before the patch was saved and complete")
+		}
+	}
+	defer func() { falsifyBeforeRestore = nil }()
+	if _, err := Falsify(dir, "", 2*time.Minute); err != nil {
+		t.Fatalf("Falsify: %v", err)
+	}
+	if atRestore == "" {
+		t.Fatal("the restore ran without the saved patch being observed first")
+	}
+}
+
+// The patch name is a nanosecond timestamp, which is not a lock: two runs that land on the same name must not
+// overwrite one another, because the first run's fix would be gone with no copy left anywhere.
+func TestFalsifyPatchNamesNeverOverwriteAnotherRun(t *testing.T) {
+	dir := redCheckRepo(t)
+	falsifyNow = func() time.Time { return time.Date(2024, 5, 6, 7, 8, 9, 10, time.UTC) }
+	defer func() { falsifyNow = time.Now }()
+	first, err := falsifySavePatch(dir, []byte("the first run's candidate fix\n"))
+	if err != nil {
+		t.Fatalf("save the first patch: %v", err)
+	}
+	second, err := falsifySavePatch(dir, []byte("the second run's candidate fix\n"))
+	if err != nil {
+		t.Fatalf("save the second patch: %v", err)
+	}
+	if first == second {
+		t.Fatalf("both runs wrote %q: the second overwrote the first", first)
+	}
+	if got := string(readFile(t, first)); got != "the first run's candidate fix\n" {
+		t.Fatalf("the first patch now reads %q: it was overwritten", got)
+	}
+	if got := string(readFile(t, second)); got != "the second run's candidate fix\n" {
+		t.Fatalf("the second patch reads %q", got)
+	}
+	patches, err := filepath.Glob(filepath.Join(dir, ".git", "tsp", "falsify", "*.patch"))
+	if err != nil || len(patches) != 2 {
+		t.Fatalf("patches = %v, %v; want two beside each other", patches, err)
+	}
+}
+
+// The proof of the restore is the whole working-tree status, not the list of paths the command meant to restore:
+// a glob that expanded, or any other file the restore rewrote, fails the proof instead of passing it.
+func TestFalsifyProofNamesAChangeOutsideTheSourceSet(t *testing.T) {
+	before := []string{" M agent_test.go", " M order.go", "?? extra.go"}
+	allowed := setOf([]string{"a*.go", "order.go"})
+	if got, want := falsifyOutside(before, []string{" M agent_test.go", " M a*.go", "?? extra.go"}, allowed), []string(nil); !reflect.DeepEqual(got, want) {
+		t.Fatalf("a status whose only change is inside the source set named %v, want %v", got, want)
+	}
+	got := falsifyOutside(before, []string{" M order.go"}, allowed)
+	if want := []string{"agent_test.go", "extra.go"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outside = %v, want %v", got, want)
+	}
+}
+
+// The files a failed or partial restore leaves behind are read from git status, never from the list of files the
+// command meant to restore: a file already back at HEAD must not be reported as still changed.
+func TestFalsifyStillChangedReadsTheStatusNotTheSourceList(t *testing.T) {
+	after := []string{"?? extra.go"}
+	if got, want := falsifySourceLeft(after, []string{"extra.go", "order.go"}), []string{"extra.go"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("still changed = %v, want %v", got, want)
+	}
 }

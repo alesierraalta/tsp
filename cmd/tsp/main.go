@@ -1426,12 +1426,15 @@ func runFalsify(cwd, suite string, timeout time.Duration) int {
 	for _, note := range rep.Notes {
 		fmt.Println(note)
 	}
+	// A patch path is only reported when the save landed: the working tree is the fix's only copy until then, so
+	// naming a path that holds nothing would invite an agent to revert the source by hand and lose it.
 	if rep.Patch != "" {
 		fmt.Println("saved the candidate fix:", rep.Patch)
 	}
 	if len(rep.Restored) > 0 {
 		fmt.Println("restored source files:", strings.Join(rep.Restored, ", "))
 	}
+	// Left is read from git status after the restore, never from the files the restore meant to change.
 	if len(rep.Left) > 0 {
 		fmt.Println("still changed:", strings.Join(rep.Left, ", "))
 	}
