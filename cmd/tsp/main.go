@@ -149,7 +149,7 @@ flags for setup and doctor:
 
 bench run [--cases <glob>] [--runner pi|claude|codex|agy] [--model <m>] [--runs N] [--rounds N] [--fix-loop] [--pin-from <file>] [--max-turns N] [--timeout 30m]
           [--max-cost-usd N] [--out <dir>] [--bench-dir <dir>] [--dry-run] [--keep]
-          [--retries N] [--retry-delay 60s] [--agent-config bench|bench-all|none|<dir>] [--concurrency N]
+          [--retries N] [--retry-delay 60s] [--agent-config bench|bench-all|product|none|<dir>] [--concurrency N]
           [--sessions N] [--prompt <instruction>] [--escalate-model <m>]
           (--cases accepts comma-separated patterns)
           (--sessions: independent reviews retaining tests and applying reference fixes between sessions;
@@ -159,8 +159,10 @@ bench run [--cases <glob>] [--runner pi|claude|codex|agy] [--model <m>] [--runs 
           (--pin-from turns the run into the chain arm: the agent is handed that review's findings and asked to
            pin each with a test, recorded pinned, refuted or blocked in the plan's Pinning section and read in
            the run's pin_chain beside detection, never folded into it; excludes --sessions above 1)
-          (--agent-config bench-all loads every embedded skill, pi only; none is the bare baseline
-           for pi, agy and codex, and codex's only mode; agy accepts only bench or none)
+          (--agent-config bench-all loads every embedded skill, pi only; product loads the bench config plus the
+           tsp Pi extension as tsp sync --hosts pi installs it, pi only, and compare/gate refuse it against a
+           bench reading; none is the bare baseline for pi, agy and codex, and codex's only mode; agy accepts
+           only bench or none)
           (--model is a name for claude and <provider>/<model>[:<thinking>] for pi; --runner pi
            builds a throwaway agent dir under --out unless --agent-config names one)
 bench score --case <dir> --workspace <ws>
@@ -2056,6 +2058,9 @@ func configModeFor(runner, agentConfig string) string {
 		return bench.ConfigBench
 	case agentConfig == bench.ConfigBenchAll:
 		return bench.ConfigBenchAll
+	case agentConfig == bench.ConfigProduct:
+		// The bench config plus the tsp Pi extension installed as a user installs it: the product arm.
+		return bench.ConfigProduct
 	case agentConfig == "none", runner == bench.RunnerCodex:
 		// Codex runs only bare: the embedded skills target the hosts tsp installs into, not codex.
 		return bench.ConfigNone
@@ -2102,7 +2107,7 @@ func runBenchRun(args []string) int {
 	retries := fs.Int("retries", 1, "retries per case on infrastructure failures (exit status, error result)")
 	retryDelay := fs.Duration("retry-delay", 60*time.Second, "pause before a retry")
 	workers := fs.Int("concurrency", 1, "cases to run side by side; the wall clock shortens, the cost does not")
-	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the skill under test (test-strategy) (the default for --runner pi or agy); \"bench-all\" builds the same with every embedded skill, so the skill under test can load the siblings it routes to (pi only); \"none\" builds one with no skill at all, the bare-agent baseline (pi, agy and codex; the only mode for codex)")
+	agentConfig := fs.String("agent-config", "", "agent config directory; \"bench\" builds a throwaway one holding only the skill under test (test-strategy) (the default for --runner pi or agy); \"bench-all\" builds the same with every embedded skill, so the skill under test can load the siblings it routes to (pi only); \"product\" builds the bench config plus the tsp Pi extension installed as tsp sync --hosts pi installs it, so the arm runs the product a user runs (pi only); \"none\" builds one with no skill at all, the bare-agent baseline (pi, agy and codex; the only mode for codex)")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
 	}
@@ -2120,6 +2125,10 @@ func runBenchRun(args []string) int {
 	}
 	if *agentConfig == bench.ConfigBenchAll && *runner != bench.RunnerPi {
 		fmt.Fprintf(os.Stderr, "bench run: --agent-config bench-all needs --runner pi\n")
+		return 2
+	}
+	if *agentConfig == bench.ConfigProduct && *runner != bench.RunnerPi {
+		fmt.Fprintf(os.Stderr, "bench run: --agent-config product needs --runner pi: the tsp extension is the Pi host adapter\n")
 		return 2
 	}
 	if *runner == bench.RunnerAgy && *agentConfig != "" && *agentConfig != "bench" && *agentConfig != "none" {
@@ -2211,16 +2220,21 @@ func runBenchRun(args []string) int {
 			cfgDir = abs
 		}
 		skillFile = bench.AgySkillFile(cfgDir)
-	case *runner == bench.RunnerPi && (cfgDir == "" || cfgDir == "bench" || cfgDir == bench.ConfigBenchAll):
+	case *runner == bench.RunnerPi && (cfgDir == "" || cfgDir == "bench" || cfgDir == bench.ConfigBenchAll || cfgDir == bench.ConfigProduct):
 		// A Pi run always gets a throwaway config: the runner exists so a reading is not shaped by
 		// the operator's packages, extensions, memory protocol, or MCP servers, and so no credential
 		// is shared by link. It is built under the results directory, which the run owns and git
 		// ignores, rather than beside the Claude one in bench/.
 		from := bench.DefaultPiConfigDir()
 		write := bench.WriteBenchPiConfig
-		if cfgDir == bench.ConfigBenchAll {
+		switch cfgDir {
+		case bench.ConfigBenchAll:
 			// Every embedded skill, so the skill under test can load the siblings it routes a surface to.
 			write = bench.WriteBenchAllPiConfig
+		case bench.ConfigProduct:
+			// The same config plus the tsp extension, installed as `tsp sync --hosts pi` installs it: the arm
+			// measures the product a user runs, not the skill alone.
+			write = bench.WriteBenchProductPiConfig
 		}
 		cfgDir = filepath.Join(*out, ".pi-agent-config")
 		if err := write(cfgDir, from); err != nil {

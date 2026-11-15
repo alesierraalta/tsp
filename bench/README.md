@@ -251,9 +251,37 @@ field, so a missing `tokens` means not recorded, never zero.
 
 `--agent-config bench` builds a throwaway Claude configuration holding only the skill under test
 (the embedded `test-strategy`; the other embedded skills would ride every turn as catalog entries),
-with the operator's credentials symlinked in. A case then measures the skills rather than whatever
+with the operator's credentials copied in. A case then measures the skills rather than whatever
 else the machine makes a session do: in one 15-case run, 82 tool calls went to the memory protocol
 and to loading it, roughly a fifth of the turns.
+
+### The product arm (`--agent-config product`)
+
+`--agent-config product` (Pi only) builds that same throwaway configuration and adds the one thing
+a user has that the bench arm does not: the tsp Pi extension, written byte for byte where
+`tsp sync --hosts pi` installs it (`<agent dir>/extensions/tpp/index.ts`) and loaded by the run
+itself (`-e`, with extension discovery still off, so none of the operator's extensions can ride
+along). The candidate binary is already first on `PATH`. The arm exists because the skill alone is
+not the product: the extension is what enforces the skill's late steps — the offer after a run that
+edited source, the Stop-time verdict, the fix / round / record loop — and in the 4-run hard23
+baseline (0 of 92 runs called `tsp redcheck --falsify`) the skill was read and its late steps were
+skipped.
+
+A print-mode session (`pi -p --mode json`) has no UI, so nobody can answer the extension's offer.
+The arm answers it the deterministic way an accepting user does, through the extension's own
+protocol: it exports `TSP_GENTLE_OBSERVATION=pi-session-gentle-active` for the agent process, which
+makes `tsp check --json` answer `required` for the source a run changes, and the extension's
+headless boundary then sends the run its own `haz el TSP` continuation. Nothing is typed into a
+prompt and no fixture declares a gate. The arm also drops the Gentle variables a parent session
+exports: `GENTLE_PI_AGENTS_CHILD=1` left in place makes the extension read every run as a delegated
+child and stay silent.
+
+The arm measures what the extension's headless path does, and only that. The offer itself (a
+`ui.select`), the fix / round / record loop and the feedback request are gated on a real UI in the
+extension, so a product reading shows the offered run, never those later turns; a reading that
+mentions them was not headless. Because the configuration differs, `bench compare` and `bench gate`
+refuse a product reading against a bench one, exactly as they refuse any other agent-config change:
+the arm is measured as its own instrument, against its own baseline.
 
 Trimming the corpus is the lever that does cost quality. Of the fifteen cases in that measurement, thirteen produced
 different numbers across the four skill versions measured so far; only `n01` and `n05` were

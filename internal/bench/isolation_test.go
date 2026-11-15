@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/alesierraalta/tsp/internal/mode"
 )
 
 // writeCodexSource builds a stand-in operator CODEX_HOME holding the login and the operator's own
@@ -180,6 +182,78 @@ func TestPiArgsIsolateContextFilesAndSkills(t *testing.T) {
 	inherited := piArgs(key, Options{})
 	if has(inherited, "--no-context-files") || has(inherited, "--no-extensions") || has(inherited, "--no-skills") {
 		t.Fatalf("an inherited run keeps the operator's pi as it is: %v", inherited)
+	}
+}
+
+func TestPiArgsLoadTheProductExtension(t *testing.T) {
+	key := Key{ID: "c1"}
+	argValue := func(args []string, flag string) (string, bool) {
+		for i, a := range args {
+			if a == flag && i+1 < len(args) {
+				return args[i+1], true
+			}
+		}
+		return "", false
+	}
+	has := func(args []string, flag string) bool {
+		for _, a := range args {
+			if a == flag {
+				return true
+			}
+		}
+		return false
+	}
+	product := piArgs(key, Options{ConfigDir: "/cfg", ConfigMode: ConfigProduct})
+	// One extension, named explicitly: discovery stays off, so nothing of the operator's can ride along.
+	loaded, ok := argValue(product, "-e")
+	if !ok || loaded != PiExtensionFile("/cfg") {
+		t.Fatalf("product args = %v, want -e %s", product, PiExtensionFile("/cfg"))
+	}
+	if !has(product, "--no-extensions") || !has(product, "--no-context-files") {
+		t.Fatalf("product args = %v, want discovery still off", product)
+	}
+	if has(product, "--no-skills") {
+		t.Fatalf("product args = %v, the skill under test has to load", product)
+	}
+	// The other modes load no extension at all.
+	for _, opts := range []Options{{ConfigDir: "/cfg", ConfigMode: ConfigBench}, {ConfigDir: "/cfg", ConfigMode: ConfigNone}, {ConfigDir: "/cfg", ConfigMode: ConfigBenchAll}} {
+		if args := piArgs(key, opts); has(args, "-e") || has(args, "--extension") {
+			t.Fatalf("%s args = %v, want no extension", opts.ConfigMode, args)
+		}
+	}
+}
+
+// A print-mode session has no UI, so nobody can answer the tsp extension's offer. The product arm answers it the
+// deterministic way an accepting user does — the gate the extension's non-interactive path acts on — and it drops
+// the Gentle variables a parent session exports, because GENTLE_PI_AGENTS_CHILD=1 would silently disable it.
+func TestPiProductEnvAnswersTheOfferAndDropsTheParentSession(t *testing.T) {
+	cfg := t.TempDir()
+	if err := os.Mkdir(filepath.Join(cfg, IsolatedHomeDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"PATH=/bin", "HOME=/operator", GentleChildEnv + "=1", "TSP_GENTLE_OBSERVATION=whatever", LegacyGentleObservationEnv + "=pi-session-gentle-active"}
+	product := piProductEnv(base, cfg, "/build")
+	if got := envValues(product, "TSP_GENTLE_OBSERVATION"); !reflect.DeepEqual(got, []string{mode.GentleObservationValue}) {
+		t.Fatalf("TSP_GENTLE_OBSERVATION = %v, want exactly the arm's own observation", got)
+	}
+	for _, key := range []string{GentleChildEnv, LegacyGentleObservationEnv} {
+		if got := envValues(product, key); len(got) != 0 {
+			t.Fatalf("%s = %v, want the parent session's dropped", key, got)
+		}
+	}
+	if got := envValues(product, "HOME"); !reflect.DeepEqual(got, []string{filepath.Join(cfg, IsolatedHomeDir)}) {
+		t.Fatalf("HOME = %v, want the config's own home", got)
+	}
+	// A bench or bare run declares nothing: the extension does not run there, and an inherited observation would
+	// change what the agent's own `tsp check` answers about the case.
+	for _, mode := range []string{ConfigBench, ConfigBenchAll, ConfigNone} {
+		env := piEnv(base, cfg, "/build")
+		if got := envValues(env, "TSP_GENTLE_OBSERVATION"); len(got) != 0 {
+			t.Fatalf("%s: TSP_GENTLE_OBSERVATION = %v, want none", mode, got)
+		}
+		if got := envValues(env, GentleChildEnv); len(got) != 0 {
+			t.Fatalf("%s: %s = %v, want the parent session's dropped", mode, GentleChildEnv, got)
+		}
 	}
 }
 
