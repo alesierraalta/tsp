@@ -22,6 +22,7 @@ import tppExtension, {
   runTppCommand,
   planFindingCount,
   isSourcePath,
+  ROUND_LEAD,
   cwdPath,
   repoProbe as gitProbe,
   unrecordedRunNotice,
@@ -208,7 +209,7 @@ const autoRunOff = { stdout: JSON.stringify({ features: [{ id: "feedback", enabl
 // chat when the repository left that to the human; "Sí" sends the identity prompt "haz el TSP" as if the user typed
 // it. Every collaborator is faked: no Pi, no files, no git.
 function offerHarness(opts = {}) {
-  const { hasUI = true, optedOut = false, env = {}, tools = [], findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), status, probe, entries = [], feedback } = opts;
+  const { hasUI = true, optedOut = false, env = {}, tools = [], findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), status, probe, entries = [], feedback, cwd = "/repo" } = opts;
   const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
   // shown is what the status line read at the moment each dialog opened: the line exists to show the debt while
   // the question is open, and every later paint happens after the answer has already settled it.
@@ -238,7 +239,7 @@ function offerHarness(opts = {}) {
     appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }),
   };
   tppExtension(pi, { optedOut: () => optedOut, env, exec, head, probe });
-  const ctx = { hasUI, cwd: "/repo", sessionManager: { getBranch: () => entries }, ui: {
+  const ctx = { hasUI, cwd, sessionManager: { getBranch: () => entries }, ui: {
     select: async (title, options) => { shown.push(statuses.at(-1)); asked.push({ title, options }); return answer; },
     notify: (message, type) => notes.push({ message, type }),
     setStatus: (_key, text) => statuses.push(text),
@@ -1341,8 +1342,8 @@ test("a delegated child does nothing headless, even with the automatic run on", 
 
 // The loop judges commits, so `tsp findings record` and `tsp findings next` refuse an uncommitted tree
 // (internal/findings/loop.go:236 errDirtyRecord, :233 errDirtyNext). A UI session shows that refusal to the human,
-// who commits; a session without a UI has nobody to read it, so the extension asks the agent to commit and the loop
-// records afterwards — once per settle, at most twice, so a model that never commits cannot loop forever (#471).
+// who commits; a session without a UI has nobody to read it, so the extension asks the agent to commit — once per
+// settle — and a second request the agent did not answer ends the loop (#471).
 const UNCOMMITTED_RECORD = "tsp findings: the working tree has uncommitted changes: commit them, then record, so the loop judges a commit";
 const UNCOMMITTED_NEXT = "the working tree has uncommitted changes: commit the fix, then run `tsp findings next`";
 
@@ -1356,9 +1357,10 @@ test("headless: an uncommitted tree is asked to commit, and the loop records and
   await h.run("haz el TSP", []);
   assert.equal(h.sent.length, 1, "the run sent one continuation, not the fix");
   assert.ok(h.sent[0].startsWith(COMMIT_LEAD), h.sent[0]);
-  assert.match(h.sent[0], /^The TSP loop cannot judge an uncommitted working tree\. Commit the tests you wrote together with the fix they pin, and change nothing else\./);
+  assert.match(h.sent[0], /^The TSP loop cannot judge an uncommitted working tree\./);
   assert.ok(h.sent[0].includes(UNCOMMITTED_RECORD), "the agent is told exactly what tsp answered");
   assert.match(h.sent[0], /records the round and asks next/, "and what the loop does once it is committed");
+  assert.match(h.sent[0], /Never `git add -A` or `git commit -a`/, "and it constrains the commit instead of inviting a blanket add");
   assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings").map((c) => c.argv[1]), ["record"], "no next is asked while the tree cannot be recorded");
   rendersNothing(h);
   await h.run(h.sent[0], [["bash", "git add -A && git commit -qm tests"]]);
@@ -1368,16 +1370,16 @@ test("headless: an uncommitted tree is asked to commit, and the loop records and
   rendersNothing(h);
 });
 
-test("headless: a model that never commits is asked twice at most, and then the loop ends normally", async () => {
+test("headless: a model that never commits is asked once, and the unanswered request ends the loop", async () => {
   const h = offerHarness({ hasUI: false, findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
   await h.run("haz el TSP", []);
   assert.equal(h.sent.length, 1);
+  assert.ok(h.sent[0].startsWith(COMMIT_LEAD));
   await h.run(h.sent[0], []);
-  assert.equal(h.sent.length, 2, "a second settle may ask again");
-  assert.ok(h.sent[1].startsWith(COMMIT_LEAD));
-  await h.run(h.sent[1], []);
-  assert.equal(h.sent.length, 2, "after two commit requests the loop ends instead of asking forever");
-  assert.equal(h.calls.filter((c) => c.argv[1] === "record").length, 3, "every settle tried to record once, and nothing more");
+  assert.equal(h.sent.length, 1, "an unanswered commit request ends the loop instead of asking forever");
+  assert.equal(h.calls.filter((c) => c.argv[1] === "record").length, 2, "every settle tried to record once, and nothing more");
+  const [end] = loopErrors(h).filter((e) => e.data.command === "commit-request-unanswered");
+  assert.ok(end, "the end is explained on the session");
   rendersNothing(h);
 });
 
@@ -1395,6 +1397,14 @@ test("headless: next's own dirty-tree refusal is a commit request too, not the e
   await h.run(h.sent[0], []);
   assert.equal(h.sent.length, 2);
   assert.ok(h.sent[1].startsWith(FIX_LEAD), "once the tree is committed, next decides the loop again");
+});
+
+test("headless: a dirty-tree answer from next is not kept as the loop's answer", async () => {
+  const replies = [{ stdout: JSON.stringify({ next: "error", round: 1, max_rounds: 5, reason: UNCOMMITTED_NEXT, message: UNCOMMITTED_NEXT, review: "", lines: [], items: [], notes: [] }), stderr: "", code: 2 }];
+  const h = offerHarness({ hasUI: false, findings: { get next() { return replies.shift(); } } });
+  await h.run("haz el TSP", []);
+  assert.ok(h.sent[0].startsWith(COMMIT_LEAD));
+  assert.deepEqual(h.entries.filter((e) => e.customType === "tsp-loop").map((e) => e.data), [], "the loop has not answered: it could not judge the tree");
 });
 
 test("with a UI the uncommitted tree is still shown as the record error, never answered with a commit request", async () => {
@@ -1449,11 +1459,35 @@ test("the dirty-tree refusal is a commit request, not a review failure, and a UI
   assert.deepEqual(loopErrors(ui), [], "a UI session reads the calendar of its own notification");
 });
 
-test("headless: the commit request names what git still sees, so the agent knows what to commit", async () => {
-  const probe = repoProbe({ states: [snapshot({ "docs/testing/test-plan.md": "plan", "tests/add.test.js": "one" })] });
-  const h = offerHarness({ hasUI: false, probe, findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
-  await h.run("haz el TSP", []);
-  assert.match(h.sent[0], /Uncommitted: docs\/testing\/test-plan\.md, tests\/add\.test\.js/);
+// A commit request is read by a model that may simply obey it, so it may name only what the loop is allowed to
+// commit: the test files the change wrote and the tracked source it modified. An untracked secret beside the work is
+// never named, and the commit is constrained instead of leaving `git add -A` to chance (#471).
+test("headless: the commit request names the change's tests and tracked source, never an untracked secret", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "tsp-commit-request-"));
+  const git = (...args) => childProcess.execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+  try {
+    mkdirSync(join(dir, "tests"));
+    mkdirSync(join(dir, "deploy"));
+    writeFileSync(join(dir, "app.js"), "export const v = 1\n");
+    writeFileSync(join(dir, "tests/app.test.js"), "test('v', () => {})\n");
+    git("init", "-q"); git("config", "user.email", "t@example.test"); git("config", "user.name", "t"); git("add", "-A"); git("commit", "-qm", "init");
+    writeFileSync(join(dir, "tests/app.test.js"), "test('v', () => { expect(1) })\n"); // the test the run wrote
+    writeFileSync(join(dir, "app.js"), "export const v = 2\n"); // the fix it pins
+    writeFileSync(join(dir, ".env.local"), "API_KEY=sk-live-REAL\n"); // untracked, not ignored: a secret
+    writeFileSync(join(dir, "deploy/id_rsa"), "PRIVATE KEY\n"); // untracked, not ignored: a key
+    writeFileSync(join(dir, "notes.md"), "operator notes\n"); // untracked, unrelated work
+    const h = offerHarness({ hasUI: false, cwd: dir, probe: gitProbe, findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
+    await h.run("haz el TSP", []);
+    const [request] = h.sent;
+    assert.match(request, /tests\/app\.test\.js/, "the test the run wrote is named");
+    assert.match(request, /app\.js/, "the tracked source the change modified is named");
+    for (const hidden of [".env.local", "deploy/id_rsa", "notes.md"]) assert.ok(!request.includes(hidden), `${hidden} must not be named`);
+    assert.match(request, /git add -- tests\/app\.test\.js app\.js/, "the exact pathspec to add is spelled out");
+    assert.match(request, /Never `git add -A` or `git commit -a`/, "and the blanket forms are refused");
+    assert.match(request, /leave every other file untouched/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // A headless run leaves no status line, so the loop's own answer is kept on the branch: a reading can then see that
@@ -1476,4 +1510,102 @@ test("only a headless loop keeps its answer: a UI has the status line, and a ref
   const refused = offerHarness({ hasUI: false, findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
   await refused.run("haz el TSP", []);
   assert.deepEqual(loopAnswers(refused), [], "the loop has not answered yet: it could not record");
+});
+
+// D1: the Go loop keeps answering fix while items stay unsettled, and its round counter never reaches MaxRounds
+// (internal/findings/loop.go decide). Interactive, a human reads that; headless, the extension is the only brake, so
+// it counts every continuation it sends (fix, round, record and commit requests) and stops at twice the loop's own
+// round bound — ten when no answer carries one.
+const alternating = () => {
+  let i = 0;
+  return () => {
+    i += 1;
+    const body = { round: i, max_rounds: 5, tree: `tree-${i}`, review: "", lines: [], notes: [] };
+    if (i % 2 === 1) return { stdout: JSON.stringify({ ...body, next: "fix", items: [{ id: `F${i}`, status: "open", file: "a.go", test: "TestA" }], reason: `round ${i} of 5 left 1 item unsettled`, message: `F${i} open a_test.go Test${i}` }), stderr: "", code: 1 };
+    return { stdout: JSON.stringify({ ...body, next: "tsp", items: [], reason: `round ${i} of 5 — the last fix changed 1 source file`, message: `round ${i} of 5 of the TSP loop: the last fix changed a.go` }), stderr: "", code: 1 };
+  };
+};
+const drive = async (h, limit = 40) => {
+  const kinds = [];
+  for (let turn = 0; turn < limit && h.sent.length > 0; turn++) {
+    const message = h.sent.at(-1);
+    const before = h.sent.length;
+    kinds.push(message.startsWith(FIX_LEAD) ? "fix" : message.startsWith(ROUND_LEAD) ? "round" : message.startsWith(COMMIT_LEAD) ? "commit" : "other");
+    await h.run(message, [["edit", "a.go"]]);
+    if (h.sent.length === before) break;
+  }
+  return kinds;
+};
+
+test("headless: the loop stops at its own continuation bound, and says so", async () => {
+  const next = alternating();
+  const h = offerHarness({ hasUI: false, findings: { record: { stdout: "F1 recorded a_test.go TestA\n", stderr: "", code: 0 }, get next() { return next(); } } });
+  await h.run("haz el TSP", []);
+  const kinds = await drive(h);
+  // Two continuations per round of the loop's own bound of five: ten, then nothing.
+  assert.equal(h.sent.length, 10, `sends: ${h.sent.length} kinds: ${JSON.stringify(kinds)}`);
+  assert.deepEqual([...new Set(kinds)], ["fix", "round"], "a runaway alternation of fix and round is exactly what the bound stops");
+  const [bound] = loopErrors(h).filter((e) => e.data.command === "headless-bound");
+  assert.ok(bound, "the bound is explained on the session");
+  assert.match(bound.data.output, /10 continuations/);
+  rendersNothing(h);
+});
+
+test("headless: a same-tree fix whose message jitters stops at the bound too", async () => {
+  let i = 0;
+  const next = () => {
+    i += 1;
+    return { stdout: JSON.stringify({ next: "fix", round: 1, max_rounds: 5, tree: "t1", items: [{ id: "F1", status: "open", file: "a.go", test: "TestA" }], reason: `round 1 of 5 left 1 item unsettled (attempt ${i})`, message: `F1 open a_test.go TestA — attempt ${i}`, review: "", lines: [], notes: [] }), stderr: "", code: 1 };
+  };
+  const h = offerHarness({ hasUI: false, findings: { record: { stdout: "F1 recorded\n", stderr: "", code: 0 }, get next() { return next(); } } });
+  await h.run("haz el TSP", []);
+  await drive(h);
+  assert.equal(h.sent.length, 10, "a jittering message defeats the same-fix guard, so the bound is what stops it");
+  assert.ok(loopErrors(h).some((e) => e.data.command === "headless-bound"));
+});
+
+// D2: a commit request is allowed once per settle, and only a second consecutive one the agent did not answer ends
+// the loop — a cooperative model keeps getting its later fixes instead of being cut off after two.
+const UNCOMMITTED_NEXT_REPLY = { stdout: JSON.stringify({ next: "error", round: 1, max_rounds: 5, reason: UNCOMMITTED_NEXT, message: UNCOMMITTED_NEXT, review: "", lines: [], items: [], notes: [], tree: "" }), stderr: "", code: 2 };
+
+test("headless: a cooperative model that commits when asked keeps getting its later fixes", async () => {
+  let dirty = true, round = 1, nextCalls = 0;
+  const findings = {
+    get record() { return dirty ? { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } : { stdout: "recorded\n", stderr: "", code: 0 }; },
+    get next() {
+      nextCalls += 1;
+      return dirty ? UNCOMMITTED_NEXT_REPLY
+        : { stdout: JSON.stringify({ next: "fix", round, max_rounds: 5, tree: `t${nextCalls}`, items: [{ id: "F1", status: "open", file: "a.go", test: "TestA" }], reason: `round ${round} of 5 left 1 item unsettled`, message: `F1 open a_test.go TestA (tree t${nextCalls})`, review: "", lines: [], notes: [] }), stderr: "", code: 1 };
+    },
+  };
+  const h = offerHarness({ hasUI: false, findings });
+  await h.run("haz el TSP", [["write", "tests/a.test.js"]]);
+  for (let turn = 0; turn < 20 && h.sent.length > 0; turn++) {
+    const last = h.sent.at(-1);
+    const before = h.sent.length;
+    if (last.startsWith(COMMIT_LEAD)) { dirty = false; await h.run(last, [["bash", "git commit -am round"]]); }
+    else if (last.startsWith(FIX_LEAD)) { dirty = true; round += 1; await h.run(last, [["edit", "src/a.js"]]); }
+    else break;
+    if (h.sent.length === before) break;
+  }
+  const commits = h.sent.filter((m) => m.startsWith(COMMIT_LEAD)).length;
+  const fixes = h.sent.filter((m) => m.startsWith(FIX_LEAD)).length;
+  assert.ok(commits >= 3, `commit requests: ${commits} (two would be the old per-session budget)`);
+  assert.ok(fixes >= 3, `fixes: ${fixes}`);
+  assert.deepEqual(loopErrors(h).filter((e) => e.data.command === "commit-request-unanswered"), [], "each request was answered, so none of them ended the loop");
+});
+
+// D5: the commit-request state lives on the branch with the other loop fields, so a resume does not forget that the
+// agent owes a commit and start asking again.
+test("headless: a pending commit request survives a resume, so a reload does not reset the loop", async () => {
+  const entries = [];
+  const first = offerHarness({ hasUI: false, entries, findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
+  await first.run("haz el TSP", []);
+  assert.equal(first.sent.length, 1);
+  assert.equal(tspState(entries).commitPending, true, "the branch records the request the agent has not answered");
+  const resumed = offerHarness({ hasUI: false, entries, findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
+  await resumed.start("resume");
+  await resumed.run(first.sent[0], []);
+  assert.deepEqual(resumed.sent, [], "after a resume the unanswered request still ends the loop");
+  assert.ok(loopErrors(resumed).some((e) => e.data.command === "commit-request-unanswered"));
 });

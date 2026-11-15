@@ -109,7 +109,8 @@ const CASES = [
       ],
       "findings next": [{ out: JSON.stringify({ next: "fix", round: 1, max_rounds: 5, tree: "t1", items: [{ id: "F1" }], reason: "round 1 of 5 left 1 item unsettled", review: "review", message: "F1 open src/add.test.js TestAdd" }), exit: 1 }],
     },
-    script: [edit("src/add.test.js"), text(), { tool: "bash", args: { command: "git add -A && git commit -qm tests" } }, text(), text("fixed it")],
+    // Named paths, as the commit request asks: the tests it names, never a blanket add.
+    script: [edit("src/add.test.js"), text(), { tool: "bash", args: { command: "git add -- src/add.test.js && git commit -qm tests" } }, text(), text("fixed it")],
     prompts: ["haz el TSP"],
     want: (r) => r.commits > 0 &&
       r.users.some((u) => u.startsWith("The TSP loop cannot judge an uncommitted working tree.")) &&

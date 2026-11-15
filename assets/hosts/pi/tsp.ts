@@ -207,14 +207,27 @@ export const ROUND_LEAD = `${TSP_PROMPT} — `;
 // internal/findings/loop.go errDirtyRecord ("commit them, then record, so the loop judges a commit") and
 // errDirtyNext ("commit the fix, then run `tsp findings next`"), printed as "tsp findings: <that>" by failure().
 export const DIRTY_TREE_REFUSAL = /the working tree has uncommitted changes: (commit them, then record, so the loop judges a commit|commit the fix, then run `tsp findings next`)/;
-const MAX_COMMIT_REQUESTS = 2; // a model that never commits must not be asked forever
+const HEADLESS_CAP_FACTOR = 2; // two continuations per round of the loop's own bound
+const HEADLESS_FALLBACK_CAP = 10; // used until an answer carries the loop's own bound
 export const COMMIT_LEAD = "The TSP loop cannot judge an uncommitted working tree.";
 /** What a session without a UI sends when the loop cannot judge the tree: commit what the run wrote, then it records. */
-export function commitRequest(refused: string, uncommitted: string): string {
-  // Naming what git still sees is what lets the agent commit the right thing instead of guessing why it was refused.
-  const owed = uncommitted.trim() === "" ? "" : `\n\nUncommitted: ${uncommitted.trim()}`;
-  return `${COMMIT_LEAD} Commit the tests you wrote together with the fix they pin, and change nothing else. ` +
-    `The loop judges commits, so the working tree has to be clean; once it is, the loop records the round and asks next.${owed}\n\n${refused}`;
+export function commitRequest(refused: string, paths: readonly string[]): string {
+  // A model may simply obey this, so it names only what the loop is allowed to commit: naming every changed path
+  // would put an untracked secret beside the work into the instruction, and a blanket add into the commit.
+  const named = paths.length === 0
+    ? "Commit the tests this run wrote together with the source changes they pin, and nothing else."
+    : `Commit exactly these paths, and nothing else: ${paths.join(", ")}. Run \`git add -- ${paths.join(" ")}\` and then \`git commit -m "<why>"\`.`;
+  return `${COMMIT_LEAD} ${named} Never \`git add -A\` or \`git commit -a\`, and leave every other file untouched. ` +
+    `The loop judges commits, so once they are committed the loop records the round and asks next.\n\n${refused}`;
+}
+
+/** The paths a commit request may name: the change's test files, and the tracked source it modified (#471). */
+export function commitTargets(cwd: string, changed: readonly string[]): string[] {
+  const tracked = new Set((gitOut(cwd, ["ls-files", "-z"]) ?? "").split("\0").filter((p) => p !== ""));
+  // Tests first: the loop records what they pin, so they lead the pathspec the agent is told to add.
+  return changed
+    .filter((p) => TEST_PATH.test(p) || (tracked.has(p) && isSourcePath(p)))
+    .sort((a, b) => Number(TEST_PATH.test(b)) - Number(TEST_PATH.test(a)));
 }
 
 const SOURCE_EXT = /\.(go|ts|tsx|js|jsx|mjs|cjs|py|rs|java|kt|rb|php|cs|c|cc|cpp|h|hpp|swift|scala|sh)$/;
@@ -498,7 +511,11 @@ export function statusFor(decision: string | undefined, loop: LoopStatus | undef
 }
 
 /** What the offer remembers on the session branch: a reload, a resume or a fork rebuilds exactly this. */
-interface OfferState { declined: string[]; lastFix: string; pending: string; ran: boolean; recordNudged: boolean; own?: OwnMessage; loop?: LoopStatus }
+interface OfferState {
+  declined: string[]; lastFix: string; pending: string; ran: boolean; recordNudged: boolean;
+  own?: OwnMessage; loop?: LoopStatus;
+  continues?: number; cap?: number; commitPending?: boolean; // the headless loop's own brake, kept with the loop
+}
 const STATE_TYPE = "tsp-state";
 
 /** What the loop sends the agent next ("" for nothing) and, for a fix answer, the tree and message that identify it. */
@@ -654,7 +671,10 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   let feedbackRun = false;
   let fixRun = false;
   let commitRun = false; // a commit request the extension sent: a loop turn that records and asks next again
-  let dirtyNudges = 0; // commit requests already sent this session, bounded so a model that never commits cannot loop
+  let continues = 0; // headless loop continuations sent on this branch: fix, round, record and commit requests
+  let loopCap = 0; // the headless bound, sized from the loop's own max_rounds once an answer carries it
+  let commitPending = false; // a commit request is outstanding: the agent has not committed since it was sent
+  let capped = false; // the bound already ended this loop, so its entry is written once
   let pending = "";
   let lastFix = ""; // the fix answer the agent was last sent: the same one again after its fix run means it changed nothing
   let ran = false; // a TSP run already happened on this branch: one run per branch, never one per turn
@@ -666,9 +686,10 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   // A user's message that merely starts like one of the extension's own is the user's: it never runs the loop.
   let own: OwnMessage | undefined;
   // The decisions live on the session branch, so a reload, a resume and a fork rebuild them instead of forgetting them.
-  const persist = () => pi.appendEntry(STATE_TYPE, { declined: [...declined], lastFix, pending, ran, recordNudged, own, loop } satisfies OfferState);
+  const persist = () => pi.appendEntry(STATE_TYPE, { declined: [...declined], lastFix, pending, ran, recordNudged, own, loop, continues, cap: loopCap, commitPending } satisfies OfferState);
   const restore = (ctx: { sessionManager?: { getBranch?: () => readonly unknown[] } }) => {
     declined.clear(); lastFix = ""; pending = ""; ran = false; recordNudged = false; own = undefined; loop = undefined; decision = undefined;
+    continues = 0; loopCap = 0; commitPending = false;
     try {
       let data: unknown;
       for (const entry of (ctx.sessionManager?.getBranch?.() ?? []) as { type?: unknown; customType?: unknown; data?: unknown }[]) {
@@ -680,6 +701,9 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       if (typeof s.pending === "string") pending = s.pending;
       if (s.ran === true) ran = true;
       if (s.recordNudged === true) recordNudged = true;
+      if (typeof s.continues === "number" && Number.isFinite(s.continues) && s.continues >= 0) continues = s.continues;
+      if (typeof s.cap === "number" && Number.isFinite(s.cap) && s.cap >= 0) loopCap = s.cap;
+      if (s.commitPending === true) commitPending = true;
       const saved = s.loop as Partial<LoopStatus> | undefined;
       loop = saved !== null && typeof saved === "object" && typeof saved.next === "string" && ["fix", "tsp", "done", "stop", "error"].includes(saved.next)
         && [saved.round, saved.maxRounds, saved.open].every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0)
@@ -800,12 +824,31 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       if (step.answer === undefined) return;
       pi.appendEntry(LOOP_TYPE, { next: step.answer, round: step.loop?.round ?? 0, maxRounds: step.loop?.maxRounds ?? 0, open: step.loop?.open ?? 0 });
     };
+    /** Ends the loop with its reason on the session, once, and clears what this branch was carrying. */
+    const endLoop = (command: string, why: string) => {
+      if (!capped) { capped = true; pi.appendEntry(LOOP_FAILURE_TYPE, loopFailure(command, 0, why)); }
+      loop = undefined;
+      commitPending = false;
+      persist();
+    };
+    /** Sends one loop continuation; a session without a UI stops at its bound instead of sending past it. */
+    const continueLoop = (prompt: string, kind: OwnMessage["kind"]): boolean => {
+      if (!ctx.hasUI) {
+        if (continues >= (loopCap > 0 ? loopCap : HEADLESS_FALLBACK_CAP)) {
+          endLoop("headless-bound", `the headless loop sent ${continues} continuations (fix, round, record and commit requests): its bound stopped it, and it needs a human`);
+          return false;
+        }
+        continues += 1;
+      }
+      send(prompt, kind);
+      return true;
+    };
     if (pendingRecord !== "" && !tspRun && !fixRun) {
       // The notice waits for a turn of its own: sent beside the loop's message, it would read as one instruction.
       const text = pendingRecord;
       pendingRecord = "";
       if (ctx.hasUI) notify(notice("this TSP run pinned a test and recorded no finding, so the plan does not hold it"), "warning");
-      send(text, "record");
+      continueLoop(text, "record");
       return;
     }
     if (feedbackRun) {
@@ -815,19 +858,26 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     }
     if (tspRun || fixRun) {
       const step = await reviewFindings(ctx.cwd, env, exec, notify, tspRun, showReview, logFailure);
-      logLoop?.(step);
+      if (step.refused === undefined) logLoop?.(step); // a refusal is the commit request, not the loop's answer
       loop = step.loop;
+      // The loop's own round bound decides how many continuations this session may send: two per round.
+      if (!ctx.hasUI && loopCap === 0 && loop !== undefined && loop.maxRounds > 0) loopCap = loop.maxRounds * HEADLESS_CAP_FACTOR;
       if (tspRun) { ran = true; decision = undefined; persist(); }
+      if (step.answer !== undefined) commitPending = false; // a record that judged the tree means the commit landed
       if (step.refused !== undefined && !ctx.hasUI) {
         // The loop judges commits. With a UI the refusal is a notification and the human commits; without one the
-        // agent is asked, once per settle and at most twice per session, and after that the loop ends as it would
-        // have (#471). The turn this asks for is a loop turn, so it records the round and asks next again.
-        if (dirtyNudges >= MAX_COMMIT_REQUESTS) { persist(); return; }
-        dirtyNudges += 1;
+        // agent is asked once per settle, and a second request it did not answer ends the loop, because asking again
+        // would never end (#471). The turn this asks for is a loop turn, so it records the round and asks next again.
+        if (commitPending) {
+          endLoop("commit-request-unanswered", `the agent did not commit after the commit request, so the loop stopped: ${step.refused}`);
+          return;
+        }
+        commitPending = true;
         persist();
-        // What git still sees, so the request names it instead of asking the agent to guess.
+        // Only the change's tests and its tracked source may be named; an untracked secret beside them is not.
         const stillChanged = probe.state(ctx.cwd);
-        send(commitRequest(step.refused, stillChanged === undefined ? "" : [...stillChanged.files.keys()].join(", ")), "commit");
+        const named = commitTargets(ctx.cwd, stillChanged === undefined ? [] : [...stillChanged.files.keys()]);
+        continueLoop(commitRequest(step.refused, named), "commit");
         return;
       }
       if (fixRun && step.fix !== "" && step.fix === lastFix) {
@@ -850,14 +900,14 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       }
       const request = tspRun && !commitRun && !feedbackGiven ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
       if (request !== "") { pending = step.message; persist(); send(request, "feedback"); return; }
-      if (step.message !== "") { send(step.message, loopKind(step.message)); return; }
+      if (step.message !== "") { continueLoop(step.message, loopKind(step.message)); return; }
       // Nothing else is owed this turn, so the recording notice goes now rather than waiting for a turn that may
       // never come; when the loop did send its message, it went out on the next settle instead.
       if (pendingRecord !== "") {
         const text = pendingRecord;
         pendingRecord = "";
         notify(notice("this TSP run pinned a test and recorded no finding, so the plan does not hold it"), "warning");
-        send(text, "record");
+        continueLoop(text, "record");
       }
       return;
     }
