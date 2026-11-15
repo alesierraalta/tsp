@@ -543,6 +543,24 @@ with the model.
 
 Forty-five defects across twenty-eight defective cases, plus two clean controls that plant nothing.
 
+### Input-to-sink cases (u*)
+
+`u01`-`u08` plant an input a caller controls reaching a sensitive operation without the guard the README
+promises, next to inputs that are guarded, so a run has to tell the two apart. Their train/held-out split
+(`batch4` in `postmortems/split.json`) was recorded before anything measured them: `u01` and `u02` are
+train, `u03`-`u08` only measure.
+
+| id | language | surface | defects | classes |
+|---|---|---|---|---|
+| u01-asset-resolver | go | library | 2 | path-prefix-without-separator, unguarded-second-entry-point |
+| u02-report-renderer | node | http | 2 | attribute-context-escaping, allowlist-prefix-sanitizer |
+| u03-batch-decoder | go | etl | 1 | input-driven-expansion |
+| u04-handle-registry | node | library | 2 | unicode-normalization-collision, locale-dependent-case-folding |
+| u05-ledger-money | go | library | 2 | binary-float-money-truncation, dropped-split-remainder |
+| u06-egress-guard | node | http | 2 | host-suffix-without-boundary, internal-address-check-on-raw-url |
+| u07-plugin-envelope | node | library | 2 | prototype-pollution-merge, duplicate-key-overwrite |
+| u08-clean-pager | go | library | 0 (clean control) | — |
+
 ### The guarded-defect family
 
 `n01` through `g03` all plant defects an unguarded happy path never reaches: the collision sits

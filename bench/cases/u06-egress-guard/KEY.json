@@ -1,0 +1,38 @@
+{
+  "id": "u06-egress-guard",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "http",
+  "family": "security",
+  "request": "the outbound-url guard behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/egress.js",
+      "line": 66,
+      "class": "host-suffix-without-boundary",
+      "keywords": ["allowlist", "suffix", "hostname", "boundary", "lookalike"],
+      "description": "The allowlist test compares a hostname with each listed host by suffix alone, so any third-party name that ends with a listed host (notexample-cdn.com for example-cdn.com) is admitted although the README admits only the listed hosts and their subdomains.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D1 Allowlist({hosts:['example-cdn.com']}).check('https://notexample-cdn.com/track.gif') -> blocked egress blocked: host notexample-cdn.com is not on the allowlist",
+        "actual": "D1 Allowlist({hosts:['example-cdn.com']}).check('https://notexample-cdn.com/track.gif') -> admitted notexample-cdn.com"
+      },
+      "why_missed": "The suite admits a listed host and one of its subdomains, which the bare suffix test handles, and refuses a host with a different name entirely; the lookalike that satisfies the suffix while being a third party never appears."
+    },
+    {
+      "id": "D2",
+      "file": "src/egress.js",
+      "line": 34,
+      "class": "internal-address-check-on-raw-url",
+      "keywords": ["internal", "ssrf", "userinfo", "numeric", "hostname"],
+      "description": "The internal-address rules are anchored at the scheme and tested against the raw URL string instead of the parsed hostname, so a URL whose text does not begin with an internal address reaches one: userinfo puts text in front of the real host and a numeric IPv4 form spells the same address another way.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D2 Allowlist().check('https://example-cdn.com@127.0.0.1:8080/admin') -> blocked egress blocked: host 127.0.0.1 is an internal address",
+        "actual": "D2 Allowlist().check('https://example-cdn.com@127.0.0.1:8080/admin') -> admitted 127.0.0.1"
+      },
+      "why_missed": "Every internal address the tests refuse is written at the front of the URL in its dotted form, which is exactly the shape the raw-string rules match, so the rules look like they check the address the request reaches."
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "import-console",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CSV import pipeline, invoice reports and export writers",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test"
+  }
+}

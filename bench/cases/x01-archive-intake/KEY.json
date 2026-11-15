@@ -1,0 +1,50 @@
+{
+  "id": "x01-archive-intake",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "http",
+  "family": "security",
+  "request": "the intake pipeline's page handling and the import report it renders",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "internal/intake/resume.go",
+      "line": 138,
+      "class": "unguarded-filesystem-read-on-the-resume-path",
+      "keywords": [
+        "page index",
+        "resume",
+        "containment",
+        "join",
+        "scanner"
+      ],
+      "description": "The resume rebuilds an interrupted scan's pages by joining the entry directory with the file name the page index carries and reading it with os.ReadFile, while every other reader of a page (the scan stage's verification, the extract stage and the staged-page endpoint) opens it through the staging layout, which proves the file sits in the entry's own directory; a page index that names ../../../../../outside.pgm therefore makes the resume read and commit a file outside the archive root, although the README promises that a name from an index is opened through the layout's reader.",
+      "trigger": {
+        "input": "cd bench/cases/x01-archive-intake && sh testdata/triggers/run.sh fixture  (variants: run.sh all | keep-D1 | keep-D2)",
+        "expected": "D1 resume scan-01 page 2 -> err=intake: resume \"scan-01\" page 2: storepath: invalid name: name \"scans/scan-01/../../../../../outside.pgm\" walks upwards",
+        "actual": "D1 resume scan-01 page 2 -> [page 002] outside-secret-page"
+      },
+      "why_missed": "The suite imports whole batches through the service, which writes the page index itself from the pages it was handed, so the page file name is always one the pipeline just wrote; the resume test stages a well-formed index, and the traversal case exists only in the trigger harness."
+    },
+    {
+      "id": "D2",
+      "file": "internal/render/report_html.go",
+      "line": 59,
+      "class": "unescaped-html-sink-on-a-kind-branch",
+      "keywords": [
+        "escape",
+        "report",
+        "note",
+        "index",
+        "markup"
+      ],
+      "description": "The import report writes an index entry's note into a preformatted block without passing it through Escape, on the argument that a listing header is preformatted text, so a note a sender wrote becomes markup on the report page although the report escapes the note of every other kind of entry and the README promises that every value a manifest carries is rendered as text.",
+      "trigger": {
+        "input": "cd bench/cases/x01-archive-intake && sh testdata/triggers/run.sh fixture  (variants: run.sh all | keep-D1 | keep-D2)",
+        "expected": "D2 GET /api/batches/{id}/report index note -> &lt;script&gt;alert(1)&lt;/script&gt;",
+        "actual": "D2 GET /api/batches/{id}/report index note -> <script>alert(1)</script>"
+      },
+      "why_missed": "The only assertion about the report checks a scan entry, whose note takes the escaped paragraph branch and whose text reads the same escaped and unescaped; the index entry the suite imports carries the note \"12 rows, 4 columns\", which contains no character escaping would change."
+    }
+  ]
+}

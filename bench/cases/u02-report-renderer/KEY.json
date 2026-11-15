@@ -1,0 +1,38 @@
+{
+  "id": "u02-report-renderer",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "http",
+  "family": "security",
+  "request": "the order-summary rendering behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/report.js",
+      "line": 11,
+      "class": "attribute-context-escaping",
+      "keywords": ["attribute", "quote", "escaping", "context", "injection"],
+      "description": "The attribute escaper reuses the element-text table, so it escapes &, < and > but not the double quote that closes the attribute it is writing, and a customer value breaks out of the attribute and injects a handler.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D1 attr('title', 'Total\" onmouseover=\"alert(1)') -> title=\"Total&quot; onmouseover=&quot;alert(1)\"",
+        "actual": "D1 attr('title', 'Total\" onmouseover=\"alert(1)') -> title=\"Total\" onmouseover=\"alert(1)\""
+      },
+      "why_missed": "Every attribute test passes a value with no quote in it, and the quote character is the one thing element text must not escape, so the shared table looks correct in the context the tests exercise."
+    },
+    {
+      "id": "D2",
+      "file": "src/report.js",
+      "line": 24,
+      "class": "allowlist-prefix-sanitizer",
+      "keywords": ["sanitizer", "allowlist", "prefix", "markup", "escape"],
+      "description": "The rich-text renderer decides the note is trusted markup when its first tag is b, i or em, and then emits the whole value unescaped, so markup after the allowed opening tag reaches the page raw.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D2 renderRich('<b>Restock</b><script>alert(1)</script>') -> <b>Restock</b>&lt;script&gt;alert(1)&lt;/script&gt;",
+        "actual": "D2 renderRich('<b>Restock</b><script>alert(1)</script>') -> <b>Restock</b><script>alert(1)</script>"
+      },
+      "why_missed": "The suite checks a note that is one allowed tag and a note that starts with a refused tag; neither carries a second tag after the allowed one, which is the shape the allowlist fails to inspect."
+    }
+  ]
+}

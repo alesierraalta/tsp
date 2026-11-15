@@ -1,0 +1,38 @@
+{
+  "id": "w03-relay-webhook",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "worker",
+  "family": "security",
+  "request": "the outbound-endpoint and staging-path behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "internal/notify/relay.go",
+      "line": 79,
+      "class": "raw-string-endpoint-check-around-a-parsed-url",
+      "keywords": ["endpoint", "userinfo", "metadata", "allowlist", "guard"],
+      "description": "Deliver decides whether an endpoint may be called with a prefix test on the text the subscription stores, so a URL whose text begins with the trusted scheme but parses to the cloud metadata host is posted to, although the README promises that the parsed host of every outbound URL is checked against the allowlist and the private ranges.",
+      "trigger": {
+        "input": "cd bench/cases/w03-relay-webhook && sh testdata/triggers/run.sh fixture  (variants: all | keep-D1 | keep-D2)",
+        "expected": "D1 Deliver(endpoint=https://hooks.example.com@169.254.169.254/latest/meta-data/...) -> host=\"\" status=0 err=netguard: endpoint is not allowed: userinfo in \"https://hooks.example.com@169.254.169.254/latest/meta-data/iam/security-credentials/\"",
+        "actual": "D1 Deliver(endpoint=https://hooks.example.com@169.254.169.254/latest/meta-data/...) -> host=\"169.254.169.254\" status=200 err=<nil>"
+      },
+      "why_missed": "Every delivery test uses an endpoint whose host is the allowlisted one, so the prefix test and the guard agree on every value the suite sends; the guard itself is tested directly, which makes the policy look exercised while the delivery path never consults it."
+    },
+    {
+      "id": "D2",
+      "file": "internal/importer/staging.go",
+      "line": 37,
+      "class": "unguarded-path-join-on-one-entry-kind",
+      "keywords": ["staging", "thumbnail", "join", "traversal", "root"],
+      "description": "StageThumbnail joins the sender's entry name onto the staging directory with filepath.Join and writes it, while the attachment and manifest kinds go through archive.Write and its containment rule, so a thumbnail entry can write a file outside the staging directory the README restricts every write to.",
+      "trigger": {
+        "input": "cd bench/cases/w03-relay-webhook && sh testdata/triggers/run.sh fixture  (variants: all | keep-D1 | keep-D2)",
+        "expected": "D2 Stage(thumbnails/../../escaped.txt) -> path=\"\" written_outside=false err=archive: path leaves the root: \"thumbnails/../../escaped.txt\" walks upwards",
+        "actual": "D2 Stage(thumbnails/../../escaped.txt) -> path=\"escaped.txt\" written_outside=true err=<nil>"
+      },
+      "why_missed": "The suite imports thumbnails whose names the exporter writes (thumbnails/small.png) and asserts where they landed, so the one kind that joins the name itself is never handed a name that walks up; the attachment kind is tested with a refusal, which covers a different function."
+    }
+  ]
+}

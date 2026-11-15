@@ -1,0 +1,38 @@
+{
+  "id": "w02-insight-query",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "http",
+  "family": "security",
+  "request": "the report-filter and subject-resolution behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "internal/reports/export.go",
+      "line": 19,
+      "class": "concatenated-sql-filter-on-one-route",
+      "keywords": ["injection", "tenant", "concatenation", "status", "export"],
+      "description": "ExportCSV builds its WHERE clause by concatenating the caller's status filter into the statement text, while every other report builds its statement with query.Builder and binds the values, so an injected filter is parsed as SQL and the export returns rows of every tenant, although the README promises that every statement is parameterized.",
+      "trigger": {
+        "input": "cd bench/cases/w02-insight-query && sh testdata/triggers/run.sh fixture  (variants: all | keep-D1 | keep-D2)",
+        "expected": "D1 GET /api/reports/usage/export.csv?status=archived' OR '1'='1 -> status=400 rows=0 tenants=[]",
+        "actual": "D1 GET /api/reports/usage/export.csv?status=archived' OR '1'='1 -> status=200 rows=6 tenants=[acme globex]"
+      },
+      "why_missed": "The export test asks for the caller's own tenant and reads only the header and the tenant column of its own rows, so a statement that is built by concatenation answers correctly for every status the suite sends; the injection only changes the answer for a status the store does not carry."
+    },
+    {
+      "id": "D2",
+      "file": "internal/access/resolve.go",
+      "line": 26,
+      "class": "case-folded-identity-lookup",
+      "keywords": ["equalfold", "subject", "identity", "kelvin", "exact"],
+      "description": "Resolver.Resolve matches the subject a token asserts against the directory with strings.EqualFold, so a subject that differs from an account only by Unicode case folding (KELVIN SIGN plus \"elvin\" against \"kelvin\") resolves to that account and reads its rows, although the README promises that identity resolution is byte for byte and the directory's own Find compares exactly.",
+      "trigger": {
+        "input": "cd bench/cases/w02-insight-query && sh testdata/triggers/run.sh fixture  (variants: all | keep-D1 | keep-D2)",
+        "expected": "D2 GET /api/reports/usage with token subject \"\u212aelvin\" -> status=401 error=\"access: unknown subject: \\\"\u212aelvin\\\"\"",
+        "actual": "D2 GET /api/reports/usage with token subject \"\u212aelvin\" -> status=200 tenant=\"acme\" account=\"kelvin\" count=4"
+      },
+      "why_missed": "Every request test signs a token for a subject the directory carries exactly, and the directory's exact comparison has its own test, so the resolver's comparison is covered on both sides by values where folding and equality agree."
+    }
+  ]
+}

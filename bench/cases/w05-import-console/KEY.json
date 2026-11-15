@@ -1,0 +1,38 @@
+{
+  "id": "w05-import-console",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "etl",
+  "family": "security",
+  "request": "the render and SQL export behaviour of imported rows",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/render/components/table.js",
+      "line": 13,
+      "class": "attribute-context-escaping",
+      "keywords": ["attribute", "escape", "href", "markup", "quote"],
+      "description": "The table link cell writes its href with escapeText, which leaves the double quote alone, although every other attribute writer in the renderer (form fields, cards, the layout, the chart, and the caption in the same table function) uses escapeAttr, so a cell value can close the href attribute.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D1 renderTable({link:true}, site: '...a?b=\" onmouseover=\"alert(1)') -> <a href=\"https://example.com/a?b=&quot; onmouseover=&quot;alert(1)\">",
+        "actual": "D1 renderTable({link:true}, site: '...a?b=\" onmouseover=\"alert(1)') -> <a href=\"https://example.com/a?b=\" onmouseover=\"alert(1)\">"
+      },
+      "why_missed": "The suite renders link columns with ordinary URLs, where escaping the text and escaping the attribute produce the same bytes, so the one call site that skips the attribute escaper runs only on values that carry no quote."
+    },
+    {
+      "id": "D2",
+      "file": "src/export/sql.js",
+      "line": 14,
+      "class": "sql-literal-interpolation",
+      "keywords": ["sql", "literal", "quote", "injection", "filter"],
+      "description": "The SQL exporter builds a search filter by pasting the pattern into the statement text, while every other filter in the same function and the query builder's own searchClause pass the pattern through quoteLiteral, so a value can end the LIKE literal.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D2 selectStatement('items', ['sku'], {filters:[{op:'search',column:'title',value:\"x' OR '1'='1\"}]}) -> SELECT \"sku\" FROM \"items\" WHERE LOWER(\"title\") LIKE '%x'' OR ''1''=''1%';",
+        "actual": "D2 selectStatement('items', ['sku'], {filters:[{op:'search',column:'title',value:\"x' OR '1'='1\"}]}) -> SELECT \"sku\" FROM \"items\" WHERE LOWER(\"title\") LIKE '%x' OR '1'='1%';"
+      },
+      "why_missed": "The suite exports an equality filter, which goes through quoteLiteral, and searches a title without a quote, so the interpolated branch produces exactly the text a quoted literal would."
+    }
+  ]
+}
