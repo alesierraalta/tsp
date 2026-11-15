@@ -349,6 +349,11 @@ A test red on `fix/all` but green on `fix/keep-D` asserts the defective behaviou
 bug in and goes red the moment someone fixes it. Those are counted as **inverted** and named in
 the run's notes, apart from tests that are simply red everywhere.
 
+A Go test file the agent added or changed that the suite's build constraints leave out — a
+`//go:build 386` tag, an `_386_test.go` name — contributes no test name to the per-test run, so it is
+named in the run's notes as `test file not compiled in the suite run: <path>`; without that, the
+miss reads exactly like a run that wrote no test at all.
+
 **Pinned** is the third column: it counts defects whose finding names a test in the plan's
 `Pinning test` cell. It measures the claim, caught measures the outcome, and a run that pins more
 than it catches is naming tests that distinguish nothing.

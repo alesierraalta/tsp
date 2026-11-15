@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/build"
 	"os"
 	"os/exec"
 	"path"
@@ -223,6 +224,68 @@ func withPythonTestFiles(dir string, argv, testFiles []string, start int) []stri
 		if !covered {
 			out = append(out, f)
 			paths = append(paths, f)
+		}
+	}
+	return out
+}
+
+// goBuildTags lists the build tags a go test argv selects, so a file gated by one of them is read as
+// compiled: the suite's own -tags are the tags the compiler saw. -race selects the race tag, and GOFLAGS
+// carries tags too, so a file gated by either is not reported as one the run never compiled.
+func goBuildTags(argv []string) []string {
+	tags := tagsFromGoFlags(argv[2:])
+	if extra, err := hookcmd.ShellWords(os.Getenv("GOFLAGS")); err == nil {
+		tags = append(tags, tagsFromGoFlags(extra)...)
+	}
+	return tags
+}
+
+// tagsFromGoFlags reads the build tags a flag list selects.
+func tagsFromGoFlags(words []string) []string {
+	var tags []string
+	for i := 0; i < len(words); i++ {
+		if words[i] == "-args" || words[i] == "--args" {
+			break // everything after -args belongs to the test binary
+		}
+		name, value, hasValue := strings.Cut(words[i], "=")
+		switch goFlagName(name) {
+		case "-tags":
+			if !hasValue {
+				if i+1 >= len(words) {
+					continue
+				}
+				i++
+				value = words[i]
+			}
+			tags = append(tags, strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' })...)
+		case "-race":
+			tags = append(tags, "race")
+		}
+	}
+	return tags
+}
+
+// uncompiledGoTestFiles lists the Go test files among tests that the suite's build context leaves out of the
+// run: a file behind a build tag or an architecture-gated name compiles nothing there, so it contributes no
+// test name and the run would otherwise read exactly like one where the agent wrote no test. Only a go test
+// suite is asked; every other runner keeps its own reading of the files it was given.
+func uncompiledGoTestFiles(dir string, tests []string, suite string) []string {
+	argv, _, err := perTestCommand(suite)
+	if err != nil || len(argv) < 2 || argv[0] != "go" || argv[1] != "test" {
+		return nil
+	}
+	ctx := build.Default
+	ctx.BuildTags = append(ctx.BuildTags, goBuildTags(argv)...)
+	var out []string
+	for _, rel := range tests {
+		slashed := filepath.ToSlash(rel)
+		if !strings.HasSuffix(slashed, "_test.go") {
+			continue
+		}
+		compiled, err := ctx.MatchFile(filepath.Join(dir, filepath.FromSlash(path.Dir(slashed))), path.Base(slashed))
+		// A file whose own constraints cannot be read is not a test the go command could build either.
+		if err != nil || !compiled {
+			out = append(out, slashed)
 		}
 	}
 	return out

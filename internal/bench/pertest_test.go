@@ -292,6 +292,58 @@ func TestDiscriminateDoesNotCreditAnAbsentTestOnAGreenRun(t *testing.T) {
 	}
 }
 
+// A Go test file the suite's build constraints exclude contributes no test name to the per-test run, so
+// the run reads exactly like one where the agent wrote no test at all. It is named in the run's notes
+// instead, and scoring stays as it was: a file that never compiled catches nothing either way.
+func TestDiscriminateNotesAGoTestFileTheSuiteNeverCompiled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs go test")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+	const catches = "package sub\n\nimport \"testing\"\n\nfunc TestOrderIsSorted(t *testing.T) {\n\tif got := Order(); got != \"abc\" {\n\t\tt.Fatalf(\"Order() = %q, want abc\", got)\n\t}\n}\n"
+	const note = "test file not compiled in the suite run: "
+	for _, tc := range []struct {
+		name, suite, goflags, file, body string
+		wantNote                         bool
+		wantCaught                       bool
+	}{
+		{name: "a file gated by a build tag", file: "gated_arch_test.go", body: "//go:build 386 || arm || mips || mipsle || wasm\n\n" + catches, wantNote: true},
+		{name: "a file gated by its filename", file: "agent_386_test.go", body: catches, wantNote: true},
+		{name: "a file the suite compiles", file: "agent_test.go", body: catches, wantCaught: true},
+		// A tag the suite asks for itself compiles the file: reporting it as uncompiled would be a note
+		// about a test that ran.
+		{name: "a file behind a tag the suite selects", suite: "go test -tags integration ./...", file: "gated_tag_test.go", body: "//go:build integration\n\n" + catches, wantCaught: true},
+		{name: "a file behind a tag GOFLAGS selects", goflags: "-tags=integration", file: "gated_tag_test.go", body: "//go:build integration\n\n" + catches, wantCaught: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			suite := tc.suite
+			if suite == "" {
+				suite = "go test ./..."
+			}
+			t.Setenv("GOFLAGS", tc.goflags)
+			caseDir, key := goSubpackageCase(t, suite)
+			ws := agentWorkspace(t, caseDir, map[string]string{tc.file: tc.body})
+			got := Discriminate(caseDir, ws, key, 2*time.Minute)
+			notes := strings.Join(got.Notes, "; ")
+			if named := strings.Contains(notes, note+tc.file); named != tc.wantNote {
+				want := "absent"
+				if tc.wantNote {
+					want = "named as not compiled"
+				}
+				t.Fatalf("notes = %q, want the file %s", notes, want)
+			}
+			if got.Caught["D1"] != tc.wantCaught {
+				t.Fatalf("caught[D1] = %v, want %v (notes = %q)", got.Caught["D1"], tc.wantCaught, notes)
+			}
+			if got.BrokenTests != 0 {
+				t.Fatalf("broken tests = %d, want 0: the note must not move scoring (notes = %q)", got.BrokenTests, notes)
+			}
+		})
+	}
+}
+
 // nodeCase is a two-defect fixture whose suite reports one result per test.
 func nodeCase(t *testing.T) (string, Key) {
 	t.Helper()
