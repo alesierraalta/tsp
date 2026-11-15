@@ -16,12 +16,18 @@ compared. This one does, and the instrument is written down:
 | runner | `pi` |
 | model | `openai-codex/gpt-6-luna` |
 | agent config | `bench` (the test-strategy skill only) |
-| runs per case | 1 |
-| commit measured | `9eda2611` (clean tree; the scorer is reproducible from it) |
-| date | 2026-10-26 |
-| caught | 16 of 22 valid defect-runs, recall 0.727 |
-| cost | $0.094 |
-| invalid | 1 case: `h04-testify-notcontains-noncontainer-message` (its own suite is red in this environment, so it is excluded from recall rather than counted as a miss) |
+| runs per case | 2 |
+| skill version | 0.7.25 (the embedded `test-strategy` the bench config carries) |
+| commit measured | `22d8145b` (clean tree; the scorer is reproducible from it) |
+| date | 2026-11-14 |
+| caught | 37 of 45 valid defect-runs, recall 0.822; all 8 misses `seen_tests_missed` (h06, h10 and h29 missed in both runs, h18 and h25 in one) |
+| false positives | 0 |
+| cost | $0.155, $0.0042 per caught defect |
+| tokens | 865,261 uncached input, 4,329,728 cache read, 49,918 output (4,222 reasoning); cache hit rate 0.833 |
+| invalid | 1 run: `h03` run 1 (excluded from recall rather than counted as a miss) |
+
+The previous baseline (2026-10-26, commit `9eda2611`, skill 0.7.6, one run per case, an older corpus
+digest) caught 16 of 22. It is not a reading of this instrument, so the two numbers are not a delta.
 
 The workflow installs pi and forwards the provider keys pi already understands
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`) from
