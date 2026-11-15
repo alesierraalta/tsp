@@ -63,35 +63,42 @@ func RedCheckRange(dir, suite, base string, changed []string, timeout time.Durat
 }
 
 func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Duration) (RedCheckReport, error) {
-	var rep RedCheckReport
+	rep, _, _, _, err := redCheckDetail(dir, suite, rev, agentFiles, timeout)
+	return rep, err
+}
+
+// redCheckDetail is redCheckAt with the two outcome maps it compares: the tests rev's own code ran, and the
+// same tests with the change's files. Falsify needs the first map to tell a new test from an existing one,
+// which the report alone cannot say.
+func redCheckDetail(dir, suite, rev string, agentFiles []string, timeout time.Duration) (rep RedCheckReport, before, after map[string]bool, out string, err error) {
 	root, head, files, err := redCheckTree(dir, rev, agentFiles)
 	if err != nil {
-		return rep, err
+		return rep, nil, nil, "", err
 	}
 	defer removeTree(head)
 	rep.TestFiles = files
 	if err := cargoInlineFailure(root, suite, timeout); err != nil {
-		return rep, err
+		return rep, nil, nil, "", err
 	}
 	if len(files) == 0 {
-		return rep, nil
+		return rep, nil, nil, "", nil
 	}
 	if suite == "" {
 		if suite, err = inferRedCheckSuite(root, files); err != nil {
-			return rep, err
+			return rep, nil, nil, "", err
 		}
 	}
 	rep.Suite = suite
 	run := runFiles(root, files)
-	before, after, out, err := runSuites(head, root, run, suite, timeout)
+	before, after, out, err = runSuites(head, root, run, suite, timeout)
 	if err != nil {
-		return rep, err
+		return rep, before, after, out, err
 	}
 	rep.Uncollected = pytestUncollected(out)
 	// Without one outcome per test name (a build failure, a runner the parser cannot read) nothing is known about
 	// any single test, and a failed build must never read as a red witness.
 	if _, wholeSuite := after["suite"]; len(after) == 0 || (len(after) == 1 && wholeSuite) {
-		return rep, noOutcomes(&rep, root, suite, files, timeout, out)
+		return rep, before, after, out, noOutcomes(&rep, root, suite, files, timeout, out)
 	}
 	// One package that does not build at base hides inside an aggregate run: its tests never report, so they cannot
 	// fail, and the other packages keep the report looking judged. A test that cannot be built at base cannot pass
@@ -99,11 +106,11 @@ func redCheckAt(dir, suite, rev string, agentFiles []string, timeout time.Durati
 	if len(rep.Red) == 0 && strings.Contains(out, "[build failed]") {
 		if packages := witness(root, suite, files, timeout, out); len(packages) > 0 {
 			rep.NewCode = packages
-			return rep, nil
+			return rep, before, after, out, nil
 		}
 	}
 	rep.Red, rep.PinsNothing = judgeTests(before, after)
-	return rep, nil
+	return rep, before, after, out, nil
 }
 
 // redCheckTree extracts the base tree a red check judges and names the change's test files, cleaning up its

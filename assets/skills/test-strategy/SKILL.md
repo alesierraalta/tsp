@@ -16,7 +16,8 @@ suite that is RED on today's code and would be GREEN once the defect is fixed. W
 behind is the suite it committed, not a regression net: a witness that stays local (a `testLocales/` directory, an
 untracked file, a probe that only exists as a command someone ran) is not in the repository's suite,
 so the run names the ones that stayed local instead of implying a wider net than it cast. Do not
-change source code. Spend turns on probes and tests, not on prose: the one document a run writes is
+change source code except the candidate fix you write for `tsp redcheck --falsify`, which the
+command restores. Spend turns on probes and tests, not on prose: the one document a run writes is
 the plan, because it is the record a later reader audits.
 
 ## Core Invariants
@@ -126,6 +127,9 @@ promise × class is, and step 6 says when it is complete.
    rejected input changed nothing it was supposed to leave alone (stored state, counters, files).
    The test must pass on any correct fix. Run the suite once at the end to see those tests red and
    the rest green; never delete or weaken a test to make the suite green.
+   Write the candidate fix in the source and run `tsp redcheck --falsify`; count only the tests it
+   names `witness`. A `wrong_reason` test is not a witness — fix the test or report the defect
+   unpinned. The command restores the source it read as the fix, so never revert by hand.
 
 5. **Sweep, and say what is left.** A pinned defect is one cell of the matrix, not the end of the
    pass: after each pin, go back over the promises you listed and the classes you have not yet

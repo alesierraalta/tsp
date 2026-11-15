@@ -144,3 +144,82 @@ func TestRedcheckNamesAFilePytestCouldNotCollect(t *testing.T) {
 		t.Errorf("exit %d, want 0 (a witness exists):\n%s", code, out)
 	}
 }
+
+// --falsify judges the green half on the agent's candidate fix and restores the source itself: only a test
+// red at HEAD and green with the fix is a witness, and the source is back at HEAD when the command returns.
+func TestRedcheckFalsifyNamesWitnessesAndRestoresTheSource(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the CLI and runs go test")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+	bin := buildCLI(t)
+	dir := redcheckRepo(t, "package rc\n\nimport \"testing\"\n\n"+
+		"func TestOrderIsSorted(t *testing.T) {\n\tif Order() != \"abc\" {\n\t\tt.Fatal(Order())\n\t}\n}\n\n"+
+		"func TestWrongReason(t *testing.T) {\n\tt.Fatal(\"unrelated\")\n}\n")
+	head, err := exec.Command("git", "-C", dir, "show", "HEAD:order.go").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "order.go"), []byte("package rc\n\nfunc Order() string { return \"abc\" }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out := runRedcheckArgs(t, bin, dir, "--falsify")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (a witness exists)\n%s", code, out)
+	}
+	for _, want := range []string{
+		"witness: example.com/rc.TestOrderIsSorted",
+		"wrong_reason: example.com/rc.TestWrongReason",
+		"saved the candidate fix:",
+		"restored source files: order.go",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "order.go")); err != nil || string(got) != string(head) {
+		t.Fatalf("order.go = %q, want HEAD's %q (%v)", got, head, err)
+	}
+	patches, err := filepath.Glob(filepath.Join(dir, ".git", "tsp", "falsify", "*.patch"))
+	if err != nil || len(patches) != 1 {
+		t.Fatalf("patches = %v, %v; want one under the git dir", patches, err)
+	}
+}
+
+// Without a source diff the command refuses before it touches anything.
+func TestRedcheckFalsifyRefusesWithoutASourceDiff(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the CLI and runs go test")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not installed")
+	}
+	bin := buildCLI(t)
+	dir := redcheckRepo(t, "package rc\n\nimport \"testing\"\n\nfunc TestOrderIsSorted(t *testing.T) {\n\tif Order() != \"abc\" {\n\t\tt.Fatal(Order())\n\t}\n}\n")
+	code, out := runRedcheckArgs(t, bin, dir, "--falsify")
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2\n%s", code, out)
+	}
+	if !strings.Contains(out, "write the candidate fix in the source first") {
+		t.Errorf("output missing the candidate-fix refusal:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "agent_test.go")); err != nil {
+		t.Fatalf("the refused run removed the agent's test: %v", err)
+	}
+}
+
+func runRedcheckArgs(t *testing.T, bin, dir string, extra ...string) (int, string) {
+	t.Helper()
+	cmd := exec.Command(bin, append([]string{"redcheck", "--cwd", dir}, extra...)...)
+	out, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode(), string(out)
+	}
+	if err != nil {
+		t.Fatalf("redcheck %v: %v", extra, err)
+	}
+	return 0, string(out)
+}

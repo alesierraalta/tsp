@@ -85,10 +85,13 @@ commands:
            every other caller asks. --json prints that level for a host. Exit 1 when there is
            something to do.
   redcheck run the tests added or changed since HEAD against HEAD's code and say which new tests
-           fail there (defect witnesses) and which pass (they pin nothing). Exit 0 when at least one
-           new test fails on the unmodified code, 1 when none does or none was added, 2 when nothing
-           could be judged
-           ([--cwd <dir>] [--suite <test command>] [--timeout <duration>])
+           fail there (defect witnesses) and which pass (they pin nothing). --falsify also runs the
+           same tests with the working tree's source change as the candidate fix, names each test
+           witness, wrong_reason, pins_nothing or inverted, then saves that source diff to
+           <git-dir>/tsp/falsify/<UTC timestamp>.patch and restores the source files to HEAD.
+           Exit 0 when at least one new test fails on the unmodified code, 1 when none does or none
+           was added, 2 when nothing could be judged
+           ([--cwd <dir>] [--suite <test command>] [--timeout <duration>] [--falsify])
   verify   ask a second session, with no access to the writer's conversation, whether this change's
            tests mean anything: it freezes the candidate, hands over the diff, the plan and the
            check output, and accepts only a structured verdict. Exit 0 pinned, 1 findings,
@@ -1365,8 +1368,12 @@ func runRedcheck(args []string) int {
 	cwd := fs.String("cwd", ".", "directory inside the repository to check")
 	suite := fs.String("suite", "", "test command: go test, pytest, node --test, jest, vitest run (also npx), cargo test (tests/ witnesses, not inline unit tests); default: Go packages, changed Python/Node files, or package.json test runner")
 	timeout := fs.Duration("timeout", 5*time.Minute, "cap for each suite run")
+	falsify := fs.Bool("falsify", false, "run the changed tests again with the working tree's source change as the candidate fix, name each test witness, wrong_reason, pins_nothing or inverted, save that source diff under <git-dir>/tsp/falsify/, and restore the source files to HEAD")
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
+	}
+	if *falsify {
+		return runFalsify(*cwd, *suite, *timeout)
 	}
 	rep, err := bench.RedCheck(*cwd, *suite, *timeout)
 	if err != nil {
@@ -1399,6 +1406,54 @@ func runRedcheck(args []string) int {
 		return 0
 	}
 	fmt.Println("every new test fails on the unmodified code.")
+	return 0
+}
+
+// runFalsify prints the green half's verdict per changed test, then what it saved and restored. The exit code
+// is the one an agent acts on: 0 when at least one witness exists, 1 when none does, 2 when nothing could be
+// judged or the restore could not be proven.
+func runFalsify(cwd, suite string, timeout time.Duration) int {
+	rep, err := bench.Falsify(cwd, suite, timeout)
+	if rep.Suite != "" {
+		fmt.Println("tsp redcheck --falsify:", rep.Suite)
+	}
+	for _, v := range rep.Verdicts {
+		fmt.Printf("%s: %s\n", v.Verdict, v.Test)
+	}
+	for _, u := range rep.Uncollected {
+		fmt.Printf("could not collect: %s (%s)\n", u.File, u.Reason)
+	}
+	for _, note := range rep.Notes {
+		fmt.Println(note)
+	}
+	if rep.Patch != "" {
+		fmt.Println("saved the candidate fix:", rep.Patch)
+	}
+	if len(rep.Restored) > 0 {
+		fmt.Println("restored source files:", strings.Join(rep.Restored, ", "))
+	}
+	if len(rep.Left) > 0 {
+		fmt.Println("still changed:", strings.Join(rep.Left, ", "))
+	}
+	if err != nil {
+		fmt.Println("tsp redcheck --falsify:", err)
+		return 2
+	}
+	if len(rep.TestFiles) == 0 {
+		fmt.Println("tsp redcheck --falsify: no test file was added or changed since HEAD, so no defect is pinned.")
+		return 1
+	}
+	witnesses := 0
+	for _, v := range rep.Verdicts {
+		if v.Verdict == bench.FalsifyWitness {
+			witnesses++
+		}
+	}
+	if witnesses == 0 {
+		fmt.Println("no test is a witness: none is red on HEAD's code and green with the candidate fix.")
+		return 1
+	}
+	fmt.Printf("%d witness(es): only tests named witness are evidence of a defect.\n", witnesses)
 	return 0
 }
 
