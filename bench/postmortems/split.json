@@ -181,5 +181,83 @@
     "unbounded-reconnect-queue"
    ]
   }
+ },
+ "batch4": {
+  "rule": "Decided before any case was built or measured. Skill text may be written only from train-case misses; held-out cases only measure.",
+  "train": [
+   "u01-asset-resolver",
+   "u02-report-renderer"
+  ],
+  "held_out": [
+   "u03-batch-decoder",
+   "u04-handle-registry",
+   "u05-ledger-money",
+   "u06-egress-guard",
+   "u07-plugin-envelope",
+   "u08-clean-pager"
+  ],
+  "cases": {
+   "u01-asset-resolver": [
+    "path-prefix-without-separator",
+    "unguarded-second-entry-point"
+   ],
+   "u02-report-renderer": [
+    "attribute-context-escaping",
+    "allowlist-prefix-sanitizer"
+   ],
+   "u03-batch-decoder": [
+    "input-driven-expansion"
+   ],
+   "u04-handle-registry": [
+    "unicode-normalization-collision",
+    "locale-dependent-case-folding"
+   ],
+   "u05-ledger-money": [
+    "binary-float-money-truncation",
+    "dropped-split-remainder"
+   ],
+   "u06-egress-guard": [
+    "host-suffix-without-boundary",
+    "internal-address-check-on-raw-url"
+   ],
+   "u07-plugin-envelope": [
+    "prototype-pollution-merge",
+    "duplicate-key-overwrite"
+   ],
+   "u08-clean-pager": []
+  },
+  "notes": "u08-clean-pager is the clean control of this batch: it plants no defect and its empty class list says so."
+ },
+ "batch5": {
+  "rule": "Decided before any case was built or measured. Skill text may be written only from train-case misses; held-out cases only measure.",
+  "decided": "2026-11-12, before any w* case existed (issue #447)",
+  "train": [
+   "w01",
+   "w04"
+  ],
+  "held_out": [
+   "w02",
+   "w03",
+   "w05",
+   "w06",
+   "w07"
+  ],
+  "note": "w01-w03 and w07 go, w04-w06 node; w07 is the clean control. Case ids take a slug suffix when built (w01-<slug>); the numbers fix the split."
+ },
+ "batch6": {
+  "rule": "Decided before any case was built or measured. Skill text may be written only from train-case misses; held-out cases only measure.",
+  "decided": "2026-11-13, before any x* case existed (issue #451)",
+  "train": [
+   "x01",
+   "x04"
+  ],
+  "held_out": [
+   "x02",
+   "x03",
+   "x05",
+   "x06",
+   "x07"
+  ],
+  "note": "x01-x03 and x07 go, x04-x06 node; x07 is the clean control. Case ids take a slug suffix when built (x01-<slug>); the numbers fix the split."
  }
 }

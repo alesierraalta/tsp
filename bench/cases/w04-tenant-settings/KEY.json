@@ -1,0 +1,38 @@
+{
+  "id": "w04-tenant-settings",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "http",
+  "family": "security",
+  "request": "the tenant settings write and report archive read behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/routes/settings.js",
+      "line": 16,
+      "class": "prototype-pollution-merge",
+      "keywords": ["prototype", "pollution", "merge", "setting", "route"],
+      "description": "The PUT /tenants/:id/settings handler copies the JSON body into the stored settings key by key, descending into objects, so a body naming __proto__ reaches Object.prototype while every other settings write goes through mergeSettings, which refuses that key at any depth.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D1 PUT /tenants/:id/settings {\"__proto__\":{...}} -> status 400 invalid_field, ({}).polluted undefined",
+        "actual": "D1 PUT /tenants/:id/settings {\"__proto__\":{...}} -> status 200 ok, ({}).polluted yes"
+      },
+      "why_missed": "The suite writes tenant settings with declared keys (retention_days, digest) and checks the mergeSettings guard directly, so the one route that does not call it runs only on the shape of body the schema allows."
+    },
+    {
+      "id": "D2",
+      "file": "src/reports/archive.js",
+      "line": 48,
+      "class": "path-traversal-unguarded-read",
+      "keywords": ["traversal", "archive", "resolve", "root", "containment"],
+      "description": "ReportArchive.read joins the requested name onto the archive root without resolving it under that root, so ../private/notes.json leaves the archive and is served, although every other file entry point (documents, catalog, archive write/remove/describe, snapshots) calls resolveUnder.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D2 ReportArchive().read('../private/notes.json') -> blocked path \"../private/notes.json\" is not a plain file name",
+        "actual": "D2 ReportArchive().read('../private/notes.json') -> read [{\"secret\":\"internal\"}]"
+      },
+      "why_missed": "The suite reads and writes archive entries by their own names (daily.json, daily.csv), where joining and resolving give the same file, so the read entry point is exercised only on names that cannot leave the root."
+    }
+  ]
+}

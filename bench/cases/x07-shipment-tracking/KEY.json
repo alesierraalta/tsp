@@ -1,0 +1,9 @@
+{
+  "id": "x07-shipment-tracking",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "http",
+  "control": "clean",
+  "request": "the shipment-tracking service's ingest, close and export behaviour",
+  "defects": []
+}

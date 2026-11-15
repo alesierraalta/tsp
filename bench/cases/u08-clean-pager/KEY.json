@@ -1,0 +1,1 @@
+{"id":"u08-clean-pager","language":"go","suite":"go test ./...","surface":"library","control":"clean","request":"the keyset-pagination behaviour","defects":[]}

@@ -1,0 +1,24 @@
+{
+  "id": "u03-batch-decoder",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "etl",
+  "family": "performance",
+  "request": "the batch-decoding behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "batch.go",
+      "line": 96,
+      "class": "input-driven-expansion",
+      "keywords": ["repeat", "factor", "limit", "expansion", "bounded"],
+      "description": "ParseRow accepts a repeat factor of any magnitude and Decode appends one row per repetition, so a single row line whose factor the sender chooses makes the decoder build millions of rows, although the README refuses a factor above MaxRepeat.",
+      "trigger": {
+        "input": "cd fixture && go run ../testdata/triggers/main.go",
+        "expected": "D1 Decode(header rows=1, one row with x2000000) -> rows=0 err=batchdec: count above the block limit: repeat factor of \"socks|3 x2000000\", limit 1000",
+        "actual": "D1 Decode(header rows=1, one row with x2000000) -> rows=2000000 err=<nil>"
+      },
+      "why_missed": "The declared row count in the header is capped, so the block looks bounded and the suite exercises that cap, the column cap and a repeat of four; the per-row factor that multiplies a single line is the one count nobody compares with a limit."
+    }
+  ]
+}

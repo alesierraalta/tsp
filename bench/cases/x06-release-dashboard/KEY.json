@@ -1,0 +1,38 @@
+{
+  "id": "x06-release-dashboard",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "http",
+  "family": "security",
+  "request": "the webhook delivery target and the environment tag rendering behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/webhooks/sender.js",
+      "line": 41,
+      "class": "internal-address-check-on-raw-url",
+      "keywords": ["internal", "egress", "hostname", "credentials", "webhook"],
+      "description": "WebhookSender.prepare runs its internal-address patterns against the url text a subscription was stored with instead of the host the url reaches, so a stored url whose text starts with a public host but whose authority is a loopback address is posted, although SubscriptionBook.add and the /webhooks routes check the parsed hostname with assertTarget.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D1 WebhookSender().send(stored subscription url) -> blocked egress blocked: 127.0.0.1 is an internal address",
+        "actual": "D1 WebhookSender().send(stored subscription url) -> posted to 127.0.0.1:9000"
+      },
+      "why_missed": "Every target the suite refuses puts the dotted address at the front of the url, which is the shape the text patterns match, so the check looks like it reads the host the post reaches."
+    },
+    {
+      "id": "D2",
+      "file": "src/views/partials.js",
+      "line": 26,
+      "class": "attribute-context-escaping",
+      "keywords": ["attribute", "quote", "escaping", "environment", "markup"],
+      "description": "renderEnvironmentTag writes the stored environment label into data-environment with escapeText, which escapes &, < and > but not the quote that closes the attribute, so a label carrying a quote breaks out of the attribute and injects a handler, although renderServiceTag, renderOwnerTag, renderReleaseTag and renderStatusPill all write their stored names through attrPair and escapeAttr.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D2 renderEnvironmentTag({label: 'prod\" onmouseover=\"alert(1)'}) -> <span class=\"tag environment\" data-environment=\"prod&quot; onmouseover=&quot;alert(1)\">Prod\" Onmouseover=\"alert(1)</span>",
+        "actual": "D2 renderEnvironmentTag({label: 'prod\" onmouseover=\"alert(1)'}) -> <span class=\"tag environment\" data-environment=\"prod\" onmouseover=\"alert(1)\">Prod\" Onmouseover=\"alert(1)</span>"
+      },
+      "why_missed": "Every environment label the suite renders is a plain word (production (eu)), where the text escaper and the attribute escaper produce the same string, so the shared table looks correct in the context the pages exercise."
+    }
+  ]
+}

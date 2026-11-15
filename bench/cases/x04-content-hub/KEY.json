@@ -1,0 +1,38 @@
+{
+  "id": "x04-content-hub",
+  "language": "node",
+  "suite": "node --test",
+  "surface": "http",
+  "family": "security",
+  "request": "the plugin asset read and the post-render transform behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/plugins/assets.js",
+      "line": 49,
+      "class": "path-join-without-containment",
+      "keywords": ["asset", "join", "resolve", "containment", "traversal"],
+      "description": "PluginAssetStore.read joins the requested name onto the asset root with join() and never resolves it, so ../private/notes.json leaves the asset root and is returned, although the media store, the template loader, the exporters and this store's own write/describe/remove paths all resolve the name under their root.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D1 PluginAssetStore().read('../private/notes.json') -> blocked unsafe path \"../private/notes.json\"",
+        "actual": "D1 PluginAssetStore().read('../private/notes.json') -> read {\"rows\":[{\"secret\":\"internal\"}]}"
+      },
+      "why_missed": "The suite reads and writes plugin assets by their own names (icon.json), where joining and resolving name the same file, and checks the sibling stores' refusals directly, so the one read path that never calls resolveUnder only sees names that cannot leave the root."
+    },
+    {
+      "id": "D2",
+      "file": "src/plugins/transform.js",
+      "line": 36,
+      "class": "shell-string-from-arguments",
+      "keywords": ["shell", "argument", "argv", "transform", "child_process"],
+      "description": "runDeclaredTransform builds one command string out of the entry slug, the format and the template and runs it through a shell, while the render pipeline, the markdown batch and the image variants all run the same tool through runTool, which validates each argument and spawns it with an argument vector; a slug carrying a semicolon runs a second command.",
+      "trigger": {
+        "input": "node testdata/triggers/main.mjs fixture",
+        "expected": "D2 runDeclaredTransform({slug: 'poster; printf hub-injected'}) -> <article data-entry=\"poster; printf hub-injected\" data-template=\"entry\" data-format=\"html\"></article>",
+        "actual": "D2 runDeclaredTransform({slug: 'poster; printf hub-injected'}) -> <article data-entry=\"poster\" data-template=\"entry\" data-format=\"html\"></article> | hub-injected"
+      },
+      "why_missed": "The suite renders entries whose slugs are plain words, where a shell and an argument vector produce the same document, and asserts runTool's argument validation on its own, so the one transform path that never calls it is exercised only on a slug the shell reads as a single word."
+    }
+  ]
+}

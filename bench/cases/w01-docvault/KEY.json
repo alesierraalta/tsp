@@ -1,0 +1,38 @@
+{
+  "id": "w01-docvault",
+  "language": "go",
+  "suite": "go test ./...",
+  "surface": "http",
+  "family": "security",
+  "request": "the document-tree containment and page-rendering behaviour",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "internal/api/render.go",
+      "line": 109,
+      "class": "unguarded-filesystem-join-on-one-entry-point",
+      "keywords": ["thumbnail", "containment", "traversal", "join", "root"],
+      "description": "The thumbnail handler joins the caller's name onto the vault root with filepath.Join and reads the result, while every other reader in the service asks the vault to resolve the name; the handler therefore serves any file the process can read, even though the README promises that every path the service reads resolves inside the root.",
+      "trigger": {
+        "input": "cd bench/cases/w01-docvault && sh testdata/triggers/run.sh fixture  (variants: run.sh all | keep-D1 | keep-D2)",
+        "expected": "D1 GET /api/documents/doc-708331/thumbnail?name=../outside.txt -> status=400 body=\"{\\\"error\\\":\\\"vault: invalid name: name \\\\\\\"../outside.txt\\\\\\\" walks upwards\\\"}\"",
+        "actual": "D1 GET /api/documents/doc-708331/thumbnail?name=../outside.txt -> status=200 body=\"outside-secret\""
+      },
+      "why_missed": "The suite exercises the refusal through the download, object and attachment endpoints, and the thumbnail test asks for a name the build writes (documents/pic-thumb.png), so the one handler that joins the root itself is never handed a name that walks up."
+    },
+    {
+      "id": "D2",
+      "file": "internal/report/summary.go",
+      "line": 69,
+      "class": "unescaped-html-sink-on-a-conditional-branch",
+      "keywords": ["escape", "html", "note", "heading", "markup"],
+      "description": "SummaryHTML writes a note's title into the page heading without passing it through htmlx.Escape, so a stored title becomes markup on the preview page, although every other field of the same page and the index page are escaped and the README promises that rendered text is escaped.",
+      "trigger": {
+        "input": "cd bench/cases/w01-docvault && sh testdata/triggers/run.sh fixture  (variants: run.sh all | keep-D1 | keep-D2)",
+        "expected": "D2 GET /api/documents/doc-708331/preview note title <script>alert(1)</script> -> heading=&lt;script&gt;alert(1)&lt;/script&gt;",
+        "actual": "D2 GET /api/documents/doc-708331/preview note title <script>alert(1)</script> -> heading=<script>alert(1)</script>"
+      },
+      "why_missed": "The only preview test renders an article, whose heading takes the escaping branch, and it asserts the escaped title there; the note branch is covered by a test with a plain title (\"Standup notes\"), which reads the same escaped and unescaped."
+    }
+  ]
+}

@@ -4,7 +4,7 @@ description: "Trigger: security audit, appsec testing, vulnerability test, IDOR,
 license: Apache-2.0
 metadata:
   author: "alesierraalta"
-  version: "1.3"
+  version: "1.3.1"
 ---
 
 ## Activation Contract
@@ -40,7 +40,7 @@ cheap static ones (Semgrep, Gitleaks).
 3. **Falsifiability verification**: mutation or a controlled bypass where meaningful; otherwise a contract/invariant, negative-control, differential, metamorphic, or observed-state check. Do not require mutation or a named production line for every probe.
 4. **Isolated sandboxing**: dynamic attacks run only on a target that passes the Preflight Safety Gate (a throwaway worktree or an ephemeral container, `docker-test-containers`). No unconstrained denial-of-service against shared environments.
 5. **Severity by impact and exploitability evidence**, not by label, per the impact x exploitability matrix in [references/severity.md](references/severity.md): the matrix cell gives the C/M/N label; a "hypothesis" cell (not reproduced, or no named `file:line` sink) is reported as a hypothesis, never as C/M/N.
-6. **Evidence**: every finding carries an executed evidence record per `~/.claude/skills/test-strategy/references/evidence.md`; no finding from reading alone.
+6. **Evidence**: every finding carries an executed evidence record per `~/.claude/skills/test-strategy/SKILL.md` (invariant 1); no finding from reading alone.
 7. **Positive control for every denial**: a denied probe counts only when the authorized caller succeeds on the same route in the same run; otherwise a 404 from a wrong route reads as "secure".
 8. **Authority is bound at execution, not at the entrance.** For agents and MCP, the action must carry the invoking principal's identity and effective grants to the executor. An agent, tool server, or background worker acting with its own ambient privileges is a confused deputy; a tool offered to a caller who lacks its scope is an exposed capability. Probe both the offered surface and the authority actually used.
 

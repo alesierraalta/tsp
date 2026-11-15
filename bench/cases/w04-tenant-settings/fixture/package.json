@@ -1,0 +1,11 @@
+{
+  "name": "tenant-settings",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tenant and user settings gateway for the workspace console",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test"
+  }
+}

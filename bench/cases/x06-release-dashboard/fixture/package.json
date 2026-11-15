@@ -1,0 +1,13 @@
+{
+  "name": "release-dashboard",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Deployment and release dashboard with approvals, rollout stages and egress-checked webhooks",
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test",
+    "report": "node bin/report.mjs",
+    "send": "node bin/send.mjs"
+  }
+}
