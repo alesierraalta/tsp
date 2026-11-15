@@ -1,0 +1,38 @@
+diff --git a/internal/sync/sync.go b/internal/sync/sync.go
+index f601e03e..1c8a8677 100644
+--- a/internal/sync/sync.go
++++ b/internal/sync/sync.go
+@@ -102,6 +102,11 @@ func (r Report) String() string {
+ 			}
+ 			if r.DryRun {
+ 				for _, action := range host.Actions {
++					// Files that stay as they are only count: the plan line carries them, and a
++					// skills directory full of the user's own files would bury the changes.
++					if action.Class == ActionOK || action.Class == ActionForeign {
++						continue
++					}
+ 					path := action.Path
+ 					if path == "" {
+ 						path = action.Component
+@@ -116,8 +121,8 @@ func (r Report) String() string {
+ 						fmt.Fprintf(&b, "%sskill %-32s written\n", prefix, s)
+ 					}
+ 				}
+-				for _, s := range host.Unchanged {
+-					fmt.Fprintf(&b, "%sskill %-32s unchanged\n", prefix, s)
++				if len(host.Unchanged) > 0 {
++					fmt.Fprintf(&b, "%s%d skills unchanged\n", prefix, len(host.Unchanged))
+ 				}
+ 			}
+ 			for _, path := range host.Modified {
+@@ -130,8 +135,8 @@ func (r Report) String() string {
+ 			for _, path := range host.Orphans {
+ 				fmt.Fprintf(&b, "%sorphan: %s (not removed)\n", prefix, path)
+ 			}
+-			for _, path := range host.Foreign {
+-				fmt.Fprintf(&b, "%sskip-user: %s (left untouched)\n", prefix, path)
++			if len(host.Foreign) > 0 {
++				fmt.Fprintf(&b, "%sskip-user: %d files not managed by rdd-plus (left untouched)\n", prefix, len(host.Foreign))
+ 			}
+ 			for _, h := range host.RemovedHooks {
+ 				fmt.Fprintf(&b, "%sremoved previous gate hook: %s\n", prefix, h)

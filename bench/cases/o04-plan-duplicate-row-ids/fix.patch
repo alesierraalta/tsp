@@ -1,0 +1,36 @@
+diff --git a/internal/plan/plan.go b/internal/plan/plan.go
+index f8a1e58d..9938cf6c 100644
+--- a/internal/plan/plan.go
++++ b/internal/plan/plan.go
+@@ -134,8 +134,16 @@ func CheckDocument(doc string) []string {
+ 		problems = append(problems, runColumnProblems(t.name, t.scan)...)
+ 	}
+ 	ledgerIDs := map[string]bool{}
++	// The id is what a finding cites, so the line that first carried one is kept: a repeat is reported against
++	// that line, because a citation naming the id would resolve to one of two rows and nothing would say which.
++	ledgerIDLine := map[string]int{}
+ 	for _, r := range ledger.rows {
+ 		id := cell(r.cells, 0)
++		if first, seen := ledgerIDLine[id]; seen {
++			problems = append(problems, fmt.Sprintf("line %d: evidence %s repeats the id of the row on line %d, so a citation naming it points at two rows", r.line, quote(id), first))
++		} else {
++			ledgerIDLine[id] = r.line
++		}
+ 		ledgerIDs[id] = true
+ 		if label := cell(r.cells, len(r.cells)-1); strings.EqualFold(label, "razonado") {
+ 			problems = append(problems, fmt.Sprintf("line %d: evidence %s is labelled razonado: a hypothesis belongs under Hypotheses, never in the ledger", r.line, quote(id)))
+@@ -146,8 +154,14 @@ func CheckDocument(doc string) []string {
+ 	iEvidence := columnIndex(findings.header, "evidence")
+ 	iPin := columnIndex(findings.header, "pinning test")
+ 	iStatus := columnIndex(findings.header, "status")
++	findingIDLine := map[string]int{}
+ 	for _, r := range findings.rows {
+ 		id := quote(cell(r.cells, 0))
++		if first, seen := findingIDLine[cell(r.cells, 0)]; seen {
++			problems = append(problems, fmt.Sprintf("line %d: finding %s repeats the id of the row on line %d, so the row a verdict or a pinning test belongs to is ambiguous", r.line, id, first))
++		} else {
++			findingIDLine[cell(r.cells, 0)] = r.line
++		}
+ 		if iFind >= 0 && !pathCiteRe.MatchString(cell(r.cells, iFind)) {
+ 			problems = append(problems, fmt.Sprintf("line %d: finding %s cites no path:line, so nothing can be located", r.line, id))
+ 		}

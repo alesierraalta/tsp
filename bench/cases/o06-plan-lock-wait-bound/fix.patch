@@ -1,0 +1,126 @@
+diff --git a/internal/admit/admit.go b/internal/admit/admit.go
+index 2f2a2337..137c7035 100644
+--- a/internal/admit/admit.go
++++ b/internal/admit/admit.go
+@@ -46,11 +46,6 @@ type Deps struct {
+ // writer wait for the lifetime of another process.
+ const planLockWait = time.Second
+ 
+-type planLockResult struct {
+-	file *os.File
+-	err  error
+-}
+-
+ // Run admits the requested Evidence rows and returns the process exit code; it reports rows to deps.Out, refusals to
+ // deps.Err, and records admitted observations only when requested. A valid dry run reads and validates the plan,
+ // reports WOULD RUN rows, reaches no command runner or plan write, and rejects --record or --sandbox before reading it.
+@@ -237,7 +232,7 @@ var syncRecordedDirectory = func(dir string) error {
+ // and the write it guards cannot be split by a cooperating writer, because every writer takes this lock. A lock
+ // that cannot be taken is a refusal, never an unserialized write.
+ func writeRecorded(path string, raw []byte, doc string) error {
+-	lock, err := lockPlanWithBound(path)
++	lock, err := plan.LockPlanWithin(path, planLockWait)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -256,29 +251,6 @@ func writeRecorded(path string, raw []byte, doc string) error {
+ 	return writeRecordedAtomically(path, []byte(doc), info.Mode().Perm())
+ }
+ 
+-func lockPlanWithBound(path string) (*os.File, error) {
+-	result := make(chan planLockResult, 1)
+-	go func() {
+-		file, err := plan.LockPlan(path)
+-		result <- planLockResult{file: file, err: err}
+-	}()
+-
+-	timer := time.NewTimer(planLockWait)
+-	defer timer.Stop()
+-	select {
+-	case locked := <-result:
+-		return locked.file, locked.err
+-	case <-timer.C:
+-		go func() {
+-			locked := <-result
+-			if locked.file != nil {
+-				plan.UnlockPlan(locked.file)
+-			}
+-		}()
+-		return nil, fmt.Errorf("timed out waiting for the plan lock on %s after %s", path, planLockWait)
+-	}
+-}
+-
+ // writeRecordedAtomically writes beside the plan, flushes the complete temporary file, and replaces the plan in
+ // one rename. The cleanup keeps a failed replacement from leaving an ambiguous second plan behind.
+ func writeRecordedAtomically(path string, content []byte, mode os.FileMode) error {
+diff --git a/internal/plan/addfinding.go b/internal/plan/addfinding.go
+index 39b975a4..b9cbd36b 100644
+--- a/internal/plan/addfinding.go
++++ b/internal/plan/addfinding.go
+@@ -8,6 +8,7 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"strings"
++	"time"
+ )
+ 
+ // ErrUsage marks a refusal of the invocation's own values (exit 2) rather than a refusal by the plan.
+@@ -50,7 +51,7 @@ type Finding struct {
+ // regular file and left the real plan untouched.
+ func AddFinding(path string, f Finding) (int, error) {
+ 	target := canonicalPath(path)
+-	lock, err := LockPlan(target)
++	lock, err := LockPlanWithin(target, lockWait)
+ 	if err != nil {
+ 		return 0, err
+ 	}
+@@ -424,3 +425,36 @@ func writePlan(path, body string) error {
+ 	}
+ 	return nil
+ }
++
++// lockWait bounds how long add-finding and upgrade wait for another writer's lock. A writer holds it for one read
++// and one rename, so a lock still held after this long is stuck rather than busy, and blocking forever on it would
++// hang the agent that asked.
++var lockWait = 10 * time.Second
++
++// LockPlanWithin takes the plan lock as LockPlan does, giving up after wait with an error that names the plan and
++// the bound. The wait that gave up keeps running in the background and releases the lock if it is ever granted,
++// so a late grant never leaves the plan locked by a caller that already left.
++func LockPlanWithin(path string, wait time.Duration) (*os.File, error) {
++	type locked struct {
++		file *os.File
++		err  error
++	}
++	result := make(chan locked, 1)
++	go func() {
++		file, err := LockPlan(path)
++		result <- locked{file, err}
++	}()
++	timer := time.NewTimer(wait)
++	defer timer.Stop()
++	select {
++	case got := <-result:
++		return got.file, got.err
++	case <-timer.C:
++		go func() {
++			if got := <-result; got.file != nil {
++				UnlockPlan(got.file)
++			}
++		}()
++		return nil, fmt.Errorf("timed out waiting for the plan lock on %s after %s", path, wait)
++	}
++}
+diff --git a/internal/plan/upgrade.go b/internal/plan/upgrade.go
+index 54527ffd..8dfa2f89 100644
+--- a/internal/plan/upgrade.go
++++ b/internal/plan/upgrade.go
+@@ -15,7 +15,7 @@ func Upgrade(path, run string) (int, error) {
+ 		}
+ 	}
+ 	target := canonicalPath(path)
+-	lock, err := LockPlan(target)
++	lock, err := LockPlanWithin(target, lockWait)
+ 	if err != nil {
+ 		return 0, err
+ 	}

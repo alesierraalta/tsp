@@ -1,0 +1,30 @@
+{
+  "id": "o10-bench-timeout-process-tree",
+  "language": "go",
+  "suite": "go test ./internal/bench",
+  "surface": "internal/bench",
+  "family": "concurrency",
+  "source": "tsp-own-history@221442ba",
+  "request": "When a suite run reaches its timeout, every process that run started must end, and the run must return even if a child still holds the output pipe open.",
+  "defects": [
+    {
+      "id": "d1",
+      "file": "internal/bench/pertest.go",
+      "line": 44,
+      "class": "orphaned-children-on-timeout",
+      "keywords": [
+        "timeout",
+        "process",
+        "tree",
+        "killed"
+      ],
+      "description": "Own-history fix 5d202a901b (2026-10-14): fix(bench): kill a timed-out suite's whole process tree",
+      "trigger": {
+        "input": "printf %s 'Ly9nbzpidWlsZCBsaW51eCB8fCBkYXJ3aW4KCnBhY2thZ2UgYmVuY2gKCmltcG9ydCAoCgkib3MiCgkicGF0aC9maWxlcGF0aCIKCSJzdHJjb252IgoJInN0cmluZ3MiCgkic3lzY2FsbCIKCSJ0ZXN0aW5nIgoJInRpbWUiCikKCi8vIGdyYW5kY2hpbGRBbGl2ZSBzdGFydHMgYSBzdWl0ZSB3aG9zZSBjaGlsZCBzcGF3bnMgYSBzbGVlcGluZyBncmFuZGNoaWxkIGFuZCB0aGVuIG91dGxpdmVzIHRoZSB0aW1lb3V0LCBhcwovLyBub2RlIC0tdGVzdCBkb2VzIHdpdGggb25lIHByb2Nlc3MgcGVyIHRlc3QgZmlsZSwgYW5kIHJlcG9ydHMgd2hldGhlciB0aGUgZ3JhbmRjaGlsZCBzdXJ2aXZlZCB0aGUga2lsbC4gVGhlCi8vIHJ1biBtdXN0IGFsc28gcmV0dXJuIGNsb3NlIHRvIGl0cyB0aW1lb3V0OiBhIGdyYW5kY2hpbGQgaG9sZGluZyB0aGUgb3V0cHV0IHBpcGUgbXVzdCBub3QgaG9sZCB0aGUgY2FsbGVyLgpmdW5jIGdyYW5kY2hpbGRBbGl2ZSh0ICp0ZXN0aW5nLlQsIHJ1biBmdW5jKGRpciwgc3VpdGUgc3RyaW5nKSkgYm9vbCB7Cgl0LkhlbHBlcigpCglkaXIgOj0gdC5UZW1wRGlyKCkKCXBpZEZpbGUgOj0gZmlsZXBhdGguSm9pbihkaXIsICJncmFuZGNoaWxkLnBpZCIpCglzdGFydCA6PSB0aW1lLk5vdygpCglydW4oZGlyLCBgc2ggLWMgInNsZWVwIDMwICYgZWNobyAkISA+IGArcGlkRmlsZStgOyB3YWl0ImApCglpZiB0b29rIDo9IHRpbWUuU2luY2Uoc3RhcnQpOyB0b29rID4gNSp0aW1lLlNlY29uZCB7CgkJdC5FcnJvcmYoInRoZSB0aW1lZC1vdXQgc3VpdGUgcmV0dXJuZWQgYWZ0ZXIgJXMsIGhlbGQgYnkgaXRzIGdyYW5kY2hpbGQiLCB0b29rLlJvdW5kKHRpbWUuU2Vjb25kKSkKCX0KCXJhdywgZXJyIDo9IG9zLlJlYWRGaWxlKHBpZEZpbGUpCglpZiBlcnIgIT0gbmlsIHsKCQl0LkZhdGFsZigidGhlIHN1aXRlIG5ldmVyIHN0YXJ0ZWQgaXRzIGdyYW5kY2hpbGQ6ICV2IiwgZXJyKQoJfQoJcGlkLCBlcnIgOj0gc3RyY29udi5BdG9pKHN0cmluZ3MuVHJpbVNwYWNlKHN0cmluZyhyYXcpKSkKCWlmIGVyciAhPSBuaWwgewoJCXQuRmF0YWxmKCJncmFuZGNoaWxkIHBpZCAlcTogJXYiLCByYXcsIGVycikKCX0KCWRlYWRsaW5lIDo9IHRpbWUuTm93KCkuQWRkKDIgKiB0aW1lLlNlY29uZCkKCWZvciB0aW1lLk5vdygpLkJlZm9yZShkZWFkbGluZSkgewoJCWlmIHN5c2NhbGwuS2lsbChwaWQsIDApICE9IG5pbCB7CgkJCXJldHVybiBmYWxzZQoJCX0KCQl0aW1lLlNsZWVwKDIwICogdGltZS5NaWxsaXNlY29uZCkKCX0KCV8gPSBzeXNjYWxsLktpbGwocGlkLCBzeXNjYWxsLlNJR0tJTEwpCglyZXR1cm4gdHJ1ZQp9CgovLyBBIHN1aXRlIGtpbGxlZCBieSBpdHMgdGltZW91dCB0YWtlcyBpdHMgd2hvbGUgcHJvY2VzcyB0cmVlIHdpdGggaXQ6IGEgc3Vydml2aW5nIG5vZGUgLS10ZXN0IHdvcmtlciBob2xkcyB0aGUKLy8gb3V0cHV0IHBpcGUgb3BlbiBhbmQga2VlcHMgcnVubmluZyBmb3IgaG91cnMgYWZ0ZXIgdGhlIGNhdGNoIGNoZWNrIG1vdmVkIG9uLgpmdW5jIFRlc3RSdW5TdWl0ZVRpbWVvdXRLaWxsc1RoZVdob2xlUHJvY2Vzc1RyZWUodCAqdGVzdGluZy5UKSB7CglpZiBncmFuZGNoaWxkQWxpdmUodCwgZnVuYyhkaXIsIHN1aXRlIHN0cmluZykgeyBfLCBfID0gUnVuU3VpdGUoZGlyLCBzdWl0ZSwgMzAwKnRpbWUuTWlsbGlzZWNvbmQpIH0pIHsKCQl0LkZhdGFsKCJSdW5TdWl0ZSBsZWZ0IGEgZ3JhbmRjaGlsZCBvZiB0aGUgdGltZWQtb3V0IHN1aXRlIHJ1bm5pbmciKQoJfQp9CgpmdW5jIFRlc3RQZXJUZXN0VGltZW91dEtpbGxzVGhlV2hvbGVQcm9jZXNzVHJlZSh0ICp0ZXN0aW5nLlQpIHsKCWlmIGdyYW5kY2hpbGRBbGl2ZSh0LCBmdW5jKGRpciwgc3VpdGUgc3RyaW5nKSB7CgkJXywgXyA9IHJ1bkNhcHR1cmUoZGlyLCBbXXN0cmluZ3sic2giLCAiLWMiLCBzdHJpbmdzLlRyaW1TdWZmaXgoc3RyaW5ncy5UcmltUHJlZml4KHN1aXRlLCBgc2ggLWMgImApLCBgImApfSwgMzAwKnRpbWUuTWlsbGlzZWNvbmQpCgl9KSB7CgkJdC5GYXRhbCgicnVuQ2FwdHVyZSBsZWZ0IGEgZ3JhbmRjaGlsZCBvZiB0aGUgdGltZWQtb3V0IHN1aXRlIHJ1bm5pbmciKQoJfQp9CgovLyBBIHN1aXRlIHRoYXQgZmluaXNoZXMgaW4gdGltZSBpcyB1bmFmZmVjdGVkOiBpdHMgZXhpdCBjb2RlIGFuZCBvdXRwdXQgY29tZSBiYWNrIGFzIGJlZm9yZS4KZnVuYyBUZXN0UnVuU3VpdGVTdGlsbFJlcG9ydHNBRmluaXNoZWRTdWl0ZSh0ICp0ZXN0aW5nLlQpIHsKCXJlcywgZXJyIDo9IFJ1blN1aXRlKHQuVGVtcERpcigpLCBgc2ggLWMgImVjaG8gb2s7IGV4aXQgMyJgLCA1KnRpbWUuU2Vjb25kKQoJaWYgZXJyICE9IG5pbCB8fCByZXMuRXhpdENvZGUgIT0gMyB8fCAhc3RyaW5ncy5Db250YWlucyhyZXMuT3V0cHV0LCAib2siKSB7CgkJdC5GYXRhbGYoIlJ1blN1aXRlID0gJSt2LCAldjsgd2FudCBleGl0IDMgd2l0aCBpdHMgb3V0cHV0IiwgcmVzLCBlcnIpCgl9Cn0K' | base64 -d > internal/bench/proc_test.go\nif go test -count=1 -run '^(TestRunSuiteTimeoutKillsTheWholeProcessTree|TestPerTestTimeoutKillsTheWholeProcessTree|TestRunSuiteStillReportsAFinishedSuite)$' ./internal/bench >/dev/null 2>&1; then echo probe: pass; else echo probe: fail; fi",
+        "expected": "probe: pass",
+        "actual": "probe: fail"
+      },
+      "why_missed": "The project's own suite at the parent commit never exercised this input; the fix commit added the test that does."
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+diff --git a/internal/admit/admit.go b/internal/admit/admit.go
+index b63faa31..f89eb67f 100644
+--- a/internal/admit/admit.go
++++ b/internal/admit/admit.go
+@@ -152,6 +152,18 @@ func Run(req Request, deps Deps) int {
+ 		// belong to the plan it read, so writing them over a file another writer has changed since would erase
+ 		// that edit and pin a claim against a plan that no longer exists. The run refuses instead of
+ 		// overwriting a document it did not read.
++		//
++		// The re-read and the write that follows it are one transaction: every writer of the plan takes this
++		// lock, so no cooperating writer can land an edit between the comparison and the write it guards. The
++		// lock covers those two steps and not the rows, which is why the comparison above is still needed — a
++		// writer that edited while the rows ran is refused rather than overwritten. A lock that cannot be taken
++		// is a refusal, never an unserialized write.
++		lock, err := plan.LockPlan(req.Path)
++		if err != nil {
++			fmt.Fprintln(deps.Err, "plan admit:", err)
++			return 1
++		}
++		defer plan.UnlockPlan(lock)
+ 		now, err := os.ReadFile(req.Path)
+ 		if err != nil {
+ 			fmt.Fprintln(deps.Err, "plan admit:", err)
+diff --git a/internal/plan/addfinding.go b/internal/plan/addfinding.go
+index 85b63b51..b26a9a16 100644
+--- a/internal/plan/addfinding.go
++++ b/internal/plan/addfinding.go
+@@ -50,11 +50,11 @@ type Finding struct {
+ // regular file and left the real plan untouched.
+ func AddFinding(path string, f Finding) (int, error) {
+ 	target := canonicalPath(path)
+-	lock, err := lockPlan(target)
++	lock, err := LockPlan(target)
+ 	if err != nil {
+ 		return 0, err
+ 	}
+-	defer unlockPlan(lock)
++	defer UnlockPlan(lock)
+ 	return addFinding(target, f)
+ }
+ 
+@@ -273,7 +273,11 @@ func insertLine(lines []string, at int, row string) []string {
+ 	return append(out, lines[at:]...)
+ }
+ 
+-// lockPlan takes the exclusive lock that serializes every write to the plan at path and returns it.
++// LockPlan takes the exclusive lock that serializes every write to the plan at path and returns it.
++//
++// Every writer of the plan takes this lock — `plan add-finding`, `plan upgrade` and a recording
++// `plan admit` — so a check a writer makes about the file it is about to replace cannot be invalidated by
++// another writer between the check and the write.
+ //
+ // It is an advisory lock on a file in the user's own cache directory, keyed on the plan's canonical absolute
+ // path, so every spelling of one plan is one lock. A lock is released by the kernel when the process holding it
+@@ -284,7 +288,7 @@ func insertLine(lines []string, at int, row string) []string {
+ //
+ // A lock that cannot be taken is an error, never a silent write without it: an unserialized write is the lost
+ // row this lock exists to prevent.
+-func lockPlan(path string) (*os.File, error) {
++func LockPlan(path string) (*os.File, error) {
+ 	name, err := planLockPath(canonicalPath(path))
+ 	if err != nil {
+ 		return nil, err
+@@ -336,10 +340,10 @@ func lockRoot() (string, error) {
+ 	return root, nil
+ }
+ 
+-// unlockPlan releases the lock AddFinding held, and closes it every time the lock was taken — the write path's
++// UnlockPlan releases the lock LockPlan took, and closes it every time the lock was taken — the write path's
+ // defer, so a refusal on the read or on the candidate gives the lock back. The unlock is best effort: closing
+ // the descriptor releases the lock anyway, and the kernel releases whatever a process still holds when it exits.
+-func unlockPlan(file *os.File) {
++func UnlockPlan(file *os.File) {
+ 	_ = unlockFile(file)
+ 	_ = file.Close()
+ }
+diff --git a/internal/plan/plan_lock_other.go b/internal/plan/plan_lock_other.go
+index 4553a03d..13c8a619 100644
+--- a/internal/plan/plan_lock_other.go
++++ b/internal/plan/plan_lock_other.go
+@@ -11,7 +11,7 @@ import (
+ // errNoPlanLock is what every other target gets, and it fails closed on purpose: this package has no
+ // cross-process lock on this platform, and a plan written without serialization is the silently lost row the
+ // lock exists to prevent. Refusing to write is recoverable; a plan that quietly dropped a finding is not.
+-var errNoPlanLock = errors.New("plan add-finding has no cross-process file lock on " + runtime.GOOS + ", so it refuses to write a plan without serialization")
++var errNoPlanLock = errors.New("rdd-plus has no cross-process file lock on " + runtime.GOOS + ", so it refuses to write a plan without serialization")
+ 
+ // lockFile refuses: there is no lock to take here.
+ func lockFile(*os.File) error { return errNoPlanLock }
+diff --git a/internal/plan/upgrade.go b/internal/plan/upgrade.go
+index a7a0b25d..54527ffd 100644
+--- a/internal/plan/upgrade.go
++++ b/internal/plan/upgrade.go
+@@ -15,11 +15,11 @@ func Upgrade(path, run string) (int, error) {
+ 		}
+ 	}
+ 	target := canonicalPath(path)
+-	lock, err := lockPlan(target)
++	lock, err := LockPlan(target)
+ 	if err != nil {
+ 		return 0, err
+ 	}
+-	defer unlockPlan(lock)
++	defer UnlockPlan(lock)
+ 	return upgrade(target, run)
+ }
+ 
