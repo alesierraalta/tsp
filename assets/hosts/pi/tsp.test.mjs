@@ -221,10 +221,13 @@ function offerHarness(opts = {}) {
     if (argv[0] === "check") checkEnvs.push(o.env);
     // A feedback template nobody configured answers as tsp does with feedback switched off: no request, no notice.
     const fallback = argv[0] === "feedback" ? feedback ?? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
+    // The harness drives the headless loop, so its default status reports both toggles on; a test about the shipped
+    // defaults states its own (headless-loop is off by default, and an unreadable status keeps it off).
+    const featuresOn = { stdout: JSON.stringify({ features: [{ id: "auto-run", enabled: true }, { id: "headless-loop", enabled: true }] }), stderr: "", code: 0 };
     const outcome = argv[0] === "check" && argv[1] === "--cwd"
       ? (typeof check === "function" ? check(calls.length) : check)
       : argv[0] === "plan" && argv[1] === "count" ? opts.planCount ?? { stdout: '{"findings":1,"evidence":1}\n', stderr: "", code: 0 }
-      : argv[0] === "status" ? status ?? fallback
+      : argv[0] === "status" ? status ?? featuresOn
       : findings[argv[1]] ?? fallback;
     if (outcome instanceof Error) throw outcome;
     return outcome;
@@ -1608,4 +1611,40 @@ test("headless: a pending commit request survives a resume, so a reload does not
   await resumed.run(first.sent[0], []);
   assert.deepEqual(resumed.sent, [], "after a resume the unanswered request still ends the loop");
   assert.ok(loopErrors(resumed).some((e) => e.data.command === "commit-request-unanswered"));
+});
+
+// The headless loop is its own opt-in feature, not a consequence of auto-run: the hard23 product-arm A/B read flat
+// recall at +91% cost, so a session pays for the loop's turns only when a human turned it on.
+test("headless: with headless-loop off, a headless settle drives nothing", async () => {
+  for (const [why, status] of [
+    ["auto-run only", { stdout: JSON.stringify({ features: [{ id: "auto-run", enabled: true }] }), stderr: "", code: 0 }],
+    ["headless-loop disabled", { stdout: JSON.stringify({ features: [{ id: "auto-run", enabled: true }, { id: "headless-loop", enabled: false }] }), stderr: "", code: 0 }],
+    ["an unreadable status", { stdout: "not json", stderr: "", code: 0 }],
+  ]) {
+    const h = offerHarness({ hasUI: false, status, findings: { next: FIX_REPLY("t1") } });
+    await h.run("haz el TSP", []);
+    assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings"), [], `${why}: no record and no next`);
+    assert.deepEqual(h.sent, [], `${why}: no fix, round, record or commit continuation`);
+    assert.deepEqual(h.entries.filter((e) => e.customType === "tsp-loop"), [], `${why}: the loop never answered`);
+    rendersNothing(h);
+  }
+});
+
+test("headless: auto-run off keeps the automatic continuation away, but headless-loop on still drives a run that happens", async () => {
+  const status = { stdout: JSON.stringify({ features: [{ id: "auto-run", enabled: false }, { id: "headless-loop", enabled: true }] }), stderr: "", code: 0 };
+  const h = offerHarness({ hasUI: false, status, check: requiredVerdict("no test was added or changed with it"), findings: { next: FIX_REPLY("t1") } });
+  assert.equal(await h.run("change a", [["edit", "internal/a.go"]]), undefined, "the boundary continuation stays governed by auto-run");
+  assert.deepEqual(h.sent, [], "and nothing else runs on its own");
+  await h.run("haz el TSP", []);
+  assert.equal(h.sent.length, 1, "a TSP run that happens is driven when the loop's own feature is on");
+  assert.ok(h.sent[0].startsWith(FIX_LEAD), h.sent[0]);
+  rendersNothing(h);
+});
+
+test("headless: headless-loop on drives the loop as before, and says the toggle it read", async () => {
+  const h = offerHarness({ hasUI: false, findings: { next: FIX_REPLY("t1") } });
+  await h.run("haz el TSP", []);
+  assert.equal(h.sent.length, 1);
+  assert.ok(h.sent[0].startsWith(FIX_LEAD));
+  assert.ok(h.calls.some((c) => c.argv[0] === "status" && c.argv[1] === "--json"), "the toggle is read from status --json");
 });

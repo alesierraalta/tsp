@@ -41,8 +41,12 @@ type Provenance struct {
 	// FixLoop records that every run measured round 1, an agent fix and two round-2 arms. It is written only when
 	// it is true, so a one-pass reading never carries a fix-loop provenance and two readings that differ on it are
 	// refused by compare instead of being read as a delta.
-	FixLoop      bool   `json:"fix_loop,omitempty"`
-	AgentConfig  string `json:"agent_config"`            // bench | inherited | custom | unspecified
+	FixLoop     bool   `json:"fix_loop,omitempty"`
+	AgentConfig string `json:"agent_config"` // bench | inherited | custom | unspecified
+	// HeadlessLoop records that the product arm switched the opt-in headless loop on for this reading. It is written
+	// only when it is true, so a reading that drove the loop and one that never did are refused by compare instead of
+	// being read as a delta in the same instrument.
+	HeadlessLoop bool   `json:"headless_loop,omitempty"`
 	SkillsDigest string `json:"skills_digest,omitempty"` // digest of the skills a throwaway config carried
 	Environment  string `json:"environment"`             // os/arch of the instrument
 	SuiteTools   string `json:"suite_tools,omitempty"`   // node and go versions the suites ran with
@@ -267,6 +271,11 @@ func provenanceForRun(opts Options, corpus string, cases int) Provenance {
 	}
 	if opts.FixLoop {
 		p.FixLoop = true
+	}
+	// The product arm enables the loop in its own state root (EnableProductLoop), so its reading says so: a product
+	// reading from before the loop and one after it are different products, not a delta.
+	if opts.ConfigMode == ConfigProduct {
+		p.HeadlessLoop = true
 	}
 	if opts.ConfigDir != "" {
 		p.SkillsDigest, _ = SkillsDigest(opts.ConfigDir)

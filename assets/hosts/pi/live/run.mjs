@@ -92,7 +92,7 @@ const CASES = [
   // sends is a user message, which Pi defers out of `agent_settled` and runs as the next request of the same
   // print-mode session: one more model request and one more settled run, with nothing rendered. `tsp` is scripted for
   // the two answers the loop reads, so the case proves the headless continuation and not the repository's plan.
-  { name: "a TSP loop without a UI sends the fix continuation and Pi runs it", mode: "json",
+  { name: "a TSP loop without a UI sends the fix continuation and Pi runs it", mode: "json", headless: true,
     tsp: {
       "findings record": [{ out: "F1 recorded src/add.test.js TestAdd", exit: 0 }],
       "findings next": [{ out: JSON.stringify({ next: "fix", round: 1, max_rounds: 5, tree: "t1", items: [{ id: "F1" }], reason: "round 1 of 5 left 1 item unsettled", review: "review", message: "F1 open src/add.test.js TestAdd" }), exit: 1 }],
@@ -101,7 +101,7 @@ const CASES = [
     want: (r) => r.settled >= 2 && r.seen.some((m) => m.text.startsWith("The TSP loop found defects to settle.")) },
   // #471: the loop judges commits, so `findings record` refuses an uncommitted tree. A session without a UI has nobody
   // to read that, so the extension asks the agent to commit and the turn it asks for records the round and continues.
-  { name: "a TSP loop without a UI asks the agent to commit, and records after it", mode: "json",
+  { name: "a TSP loop without a UI asks the agent to commit, and records after it", mode: "json", headless: true,
     tsp: {
       "findings record": [
         { out: "tsp findings: the working tree has uncommitted changes: commit them, then record, so the loop judges a commit", exit: 2 },
@@ -160,6 +160,13 @@ function sandbox(c) {
   // without a repository that has a plan to judge; everything else runs the real binary.
   writeFileSync(join(bin, "tsp"), tspWrapper(log, c.tsp));
   chmodSync(join(bin, "tsp"), 0o755);
+  // The headless loop is opt-in, so a case that drives it turns it on where the extension's own `tsp status --json`
+  // reads it: the sandbox's throwaway state root, never the operator's.
+  if (c.headless) {
+    const root = join(dir, "xdg", "tsp");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "state.json"), JSON.stringify({ schemaVersion: 1, features: { "headless-loop": { enabled: true } } }) + "\n");
+  }
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: agent, XDG_CONFIG_HOME: join(dir, "xdg"),
     PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_LIVE_SCRIPT: JSON.stringify(c.script) };
   delete env.GENTLE_PI_AGENTS_CHILD;

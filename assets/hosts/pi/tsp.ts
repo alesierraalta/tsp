@@ -338,26 +338,33 @@ async function checkVerdict(cwd: string, env: Readonly<Record<string, string | u
 // What a tsp that predates `check --json` prints instead of a verdict: the flag parser's own words, never a check's.
 const STALE_CHECK = /flag provided but not defined|unknown flag|invalid option/i;
 
-// The automatic run is a toggle, not a verdict: `required` names the debt, and this says whether the
-// extension may act on it without asking. An unreadable answer keeps the shipped behaviour (act).
+// The features are toggles, not verdicts: `required` names the debt, and these say who may act on it. An unreadable
+// answer keeps each shipped default: auto-run acts (as it always has) and the headless loop stays off, because it is
+// opt-in and spends the session's turns (#471).
 const AUTO_RUN_FEATURE = "auto-run";
-async function autoRunEnabled(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp): Promise<boolean> {
+const HEADLESS_LOOP_FEATURE = "headless-loop";
+interface Features { autoRun: boolean; headlessLoop: boolean }
+async function readFeatures(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp): Promise<Features> {
+  const shipped: Features = { autoRun: true, headlessLoop: false };
   let result: ExecResult;
   try {
     result = await exec(["status", "--json"], { cwd, env: { ...env } });
   } catch {
-    return true;
+    return shipped;
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(result.stdout.trim());
   } catch {
-    return true;
+    return shipped;
   }
   const report = (parsed ?? {}) as { features?: unknown };
-  if (!Array.isArray(report.features)) return true;
-  const entry = report.features.find((item) => (item as { id?: unknown }).id === AUTO_RUN_FEATURE) as { enabled?: unknown } | undefined;
-  return entry === undefined ? true : entry.enabled === true;
+  if (!Array.isArray(report.features)) return shipped;
+  const on = (id: string, fallback: boolean): boolean => {
+    const entry = report.features.find((item) => (item as { id?: unknown }).id === id) as { enabled?: unknown } | undefined;
+    return entry === undefined ? fallback : entry.enabled === true;
+  };
+  return { autoRun: on(AUTO_RUN_FEATURE, shipped.autoRun), headlessLoop: on(HEADLESS_LOOP_FEATURE, shipped.headlessLoop) };
 }
 
 export interface Verdict {
@@ -784,7 +791,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     if (verdict === undefined || verdict === "stale" || verdict.decision !== DECISION_REQUIRED) return;
     // The toggle decides who acts on the debt. Off there is nobody to ask in a session without a UI, so the required
     // run is not requested either: the debt stands and the human keeps deciding (#471).
-    if (!(await autoRunEnabled(ctx.cwd, env, exec))) return;
+    if (!(await readFeatures(ctx.cwd, env, exec)).autoRun) return;
     continued = true;
     return {
       entries: [...((event as { entries?: readonly unknown[] }).entries ?? []), { type: "custom_message", customType: "tsp-required", content: TSP_PROMPT, display: false }],
@@ -804,7 +811,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     // Without a UI the loop runs itself, on the same answers and bounds, and only when the automatic run is on:
     // off there is nobody to ask, so nothing is driven. With a UI the same loop runs as it always has (#471).
     const owedWork = pendingRecord !== "" || feedbackRun || tspRun || fixRun;
-    if (!ctx.hasUI && !(owedWork && (await autoRunEnabled(ctx.cwd, env, exec)))) {
+    if (!ctx.hasUI && !(owedWork && (await readFeatures(ctx.cwd, env, exec)).headlessLoop)) {
       // The boundary requested the run; a TSP run that did happen still marks the branch, so it is not requested twice.
       if (tspRun) { ran = true; persist(); }
       pending = "";
@@ -945,7 +952,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       const why = verdict.reason === "" ? "the repository requires it" : verdict.reason;
       // The verdict names the debt; the toggle decides who acts on it. Off, the human still answers: the
       // repository is not overruled, only the automatic send is.
-      if (await autoRunEnabled(ctx.cwd, env, exec)) {
+      if ((await readFeatures(ctx.cwd, env, exec)).autoRun) {
         // The repository decided this run happens; asking would be a question whose answer is already known.
         declined.clear();
         persist();

@@ -795,6 +795,15 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 			return finish(res, opts, true)
 		}
 		runOpts.ConfigDir = clone
+		// The loop is opt-in, and this arm exists to measure it: switch it on in the run's own state root, which is
+		// the one piProductEnv pins as TSP_HOME. A product config that cannot carry the toggle fails the run rather
+		// than measuring a product nobody runs.
+		if runOpts.ConfigMode == ConfigProduct {
+			if err := EnableProductLoop(clone); err != nil {
+				res.Failed, res.FailReason = true, "the product arm could not enable the headless loop: "+err.Error()
+				return finish(res, opts, true)
+			}
+		}
 	}
 	if opts.Sessions > 1 {
 		return runSessions(caseDir, ws, key, runOpts, opts, res)

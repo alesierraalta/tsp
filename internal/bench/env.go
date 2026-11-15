@@ -9,9 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/alesierraalta/tsp/internal/assets"
+	"github.com/alesierraalta/tsp/internal/feature"
 	"github.com/alesierraalta/tsp/internal/mode"
+	"github.com/alesierraalta/tsp/internal/state"
 )
 
 // CredentialsFile is the only piece of the operator's configuration a benchmark run needs: the
@@ -342,6 +345,37 @@ func withoutGentleSession(base []string) []string {
 // tspStateEnvNames are the variables internal/state/state.go Root reads, in its own order: the first one set wins,
 // so the isolated root is written last and every inherited one is dropped.
 var tspStateEnvNames = []string{"TSP_HOME", "TPP_HOME", "RDD_PLUS_HOME"}
+
+// EnableProductLoop turns the opt-in headless loop on in the state root a product run owns: the same
+// <agent dir>/home/.config/tsp piProductEnv pins as TSP_HOME, which is the file internal/state reads. The product arm
+// exists to measure what the extension does after a run, and the loop is off by default, so the arm has to switch it
+// on itself — in its own throwaway root, never the operator's, and without touching the toggles already there.
+func EnableProductLoop(agentDir string) error {
+	path := filepath.Join(agentDir, IsolatedHomeDir, ".config", "tsp", "state.json")
+	current := &state.State{SchemaVersion: 1}
+	if b, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(b, current); err != nil {
+			return fmt.Errorf("read the product arm's state %s: %w", path, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read the product arm's state %s: %w", path, err)
+	}
+	if current.SchemaVersion != 1 {
+		return fmt.Errorf("the product arm's state %s has schema version %d", path, current.SchemaVersion)
+	}
+	if current.Features == nil {
+		current.Features = make(map[string]state.FeatureState)
+	}
+	current.Features[feature.HeadlessLoopID] = state.FeatureState{Enabled: true, UpdatedAt: time.Now().UTC().Format(time.RFC3339)}
+	b, err := json.MarshalIndent(current, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return state.WriteAtomic(path, append(b, '\n'))
+}
 
 // piProductEnv is piEnv plus the observation the tsp extension's own protocol reads. A print-mode session has no
 // UI, so nobody can answer the extension's offer; an accepting user is answered deterministically by declaring the

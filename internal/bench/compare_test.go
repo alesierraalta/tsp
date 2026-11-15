@@ -332,3 +332,22 @@ func TestCompareRefusesAFixLoopReading(t *testing.T) {
 		t.Fatalf("compare must refuse a fix-loop reading beside a one-pass one: %v", err)
 	}
 }
+
+// A product reading with the headless loop and one without measured different products, so compare refuses the pair
+// rather than reading the loop's extra turns as a difference in the same instrument.
+func TestCompareRefusesAHeadlessLoopReading(t *testing.T) {
+	before, after := comparisonProvenance(), comparisonProvenance()
+	before.AgentConfig, after.AgentConfig = ConfigProduct, ConfigProduct
+	if err := refuseHeadlessLoop(before, after); err != nil {
+		t.Fatal(err)
+	}
+	after.HeadlessLoop = true
+	if err := refuseHeadlessLoop(before, after); err == nil || !strings.Contains(err.Error(), "headless loop") {
+		t.Fatalf("mixed headless-loop readings accepted: %v", err)
+	}
+	b := writeAggregate(t, filepath.Join(t.TempDir(), "before"), comparisonAggregate(before))
+	a := writeAggregate(t, filepath.Join(t.TempDir(), "after"), comparisonAggregate(after))
+	if _, err := Compare(b, a); err == nil || !strings.Contains(err.Error(), "headless loop") {
+		t.Fatalf("compare must refuse a headless-loop reading beside one that never drove the loop: %v", err)
+	}
+}

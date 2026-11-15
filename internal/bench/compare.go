@@ -94,6 +94,7 @@ func refuseProvenanceMismatch(before, after Aggregate, opts CompareOptions) erro
 		refuseRounds,
 		refuseSessions,
 		refuseFixLoop,
+		refuseHeadlessLoop,
 		refuseAgentConfig,
 		refuseEnvironment,
 	}
@@ -160,6 +161,15 @@ func refuseFixLoop(before, after Provenance) error {
 		return nil
 	}
 	return errors.New("different fix-loop mode: one reading measured round 1, an agent fix and two round-2 arms, the other did not")
+}
+
+// refuseHeadlessLoop keeps a product reading that drove the opt-in loop apart from one that never did: the loop's
+// extra turns are work the second reading never paid for, so comparing them would read the loop as cost noise.
+func refuseHeadlessLoop(before, after Provenance) error {
+	if before.HeadlessLoop == after.HeadlessLoop {
+		return nil
+	}
+	return errors.New("different headless loop: one reading enabled the headless TSP loop, the other did not")
 }
 
 func refuseAgentConfig(before, after Provenance) error {

@@ -9,10 +9,10 @@ import (
 	"github.com/alesierraalta/tsp/internal/state"
 )
 
-func TestAllDeclaresBothFeaturesWithTheirDefaults(t *testing.T) {
+func TestAllDeclaresEveryFeatureWithItsDefault(t *testing.T) {
 	features := All()
-	if len(features) != 2 {
-		t.Fatalf("All returned %d features, want 2", len(features))
+	if len(features) != 3 {
+		t.Fatalf("All returned %d features, want 3", len(features))
 	}
 	feedback := features[0]
 	if feedback.ID != "feedback" || feedback.Title != "Feedback" || feedback.Default {
@@ -30,6 +30,47 @@ func TestAllDeclaresBothFeaturesWithTheirDefaults(t *testing.T) {
 	}
 	if autoRun.Prompt == "" || autoRun.Help == "" || autoRun.Preview == "" {
 		t.Fatalf("auto-run is missing its prompt, help or preview: %+v", autoRun)
+	}
+	// The headless loop costs model turns and the hard23 A/B read flat recall at +91% cost, so it is opt-in.
+	headless := features[2]
+	if headless.ID != HeadlessLoopID || headless.Title != "Headless TSP loop" || headless.Default {
+		t.Fatalf("feature = %+v, want headless-loop off by default", headless)
+	}
+	if headless.Prompt != "¿Quieres que una sesión sin interfaz arregle y vuelva a verificar sola lo que TSP encuentre?" {
+		t.Fatalf("prompt = %q", headless.Prompt)
+	}
+	for _, want := range []string{"no UI", "fix", "round", "record", "twice", "turns"} {
+		if !strings.Contains(headless.Help, want) {
+			t.Fatalf("help = %q, want it to name %q", headless.Help, want)
+		}
+	}
+	if !strings.Contains(headless.Preview, "twice") {
+		t.Fatalf("preview = %q, want the bound stated", headless.Preview)
+	}
+}
+
+func TestHeadlessLoopIsOffWithoutAnEntryAndRoundTrips(t *testing.T) {
+	t.Setenv("TPP_HOME", t.TempDir())
+
+	enabled, err := Enabled(HeadlessLoopID)
+	if err != nil {
+		t.Fatalf("Enabled: %v", err)
+	}
+	if enabled {
+		t.Fatal("headless-loop is on without a persisted entry, which would spend every headless session's turns by default")
+	}
+
+	if _, err := Set(HeadlessLoopID, true); err != nil {
+		t.Fatalf("Set true: %v", err)
+	}
+	if enabled, err = Enabled(HeadlessLoopID); err != nil || !enabled {
+		t.Fatalf("Enabled after true = %v, %v; want enabled", enabled, err)
+	}
+	if _, err := Set(HeadlessLoopID, false); err != nil {
+		t.Fatalf("Set false: %v", err)
+	}
+	if enabled, err = Enabled(HeadlessLoopID); err != nil || enabled {
+		t.Fatalf("Enabled after false = %v, %v; want disabled", enabled, err)
 	}
 }
 
