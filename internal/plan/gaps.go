@@ -311,7 +311,9 @@ func layerRowGaps(g *Gaps, r row, iSkill, iStatus int) {
 	}
 	label := quote(cell(r.cells, 0))
 	name := label
-	if owner := quote(strings.Trim(cell(r.cells, iSkill), "`")); owner != "[empty]" {
+	// Every backtick goes, not only the outer pair: a cell naming two owners wraps each in its own, and quote turns
+	// any it is left into a quote mark. No skill name carries one.
+	if owner := quote(strings.ReplaceAll(cell(r.cells, iSkill), "`", "")); owner != "[empty]" {
 		name += " (" + owner + ")"
 	}
 	g.UnsweptLayers = append(g.UnsweptLayers, fmt.Sprintf("(line %d): %s", r.line, name))
