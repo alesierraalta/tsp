@@ -130,6 +130,12 @@ func TestTestStrategySkillRequiresATestFileForEveryReportedFinding(t *testing.T)
 		{"RED on today's code", "the test has to fail on the defective code"},
 		{"GREEN once the defect is fixed", "and pass once it is fixed, so it pins the defect and not today's output"},
 		{"Pin every defect** in the repository's own test files", "where the tests go: the suite, not a scratch file"},
+		{"the candidate fix in the source", "the fix is written in the source before --falsify runs"},
+		{"`tsp redcheck --falsify`", "the mechanical green-half check"},
+		{"names `witness`", "only the tests the command names witness count"},
+		{"`wrong_reason` test is not a witness", "a test that fails for another reason is not evidence"},
+		{"never revert by hand", "the command owns the restore"},
+		{"except the candidate fix", "the sanctioned exception to the no-source-change rule"},
 	} {
 		if !strings.Contains(text, want.phrase) {
 			t.Errorf("test-strategy no longer names %q: %s", want.phrase, want.contract)
