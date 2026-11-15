@@ -1190,7 +1190,7 @@ nothing. Run it where the credential lives, then gate what it produced:
 
 ```sh
 make build
-./bin/tsp bench run -cases 'bench/cases/h*' -runs 1 -runner pi -model "$MODEL" \
+./bin/tsp bench run -cases 'bench/cases/h*' -runs 2 -runner pi -model "$MODEL" \
   -agent-config bench -max-cost-usd 1.50 -bench-dir bench-results
 ./bin/tsp bench gate --baseline bench/baseline --min-recall 0.60 --max-regression 0.05 \
   bench-results/results/<run>
