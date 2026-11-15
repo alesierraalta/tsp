@@ -202,9 +202,13 @@ type Aggregate struct {
 	Blocked        int     `json:"blocked,omitempty"`
 	FalsePositives int     `json:"false_positives"`
 	CostUSD        float64 `json:"cost_usd"`
-	Invalid        int     `json:"invalid"`
-	Failed         int     `json:"failed"`    // agent did not run to completion; excluded from recall
-	Escalated      int     `json:"escalated"` // runs rerun with Options.EscalateModel because the first pinned nothing
+	// Tokens sums every run's tokens and CacheHitRate is the share of their prompt served from cache; both are
+	// absent when the runner reported no usage.
+	Tokens       Tokens  `json:"tokens,omitzero"`
+	CacheHitRate float64 `json:"cache_hit_rate,omitzero"`
+	Invalid      int     `json:"invalid"`
+	Failed       int     `json:"failed"`    // agent did not run to completion; excluded from recall
+	Escalated    int     `json:"escalated"` // runs rerun with Options.EscalateModel because the first pinned nothing
 	// CaughtByRound and BrokenByRound sum, over valid runs, the defects caught and the tests red on the fully
 	// fixed code once round k ended; empty when the runs made one pass.
 	TurnsBySession     []int     `json:"turns_by_session,omitempty"`
@@ -653,6 +657,11 @@ func finalizeAggregate(agg *Aggregate) {
 	agg.AdjudicationComplete = complete
 	agg.Misses = countMisses(agg.Cases)
 	agg.MetricsVersion = MetricsVersion
+	agg.Tokens = Tokens{}
+	for _, c := range agg.Cases {
+		agg.Tokens.Add(c.Tokens)
+	}
+	agg.CacheHitRate = agg.Tokens.CacheHitRate()
 	agg.Recall, agg.RecallCaught = 0, 0
 	if agg.Defects > 0 {
 		agg.Recall = float64(agg.Found) / float64(agg.Defects)
@@ -920,6 +929,7 @@ func runAgentIn(logDir, ws string, key Key, runOpts, opts Options, res *Result, 
 		cancel()
 		res.CostUSD += ar.CostUSD
 		res.Turns += ar.Turns
+		res.Tokens.Add(ar.Tokens)
 		writeAgentLog(logDir, attempt, ar, err)
 		// A timeout is an infrastructure failure like any other: the agent hung or the provider stalled,
 		// so the run has no verdict for the case at all. Retrying it is bounded by --retries, and losing
@@ -1006,6 +1016,7 @@ func writeTranscript(path string, stream []byte) {
 func merge(res, scored Result) Result {
 	scored.Case, scored.Run, scored.Workspace = res.Case, res.Run, res.Workspace
 	scored.CostUSD, scored.Turns, scored.Seconds, scored.Escalated = res.CostUSD, res.Turns, res.Seconds, res.Escalated
+	scored.Tokens = res.Tokens
 	scored.Rounds = res.Rounds
 	scored.Sessions = res.Sessions
 	// The loop is the run's own account of work the scorer never sees: a rescore re-reads the plan and the tests,

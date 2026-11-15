@@ -554,6 +554,47 @@ func TestRunLogsEachCaseAsItFinishes(t *testing.T) {
 	}
 }
 
+// A run sums the tokens of every attempt into its result and every result into the aggregate, with the share of
+// the prompt the cache served; a runner that reports no tokens writes no token fields, so "not recorded" never
+// reads as zero.
+func TestRunRecordsTokensAndCacheHitRate(t *testing.T) {
+	requireNodeAndGit(t)
+	caseDir := fakeCase(t)
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+		return AgentResult{Result: "nothing found", CostUSD: 0.01, Turns: 2, Tokens: Tokens{Input: 300, Output: 10, CacheRead: 100, CacheWrite: 5, Reasoning: 1}}, nil
+	}
+	out := t.TempDir()
+	agg, _ := Run(Options{CasesGlob: caseDir, Runs: 2, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: out, BenchDir: t.TempDir(), Agent: agent})
+	if agg.Tokens != (Tokens{Input: 600, Output: 20, CacheRead: 200, CacheWrite: 10, Reasoning: 2}) || agg.CacheHitRate != 0.25 {
+		t.Fatalf("aggregate tokens = %+v, hit rate %v", agg.Tokens, agg.CacheHitRate)
+	}
+	for _, c := range agg.Cases {
+		if c.Tokens != (Tokens{Input: 300, Output: 10, CacheRead: 100, CacheWrite: 5, Reasoning: 1}) {
+			t.Fatalf("run %d tokens = %+v", c.Run, c.Tokens)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(out, "aggregate.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"cache_hit_rate": 0.25`) || !strings.Contains(string(data), `"cache_read": 200`) {
+		t.Fatalf("aggregate.json lacks the token fields:\n%s", data)
+	}
+
+	silent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+		return AgentResult{Result: "nothing found", CostUSD: 0.01, Turns: 2}, nil
+	}
+	out = t.TempDir()
+	Run(Options{CasesGlob: caseDir, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: out, BenchDir: t.TempDir(), Agent: silent})
+	data, err = os.ReadFile(filepath.Join(out, "aggregate.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"tokens"`) || strings.Contains(string(data), `"cache_hit_rate"`) {
+		t.Fatalf("a runner without token usage wrote token fields:\n%s", data)
+	}
+}
+
 // A run records the corpus it measured in the aggregate and in its history row, so a number
 // whose corpus changed under it cannot read as comparable.
 func TestRunRecordsCorpusInHistory(t *testing.T) {
