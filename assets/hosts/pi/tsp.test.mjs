@@ -1404,3 +1404,76 @@ test("with a UI the uncommitted tree is still shown as the record error, never a
   assert.deepEqual(h.notes, [{ message: UNCOMMITTED_RECORD, type: "error" }], "the refusal is what the human reads");
   assert.deepEqual(h.asked, []);
 });
+
+// A headless session has nobody to read a failed review, so a record or next that fails is appended to the session
+// as a custom entry (the same `pi.appendEntry` pattern tsp-state uses): display:false, carrying the command, its exit
+// code and the tail of what it said. The dirty-tree refusal is not one of them — it is handled by the commit request.
+const loopErrors = (h) => h.entries.filter((e) => e.customType === "tsp-loop-error");
+
+test("headless: a record that fails is appended with its command, exit code and output", async () => {
+  const said = "tsp findings: the base commit is gone from this repository";
+  const h = offerHarness({ hasUI: false, findings: { record: { stdout: said + "\n", stderr: "", code: 2 } } });
+  await h.run("haz el TSP", []);
+  assert.deepEqual(h.sent, [], "a failed judgment asks the agent for nothing");
+  assert.deepEqual(loopErrors(h).map((e) => e.data), [{ command: "findings record", exit: 2, output: said }]);
+  assert.deepEqual(h.notes, [], "a headless session renders nothing");
+});
+
+test("headless: a next that cannot judge is appended with its exit code and what it printed", async () => {
+  const broken = { stdout: "", stderr: "tsp findings: the registry is unreadable\n", code: 2 };
+  const h = offerHarness({ hasUI: false, findings: { next: broken, check: { stdout: "review 1\n", stderr: "", code: 1 } } });
+  await h.run("haz el TSP", []);
+  assert.deepEqual(h.sent, []);
+  const logged = loopErrors(h);
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].data.command, "findings next --json");
+  assert.equal(logged[0].data.exit, 2);
+  assert.match(logged[0].data.output, /registry is unreadable/);
+});
+
+test("headless: a long failure keeps the tail, so the entry stays readable", async () => {
+  const long = "noise ".repeat(1000) + "the real reason is on this line";
+  const h = offerHarness({ hasUI: false, findings: { record: { stdout: long + "\n", stderr: "", code: 2 } } });
+  await h.run("haz el TSP", []);
+  const [entry] = loopErrors(h);
+  assert.ok(entry.data.output.length <= 420, `output is ${entry.data.output.length} chars`);
+  assert.ok(entry.data.output.endsWith("the real reason is on this line"), "the tail is what survives");
+});
+
+test("the dirty-tree refusal is a commit request, not a review failure, and a UI session appends nothing", async () => {
+  const headless = offerHarness({ hasUI: false, findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
+  await headless.run("haz el TSP", []);
+  assert.deepEqual(loopErrors(headless), [], "the commit request is the answer, so nothing is logged as a failure");
+  const ui = offerHarness({ findings: { record: { stdout: "tsp findings: the base commit is gone from this repository\n", stderr: "", code: 2 } } });
+  await ui.run("haz el TSP", []);
+  assert.deepEqual(loopErrors(ui), [], "a UI session reads the calendar of its own notification");
+});
+
+test("headless: the commit request names what git still sees, so the agent knows what to commit", async () => {
+  const probe = repoProbe({ states: [snapshot({ "docs/testing/test-plan.md": "plan", "tests/add.test.js": "one" })] });
+  const h = offerHarness({ hasUI: false, probe, findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
+  await h.run("haz el TSP", []);
+  assert.match(h.sent[0], /Uncommitted: docs\/testing\/test-plan\.md, tests\/add\.test\.js/);
+});
+
+// A headless run leaves no status line, so the loop's own answer is kept on the branch: a reading can then see that
+// the loop ran and what `tsp findings next` said, instead of inferring it from a transcript that never mentions it.
+const loopAnswers = (h) => h.entries.filter((e) => e.customType === "tsp-loop").map((e) => e.data);
+
+test("headless: the loop's answer is kept on the branch, with its round and its open items", async () => {
+  const h = offerHarness({ hasUI: false, findings: { next: FIX_REPLY("t1") } });
+  await h.run("haz el TSP", []);
+  assert.deepEqual(loopAnswers(h), [{ next: "fix", round: 1, maxRounds: 3, open: 1 }]);
+  const end = offerHarness({ hasUI: false, findings: { next: loopReply("done", "settled") } });
+  await end.run("haz el TSP", []);
+  assert.deepEqual(loopAnswers(end), [{ next: "done", round: 0, maxRounds: 0, open: 0 }], "a converged loop says done");
+});
+
+test("only a headless loop keeps its answer: a UI has the status line, and a refusal is the commit request", async () => {
+  const ui = offerHarness({ findings: { next: FIX_REPLY("t1") } });
+  await ui.run("haz el TSP", []);
+  assert.deepEqual(loopAnswers(ui), [], "the status line is the surface with a UI");
+  const refused = offerHarness({ hasUI: false, findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
+  await refused.run("haz el TSP", []);
+  assert.deepEqual(loopAnswers(refused), [], "the loop has not answered yet: it could not record");
+});
