@@ -9,7 +9,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import tppExtension, {
+  COMMIT_LEAD,
   FEEDBACK_LEAD,
+  FIX_LEAD,
   GENTLE_OBSERVATION_ENV,
   GENTLE_OBSERVATION_VALUE,
   observesGentleSession,
@@ -198,6 +200,9 @@ const askVerdict = (debt, reason = GATE_REASON) => ({ stdout: JSON.stringify({ d
 const noneVerdict = () => ({ stdout: JSON.stringify({ decision: "none", debt: "", reason: "", exit: 0 }), stderr: "", code: 0 });
 const requiredVerdict = (debt, reason = "a verified Gentle session is active: TSP is required") => ({ stdout: JSON.stringify({ decision: "required", debt, reason, exit: 1 }), stderr: "", code: 1 });
 const errorVerdict = (reason) => ({ stdout: JSON.stringify({ decision: "error", debt: "", reason, exit: 2 }), stderr: "", code: 2 });
+// The automatic run switched off, as `tsp feature disable auto-run` persists it: `status --json` is where the
+// extension reads the toggle, and headless it decides whether anything is driven at all (#471).
+const autoRunOff = { stdout: JSON.stringify({ features: [{ id: "feedback", enabled: false }, { id: "auto-run", enabled: false }] }), stderr: "", code: 0 };
 
 // The TSP offer: after a run that changed source code, Pi runs TSP when the repository requires it and asks in the
 // chat when the repository left that to the human; "Sí" sends the identity prompt "haz el TSP" as if the user typed
@@ -633,10 +638,10 @@ test("an old binary's usage answer still shows the plain review", async () => {
   assert.deepEqual(h.sent, []);
 });
 
-test("the findings review runs only after a TSP run the user asked for, with UI, not aborted, not opted out", async () => {  for (const [h, prompt, aborted, offered] of [
+test("the findings review runs only after a TSP run that happened, never aborted, opted out or with auto-run off", async () => {  for (const [h, prompt, aborted, offered] of [
     [offerHarness({ answer: "No" }), "change a", false, true],
     [offerHarness(), "haz el TSP", true, false],
-    [offerHarness({ hasUI: false }), "haz el TSP", false, false],
+    [offerHarness({ hasUI: false, status: autoRunOff }), "haz el TSP", false, false],
     [offerHarness({ optedOut: true }), "haz el TSP", false, false],
   ]) {
     await h.run(prompt, [["edit", "a.go"]], { aborted });
@@ -807,12 +812,12 @@ test("the feedback run itself reviews no findings, asks no TSP question and requ
   assert.equal(next.asked.length, 1, "a fresh session is offered TSP again");
 });
 
-test("only a TSP run asks for feedback: an ordinary, aborted, headless, opted-out or child run never does", async () => {
+test("only a TSP run asks for feedback: an ordinary, aborted, opted-out or child run never does, nor a headless one with auto-run off", async () => {
   const template = { findings: { "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } };
   for (const [h, prompt, aborted] of [
     [offerHarness({ ...template, answer: "No" }), "change a", false],
     [offerHarness(template), "haz el TSP", true],
-    [offerHarness({ ...template, hasUI: false }), "haz el TSP", false],
+    [offerHarness({ ...template, hasUI: false, status: autoRunOff }), "haz el TSP", false],
     [offerHarness({ ...template, optedOut: true }), "haz el TSP", false],
     [offerHarness({ ...template, env: { GENTLE_PI_AGENTS_CHILD: "1" } }), "haz el TSP", false],
   ]) {
@@ -1264,4 +1269,138 @@ test("a run that pinned a test and recorded nothing is asked to record it, once"
   const quiet = offerHarness({ planCount: { stdout: '{"findings":0,"evidence":0}\n', stderr: "", code: 0 }, feedback: "disabled" });
   await quiet.run("haz el TSP", [["write", "src/add.js"]]);
   assert.equal(quiet.sent.filter((m) => m.includes("tsp plan add-finding")).length, 0, "no test changed, nothing to record");
+});
+
+// #471: in a session without a UI (`pi -p`, a JSON or RPC client) the offer's question cannot be answered, so with
+// the `auto-run` feature on — its default — the extension drives the loop itself: the same `tsp findings next`
+// decision, the same fix / tsp / round / record continuation the interactive loop sends, and no UI write at all.
+const FIX_REPLY = (tree, round = 1) => ({ stdout: JSON.stringify({ next: "fix", round, max_rounds: 3, tree, items: [{ id: "F1" }], message: "F1 open a_test.go TestA", review: "review", reason: "round 1 of 3 left 1 item unsettled" }), stderr: "", code: 1 });
+// A headless loop has no chat: no toast, no question, no status line, no panel.
+const rendersNothing = (h) => assert.deepEqual([h.notes, h.asked, h.statuses, h.widgets], [[], [], [], []], "a headless loop renders nothing");
+
+test("headless with the automatic run on drives the fix, and the same fix twice stops the loop", async () => {
+  const replies = [FIX_REPLY("t1"), FIX_REPLY("t1")];
+  const h = offerHarness({ hasUI: false, findings: { get next() { return replies.shift(); } } });
+  await h.run("haz el TSP", []);
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings").map((c) => c.argv[1]), ["record", "next"], "the TSP run records its witnesses and asks next, exactly as with a UI");
+  assert.deepEqual(h.sent, [`${FIX_LEAD}\n\nF1 open a_test.go TestA`], "the fix continuation is the message the interactive loop sends");
+  rendersNothing(h);
+  await h.run(h.sent[0], [["edit", "internal/a.go"]]);
+  assert.deepEqual(h.calls.at(-1).argv, ["findings", "next", "--cwd", "/repo", "--json"], "a fix run asks next again, without recording");
+  assert.equal(h.sent.length, 1, "the same fix over the same tree ends the loop instead of sending it twice");
+  rendersNothing(h);
+});
+
+test("headless with the automatic run on sends the round and the record continuation", async () => {
+  const round = offerHarness({ hasUI: false, findings: { next: loopReply("tsp", "attack the fix") } });
+  await round.run("haz el TSP", []);
+  assert.deepEqual(round.sent, ["haz el TSP — attack the fix"], "the round is the interactive loop's message");
+  rendersNothing(round);
+  const owing = offerHarness({ hasUI: false, planCount: owingPlan, findings: { next: loopReply("done", "settled") } });
+  await owing.run("haz el TSP", [["write", "src/add.test.js"]]);
+  assert.equal(records(owing.sent), 1, "a headless run that pinned a test and recorded no finding is told to record it");
+  rendersNothing(owing);
+  for (const next of ["done", "stop", "error"]) {
+    const end = offerHarness({ hasUI: false, findings: { next: loopReply(next, "the end") } });
+    await end.run("haz el TSP", []);
+    assert.deepEqual(end.sent, [], `${next} ends the loop normally`);
+    rendersNothing(end);
+  }
+});
+
+test("headless with the automatic run on asks for feedback before the loop's next message, as with a UI", async () => {
+  const h = offerHarness({ hasUI: false, findings: { next: FIX_REPLY("t1"), "--template": { stdout: TEMPLATE, stderr: "", code: 0 } } });
+  await h.run("haz el TSP", []);
+  assert.equal(h.sent.length, 1);
+  assert.ok(h.sent[0].startsWith(FEEDBACK_LEAD), h.sent[0]);
+  await h.run(h.sent[0], []);
+  assert.equal(h.sent.length, 2);
+  assert.ok(h.sent[1].startsWith(FIX_LEAD), "the fix waits for the feedback run and is sent after it");
+  rendersNothing(h);
+});
+
+test("with the automatic run off a headless session is left alone: no continuation, no loop", async () => {
+  const off = { stdout: JSON.stringify({ features: [{ id: "auto-run", enabled: false }] }), stderr: "", code: 0 };
+  const h = offerHarness({ hasUI: false, status: off, check: requiredVerdict("no test was added or changed with it"), findings: { next: FIX_REPLY("t1") } });
+  assert.equal(await h.run("change a", [["edit", "internal/a.go"]]), undefined, "with the automatic run off there is nobody to ask, so nothing is requested");
+  assert.deepEqual(h.calls.map((c) => c.argv[0]), ["check", "status"], "the toggle is read before a required run would be requested");
+  const before = h.calls.length;
+  await h.run("haz el TSP", []);
+  assert.deepEqual(h.calls.slice(before).map((c) => c.argv[0]), ["status"], "the loop is not driven, and no findings command runs");
+  assert.deepEqual(h.sent, []);
+  rendersNothing(h);
+});
+
+test("a delegated child does nothing headless, even with the automatic run on", async () => {
+  const child = offerHarness({ hasUI: false, env: { GENTLE_PI_AGENTS_CHILD: "1" }, check: requiredVerdict("no test"), findings: { next: FIX_REPLY("t1") } });
+  assert.equal(await child.run("change a", [["edit", "internal/a.go"]]), undefined);
+  await child.run("haz el TSP", []);
+  assert.deepEqual(child.calls, []);
+  assert.deepEqual(child.sent, []);
+});
+
+// The loop judges commits, so `tsp findings record` and `tsp findings next` refuse an uncommitted tree
+// (internal/findings/loop.go:236 errDirtyRecord, :233 errDirtyNext). A UI session shows that refusal to the human,
+// who commits; a session without a UI has nobody to read it, so the extension asks the agent to commit and the loop
+// records afterwards — once per settle, at most twice, so a model that never commits cannot loop forever (#471).
+const UNCOMMITTED_RECORD = "tsp findings: the working tree has uncommitted changes: commit them, then record, so the loop judges a commit";
+const UNCOMMITTED_NEXT = "the working tree has uncommitted changes: commit the fix, then run `tsp findings next`";
+
+test("headless: an uncommitted tree is asked to commit, and the loop records and continues after it", async () => {
+  const records = [
+    { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 },
+    { stdout: "F1 recorded a_test.go TestA\n", stderr: "", code: 0 },
+  ];
+  const replies = [loopReply("fix", "settle it")];
+  const h = offerHarness({ hasUI: false, findings: { get record() { return records.shift(); }, get next() { return replies.shift(); } } });
+  await h.run("haz el TSP", []);
+  assert.equal(h.sent.length, 1, "the run sent one continuation, not the fix");
+  assert.ok(h.sent[0].startsWith(COMMIT_LEAD), h.sent[0]);
+  assert.match(h.sent[0], /^The TSP loop cannot judge an uncommitted working tree\. Commit the tests you wrote together with the fix they pin, and change nothing else\./);
+  assert.ok(h.sent[0].includes(UNCOMMITTED_RECORD), "the agent is told exactly what tsp answered");
+  assert.match(h.sent[0], /records the round and asks next/, "and what the loop does once it is committed");
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings").map((c) => c.argv[1]), ["record"], "no next is asked while the tree cannot be recorded");
+  rendersNothing(h);
+  await h.run(h.sent[0], [["bash", "git add -A && git commit -qm tests"]]);
+  assert.equal(h.sent.length, 2);
+  assert.ok(h.sent[1].startsWith(FIX_LEAD), "after the commit the loop records the round and sends the fix");
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings").map((c) => c.argv[1]), ["record", "record", "next"], "the commit turn records again, then asks next");
+  rendersNothing(h);
+});
+
+test("headless: a model that never commits is asked twice at most, and then the loop ends normally", async () => {
+  const h = offerHarness({ hasUI: false, findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
+  await h.run("haz el TSP", []);
+  assert.equal(h.sent.length, 1);
+  await h.run(h.sent[0], []);
+  assert.equal(h.sent.length, 2, "a second settle may ask again");
+  assert.ok(h.sent[1].startsWith(COMMIT_LEAD));
+  await h.run(h.sent[1], []);
+  assert.equal(h.sent.length, 2, "after two commit requests the loop ends instead of asking forever");
+  assert.equal(h.calls.filter((c) => c.argv[1] === "record").length, 3, "every settle tried to record once, and nothing more");
+  rendersNothing(h);
+});
+
+test("headless: next's own dirty-tree refusal is a commit request too, not the end of the loop", async () => {
+  const replies = [
+    { stdout: JSON.stringify({ next: "error", round: 1, max_rounds: 5, reason: UNCOMMITTED_NEXT, message: UNCOMMITTED_NEXT, review: "", lines: [], items: [], notes: [] }), stderr: "", code: 2 },
+    loopReply("fix", "settle it"),
+  ];
+  const h = offerHarness({ hasUI: false, findings: { get next() { return replies.shift(); } } });
+  await h.run("haz el TSP", []);
+  assert.equal(h.sent.length, 1);
+  assert.ok(h.sent[0].startsWith(COMMIT_LEAD), h.sent[0]);
+  assert.ok(h.sent[0].includes(UNCOMMITTED_NEXT), "next's answer reaches the agent in its own words");
+  rendersNothing(h);
+  await h.run(h.sent[0], []);
+  assert.equal(h.sent.length, 2);
+  assert.ok(h.sent[1].startsWith(FIX_LEAD), "once the tree is committed, next decides the loop again");
+});
+
+test("with a UI the uncommitted tree is still shown as the record error, never answered with a commit request", async () => {
+  const h = offerHarness({ findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
+  await h.run("haz el TSP", []);
+  assert.deepEqual(h.sent, [], "the human commits: the extension sends nothing");
+  assert.deepEqual(h.notes, [{ message: UNCOMMITTED_RECORD, type: "error" }], "the refusal is what the human reads");
+  assert.deepEqual(h.asked, []);
 });

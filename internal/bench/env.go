@@ -339,6 +339,10 @@ func withoutGentleSession(base []string) []string {
 	return out
 }
 
+// tspStateEnvNames are the variables internal/state/state.go Root reads, in its own order: the first one set wins,
+// so the isolated root is written last and every inherited one is dropped.
+var tspStateEnvNames = []string{"TSP_HOME", "TPP_HOME", "RDD_PLUS_HOME"}
+
 // piProductEnv is piEnv plus the observation the tsp extension's own protocol reads. A print-mode session has no
 // UI, so nobody can answer the extension's offer; an accepting user is answered deterministically by declaring the
 // gate the extension's non-interactive path acts on, and the run is then held to the discipline it was asked for.
@@ -348,7 +352,31 @@ func piProductEnv(base []string, cfgDir, binDir string) []string {
 		// No config dir and no build under test: keep what the process inherited, minus the parent session.
 		env = withoutGentleSession(base)
 	}
+	// The product arm runs the extension, whose own `tsp` children resolve their state root from these: inherited,
+	// a run would read and write the operator's findings registry instead of its own (#471). The root rides the
+	// throwaway config's home, the same isolated HOME pi already gets.
+	if cfgDir != "" {
+		env = withoutTspState(env, filepath.Join(cfgDir, IsolatedHomeDir, ".config", "tsp"))
+	}
 	return append(env, mode.GentleObservationEnv+"="+mode.GentleObservationValue)
+}
+
+// withoutTspState drops every inherited tsp state root and pins the one this run owns.
+func withoutTspState(env []string, root string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		inherited := false
+		for _, name := range tspStateEnvNames {
+			if strings.HasPrefix(e, name+"=") {
+				inherited = true
+				break
+			}
+		}
+		if !inherited {
+			out = append(out, e)
+		}
+	}
+	return append(out, tspStateEnvNames[0]+"="+root)
 }
 
 // codexEnv is the same contract for Codex: CODEX_HOME is where it reads its login, config, AGENTS.md
