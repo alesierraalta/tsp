@@ -89,9 +89,14 @@ type piEvent struct {
 }
 
 // piUsage is the per-message usage Pi reports; the cost is what a paid model spends on that
-// message, so the run's cost is their sum.
+// message and the counters the tokens it read and wrote, so the run's cost and tokens are their sums.
 type piUsage struct {
-	Cost struct {
+	Input      int64 `json:"input"`
+	Output     int64 `json:"output"`
+	CacheRead  int64 `json:"cacheRead"`
+	CacheWrite int64 `json:"cacheWrite"`
+	Reasoning  int64 `json:"reasoning"`
+	Cost       struct {
 		Total float64 `json:"total"`
 	} `json:"cost"`
 }
@@ -126,7 +131,9 @@ func ParsePiStream(r io.Reader) AgentResult {
 			if ev.Message.Role != "assistant" {
 				continue
 			}
-			out.CostUSD += ev.Message.Usage.Cost.Total
+			u := ev.Message.Usage
+			out.CostUSD += u.Cost.Total
+			out.Tokens.Add(Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, Reasoning: u.Reasoning})
 			if ev.Message.StopReason == "error" || ev.Message.StopReason == "aborted" {
 				out.IsError = true
 				out.ErrorText = strings.TrimSpace(ev.Message.ErrorMessage)

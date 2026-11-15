@@ -72,6 +72,21 @@ func TestPiStreamSumsTheCostOfEveryAssistantMessage(t *testing.T) {
 	}
 }
 
+// Every assistant message reports the tokens it read and wrote; a run's usage is their sum, so tokens
+// per run and the share of the prompt served from cache are readable for a Pi reading.
+func TestPiStreamSumsTheTokensOfEveryAssistantMessage(t *testing.T) {
+	if got := ParsePiStream(strings.NewReader(recordedPiRun)).Tokens; got != (Tokens{Input: 33254, Output: 23, CacheRead: 113, Reasoning: 12}) {
+		t.Fatalf("recorded run tokens = %+v", got)
+	}
+	stream := `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"one"}],"usage":{"input":100,"output":5,"cacheRead":300,"cacheWrite":40,"reasoning":2,"cost":{"total":0.01}},"stopReason":"stop"}}
+{"type":"message_end","message":{"role":"user","content":[],"usage":{"input":999}}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"two"}],"usage":{"input":50,"output":7,"cacheRead":350,"cacheWrite":0,"reasoning":3,"cost":{"total":0.02}},"stopReason":"stop"}}
+`
+	if got := ParsePiStream(strings.NewReader(stream)).Tokens; got != (Tokens{Input: 150, Output: 12, CacheRead: 650, CacheWrite: 40, Reasoning: 5}) {
+		t.Fatalf("summed tokens = %+v, want only the assistant messages added", got)
+	}
+}
+
 // Pi reports a failed model call as an assistant message whose stop reason is "error": its print
 // mode writes that message's reason and exits non-zero. The free model does not fail on demand, so
 // this is the one hand-written event, shaped like the recorded ones above.

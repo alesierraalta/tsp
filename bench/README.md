@@ -210,6 +210,12 @@ another matter: cases are independent, so `--concurrency N` runs N of them side 
 run takes about as long as its slowest case instead of the sum of all of them. In the four runs
 measured so far the sum was 26 to 39 minutes and the slowest single case was 5.4 minutes.
 
+The `pi` runner also records the tokens behind that cost. Each `result.json` and the aggregate carry
+`tokens` (`input`, `output`, `cache_read`, `cache_write`, `reasoning`, summed over every assistant
+message and every retry), and the aggregate adds `cache_hit_rate`, the share of the prompt served from
+cache: `cache_read / (input + cache_read)`. A runner whose stream reports no usage writes neither
+field, so a missing `tokens` means not recorded, never zero.
+
 `--agent-config bench` builds a throwaway Claude configuration holding only the skill under test
 (the embedded `test-strategy`; the other embedded skills would ride every turn as catalog entries),
 with the operator's credentials symlinked in. A case then measures the skills rather than whatever
