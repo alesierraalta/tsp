@@ -174,6 +174,25 @@ func TestOrdinaryNamesSurviveSanitising(t *testing.T) {
 	}
 }
 
+// The shipped template gives one layer two owners, each in its own backticks. Trimming only the outer pair left
+// the inner ones for the sanitiser to turn into quote marks, so every fresh plan reported `a', 'b`.
+func TestGapsNameEveryOwnerOfALayerCleanly(t *testing.T) {
+	doc := "## Layer matrix\n\n| Layer | Skill | Scope | Status |\n|---|---|---|---|\n" +
+		"| Runtime and faults | `runtime-reliability-testing`, `resilience-fault-injection` | load | pending |\n" +
+		"| Security | `appsec-adversarial-auditor` | auth | pending |\n"
+	g, err := GapsIn(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"(line 5): Runtime and faults (runtime-reliability-testing, resilience-fault-injection)",
+		"(line 6): Security (appsec-adversarial-auditor)",
+	}
+	if !reflect.DeepEqual(g.UnsweptLayers, want) {
+		t.Fatalf("unswept = %q, want %q", g.UnsweptLayers, want)
+	}
+}
+
 // A gap that names no location leaves the reader grepping the plan for the row the report is about, which
 // is the cost the checker already refuses to pay: every breach it reports carries its file line. An owed
 // layer and a pending target carry theirs, and the owner stays beside the name.
