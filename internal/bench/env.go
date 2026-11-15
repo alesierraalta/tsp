@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/alesierraalta/tsp/internal/assets"
+	"github.com/alesierraalta/tsp/internal/mode"
 )
 
 // CredentialsFile is the only piece of the operator's configuration a benchmark run needs: the
@@ -65,6 +67,72 @@ func WriteBenchAllPiConfig(dir, configFrom string) error {
 	return writeIsolatedPiConfig(dir, configFrom, AllSkills)
 }
 
+// PiExtensionComponent is the component id `tsp sync --hosts pi` installs the adapter under, and
+// PiExtensionFile is the path Pi loads an extension from inside an agent dir: the synchronizer writes
+// <managed root>/<component>/index.ts, and Pi's managed root is <agent dir>/extensions.
+const PiExtensionComponent = "tpp"
+
+// PiExtensionFile names the installed tsp extension inside an agent directory.
+func PiExtensionFile(agentDir string) string {
+	return filepath.Join(agentDir, "extensions", PiExtensionComponent, "index.ts")
+}
+
+// productExtensionSource is the embedded adapter, the same file the manifest installs for the Pi host.
+const productExtensionSource = "hosts/pi/tsp.ts"
+
+// WriteBenchProductPiConfig builds the product arm's configuration: the bench config — the skill under test
+// and nothing else the operator keeps — plus the tsp Pi extension installed as `tsp sync --hosts pi` installs
+// it, byte for byte and at the same path. The arm measures the product a user runs, so the extension that
+// enforces the skill's late steps has to be loaded by it.
+func WriteBenchProductPiConfig(dir, configFrom string) error {
+	if err := writeIsolatedPiConfig(dir, configFrom, BenchSkill); err != nil {
+		return err
+	}
+	if err := writeProductExtension(dir); err != nil {
+		return err
+	}
+	return VerifyProductExtension(dir)
+}
+
+// writeProductExtension materializes the embedded adapter at the extension path. The bytes and the destination
+// are the manifest's, so the arm loads what a user's install loads rather than a copy that drifted from it.
+func writeProductExtension(dir string) error {
+	source, rel, err := assets.Tree(productExtensionSource)
+	if err != nil {
+		return err
+	}
+	data, err := fs.ReadFile(source, rel)
+	if err != nil {
+		return fmt.Errorf("read embedded extension %q: %w", productExtensionSource, err)
+	}
+	target := PiExtensionFile(dir)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(target, data, 0o644)
+}
+
+// VerifyProductExtension refuses a product config whose extension is missing or differs from the embedded
+// bytes: an arm that silently dropped the extension would measure the bench config and report the product's name.
+func VerifyProductExtension(dir string) error {
+	source, rel, err := assets.Tree(productExtensionSource)
+	if err != nil {
+		return err
+	}
+	want, err := fs.ReadFile(source, rel)
+	if err != nil {
+		return fmt.Errorf("read embedded extension %q: %w", productExtensionSource, err)
+	}
+	got, err := os.ReadFile(PiExtensionFile(dir))
+	if err != nil {
+		return fmt.Errorf("missing tsp extension at %s: %w", PiExtensionFile(dir), err)
+	}
+	if !bytes.Equal(got, want) {
+		return fmt.Errorf("tsp extension at %s differs from the embedded bytes", PiExtensionFile(dir))
+	}
+	return nil
+}
+
 func writeIsolatedPiConfig(dir, configFrom, root string) error {
 	if err := writeSkillTree(dir, root); err != nil {
 		return err
@@ -85,6 +153,11 @@ func writeIsolatedPiConfig(dir, configFrom, root string) error {
 // skills are only out of the measurement when HOME is not the operator's.
 func writePiConfig(dir, configFrom string, skills []string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// A rerun into the same directory must not keep an extension an earlier build wrote: the product arm writes
+	// its own, and every other mode loads none.
+	if err := os.RemoveAll(filepath.Join(dir, "extensions")); err != nil {
 		return err
 	}
 	settings, err := json.MarshalIndent(map[string]any{
@@ -231,9 +304,51 @@ func agentEnv(base []string, cfgDir, binDir string) []string {
 
 // piEnv is the same contract for Pi: PI_CODING_AGENT_DIR is the agent directory it loads settings,
 // credentials, and packages from (docs/environment-variables.md), so a throwaway config dir is
-// what keeps the operator's own configuration out of the measurement.
+// what keeps the operator's own configuration out of the measurement. It also drops the variables a
+// Gentle parent session exports: the agent is a fresh user session, not a delegated child, and the
+// arm — never the operator's shell — decides whether the harness is declared.
 func piEnv(base []string, cfgDir, binDir string) []string {
-	return isolateHome(agentEnvWith(base, PiConfigEnv, cfgDir, binDir), cfgDir)
+	return isolateHome(agentEnvWith(withoutGentleSession(base), PiConfigEnv, cfgDir, binDir), cfgDir)
+}
+
+// GentleChildEnv marks a delegated pi-agents child session: the extension answers none of its offers there,
+// because a child has nobody to answer for it. A bench run is never a child, so it never inherits the mark.
+const GentleChildEnv = "GENTLE_PI_AGENTS_CHILD"
+
+// LegacyGentleObservationEnv is the pre-rename observation the shipped extension still sends to its children;
+// inheriting it would declare a harness the run never ran in.
+const LegacyGentleObservationEnv = "TPP_GENTLE_OBSERVATION"
+
+// withoutGentleSession removes the Gentle session variables from an inherited environment. GENTLE_PI_AGENTS_CHILD=1
+// left in place silently disables the tsp extension (it reads every run as a delegated child), and an inherited
+// observation would declare a gate the arm did not choose.
+func withoutGentleSession(base []string) []string {
+	if base == nil {
+		return nil
+	}
+	out := make([]string, 0, len(base))
+	for _, e := range base {
+		switch {
+		case strings.HasPrefix(e, GentleChildEnv+"="),
+			strings.HasPrefix(e, mode.GentleObservationEnv+"="),
+			strings.HasPrefix(e, LegacyGentleObservationEnv+"="):
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// piProductEnv is piEnv plus the observation the tsp extension's own protocol reads. A print-mode session has no
+// UI, so nobody can answer the extension's offer; an accepting user is answered deterministically by declaring the
+// gate the extension's non-interactive path acts on, and the run is then held to the discipline it was asked for.
+func piProductEnv(base []string, cfgDir, binDir string) []string {
+	env := piEnv(base, cfgDir, binDir)
+	if env == nil {
+		// No config dir and no build under test: keep what the process inherited, minus the parent session.
+		env = withoutGentleSession(base)
+	}
+	return append(env, mode.GentleObservationEnv+"="+mode.GentleObservationValue)
 }
 
 // codexEnv is the same contract for Codex: CODEX_HOME is where it reads its login, config, AGENTS.md

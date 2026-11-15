@@ -21,6 +21,11 @@ func piAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult
 	cmd := exec.CommandContext(ctx, "pi", piArgs(key, opts)...)
 	cmd.Dir = ws
 	cmd.Env = piEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
+	if opts.ConfigMode == ConfigProduct {
+		// The extension acts on the gate it reads from its children: without the observation a print-mode
+		// session has nobody to answer the offer, and the arm would measure the skill alone again.
+		cmd.Env = piProductEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
+	}
 	boundProcessTree(cmd)
 	cmd.Stdin = strings.NewReader("")
 	var out, errb bytes.Buffer
@@ -50,8 +55,9 @@ func piAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult
 }
 
 // piArgs builds the Pi invocation. A run with its own config reads no AGENTS.md or CLAUDE.md from the
-// workspace's ancestors and loads no built-in extension, and a bare run (ConfigNone) disables every
-// discovered and configured skill.
+// workspace's ancestors and loads no discovered or built-in extension, and a bare run (ConfigNone) disables every
+// discovered and configured skill. The product arm names the one extension it does load — the tsp adapter, at the
+// path `tsp sync --hosts pi` installs it — so discovery stays off and nothing of the operator's can ride along.
 func piArgs(key Key, opts Options) []string {
 	args := []string{"-p", agentPrompt(key, opts), "--mode", "json", "--no-session"}
 	if opts.Model != "" {
@@ -59,8 +65,11 @@ func piArgs(key Key, opts Options) []string {
 	}
 	if opts.ConfigDir != "" {
 		args = append(args, "--no-context-files", "--no-extensions")
-		if opts.ConfigMode == ConfigNone {
+		switch opts.ConfigMode {
+		case ConfigNone:
 			args = append(args, "--no-skills")
+		case ConfigProduct:
+			args = append(args, "-e", PiExtensionFile(opts.ConfigDir))
 		}
 	}
 	return args

@@ -2568,6 +2568,7 @@ func TestConfigModeForTheAgentConfigFlag(t *testing.T) {
 		{"pi", "", bench.ConfigBench},
 		{"pi", "bench", bench.ConfigBench},
 		{"pi", "bench-all", bench.ConfigBenchAll},
+		{"pi", "product", bench.ConfigProduct},
 		{"claude", "bench", bench.ConfigBench},
 		{"claude", "/tmp/op-config", bench.ConfigCustom},
 		{"claude", "", bench.ConfigInherited},
@@ -2594,6 +2595,9 @@ func TestBenchRunRefusesAConfigTheRunnerCannotHonor(t *testing.T) {
 		{"--runner", "claude", "--agent-config", "bench-all"},
 		{"--runner", "codex", "--agent-config", "bench-all"},
 		{"--runner", "agy", "--agent-config", "bench-all"},
+		{"--runner", "claude", "--agent-config", "product"},
+		{"--runner", "codex", "--agent-config", "product"},
+		{"--runner", "agy", "--agent-config", "product"},
 		{"--runner", "agy", "--agent-config", "/tmp/op-config"},
 	} {
 		out := t.TempDir()
@@ -2603,6 +2607,32 @@ func TestBenchRunRefusesAConfigTheRunnerCannotHonor(t *testing.T) {
 		if entries, _ := os.ReadDir(out); len(entries) != 0 {
 			t.Errorf("bench run %v must refuse before building any config, wrote %d entries", args, len(entries))
 		}
+	}
+}
+
+// The product arm builds the bench config plus the tsp extension at the path `tsp sync --hosts pi` installs it,
+// under the results directory the run owns: an arm that loaded the skill alone would measure the bench again.
+func TestBenchRunBuildsThePiProductConfig(t *testing.T) {
+	none := filepath.Join(t.TempDir(), "none-*")
+	out := t.TempDir()
+	if code := runBenchRun([]string{"--runner", "pi", "--agent-config", "product", "--dry-run", "--cases", none, "--out", out}); code != 1 {
+		t.Fatalf("product exit = %d, want 1 (config built, no case matched)", code)
+	}
+	cfg := filepath.Join(out, ".pi-agent-config")
+	if _, err := os.Stat(bench.PiExtensionFile(cfg)); err != nil {
+		t.Fatalf("the product config must hold the tsp extension: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg, "skills", "test-strategy", "SKILL.md")); err != nil {
+		t.Fatalf("the product config must hold the skill under test: %v", err)
+	}
+	// The bench config the same runner builds carries the skill and no extension, so the two arms differ in
+	// exactly the thing being measured.
+	benchOut := t.TempDir()
+	if code := runBenchRun([]string{"--runner", "pi", "--agent-config", "bench", "--dry-run", "--cases", none, "--out", benchOut}); code != 1 {
+		t.Fatalf("bench exit = %d, want 1", code)
+	}
+	if _, err := os.Stat(bench.PiExtensionFile(filepath.Join(benchOut, ".pi-agent-config"))); !os.IsNotExist(err) {
+		t.Fatal("the bench config must load no extension")
 	}
 }
 

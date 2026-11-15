@@ -51,9 +51,12 @@ type Provenance struct {
 
 // Agent-config modes identify whether a run used the isolated benchmark configuration or an operator-owned one.
 const (
-	ConfigBench     = "bench"
-	ConfigBenchAll  = "bench-all" // isolated like bench, with every embedded skill so routed siblings can load
-	ConfigNone      = "none"      // isolated like bench, with no skill at all: the bare-agent baseline
+	ConfigBench    = "bench"
+	ConfigBenchAll = "bench-all" // isolated like bench, with every embedded skill so routed siblings can load
+	ConfigNone     = "none"      // isolated like bench, with no skill at all: the bare-agent baseline
+	// ConfigProduct is the bench config plus the tsp Pi extension installed as `tsp sync --hosts pi` installs it:
+	// the arm measures the product a user runs, extension included, and is not comparable with a bench reading.
+	ConfigProduct   = "product"
 	ConfigInherited = "inherited"
 	ConfigCustom    = "custom"
 )

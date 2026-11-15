@@ -304,6 +304,100 @@ func TestPiBenchAllConfigHoldsEveryEmbeddedSkill(t *testing.T) {
 	}
 }
 
+// The product arm runs Pi the way a user runs it with `tsp sync --hosts pi` installed: the same skill the bench
+// config carries, plus the tsp extension at the path the synchronizer writes it to (<agent dir>/extensions/tpp/
+// index.ts, byte for byte), and nothing else of the operator's. The extension is what enforces the skill's late
+// steps, so the arm measures the product and not a half of it.
+func TestPiProductConfigHoldsTheSkillAndTheExtension(t *testing.T) {
+	src := writePiSource(t)
+	cfg := filepath.Join(t.TempDir(), "pi")
+	// A directory an earlier build left behind: the product config removes it, so no other extension lingers.
+	stale := filepath.Join(cfg, "extensions", "operator", "index.ts")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("operator extension"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteBenchProductPiConfig(cfg, src); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg, "extensions", "operator")); !os.IsNotExist(err) {
+		t.Fatal("a stale extension from an earlier build must not survive the writer")
+	}
+	// The skill under test is the same one the bench config carries, byte for byte.
+	claude := filepath.Join(t.TempDir(), "claude")
+	if err := WriteBenchConfig(claude, src); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(filepath.Join(claude, "skills", BenchSkill, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(cfg, "skills", BenchSkill, "SKILL.md"))
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("the product config must hold the same skill: %v", err)
+	}
+	// The extension lands exactly where `tsp sync --hosts pi` puts it, with the embedded bytes.
+	source, rel, err := assets.Tree("hosts/pi/tsp.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	embedded, err := fs.ReadFile(source, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := os.ReadFile(PiExtensionFile(cfg))
+	if err != nil || !bytes.Equal(installed, embedded) {
+		t.Fatalf("the product config must carry the tsp extension at %s: %v", PiExtensionFile(cfg), err)
+	}
+	// No other skill rides along, and no package, extension, prompt or MCP server of the operator's.
+	if _, err := os.Stat(filepath.Join(cfg, "skills", "rag-audit-evaluator")); !os.IsNotExist(err) {
+		t.Fatal("the product config carries only the skill under test, like the bench config")
+	}
+	data, err := os.ReadFile(filepath.Join(cfg, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if packages, ok := settings["packages"].([]any); !ok || len(packages) != 0 {
+		t.Fatalf("packages must be empty so no operator extension loads: %v", settings["packages"])
+	}
+	if _, ok := settings["extensions"]; ok {
+		t.Fatalf("the extension is loaded by the run, not discovered from settings: %s", data)
+	}
+	// Nothing else lands in the directory: an agent dir is a whole configuration.
+	entries, err := os.ReadDir(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	wantNames := PiAuthFile + ", extensions, " + IsolatedHomeDir + ", " + PiModelsStoreFile + ", settings.json, skills"
+	if got := strings.Join(names, ", "); got != wantNames {
+		t.Fatalf("product config holds %q, want %q", got, wantNames)
+	}
+	if err := VerifyBenchSkills(cfg); err != nil {
+		t.Fatalf("a product config carries exactly the skill under test: %v", err)
+	}
+	if err := VerifyBenchAllSkills(cfg); err == nil {
+		t.Fatal("the product config must not be mistaken for one that carries every skill")
+	}
+	// The extension is verified against the embedded bytes, so a truncated install is refused, not measured.
+	if err := os.WriteFile(PiExtensionFile(cfg), []byte("changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyProductExtension(cfg); err == nil {
+		t.Fatal("VerifyProductExtension must refuse an extension that differs from the embedded bytes")
+	}
+}
+
 // Claude Code reads skills and instructions from HOME (~/.claude/skills, ~/.claude/CLAUDE.md) whatever
 // CLAUDE_CONFIG_DIR says. In the RDD vs TSP study (#372, #390) 11 of 66 TSP runs loaded the operator's own
 // branch-isolation skill that way, wrote their tests in a worktree the bench never reads, and scored 4/11. A run
