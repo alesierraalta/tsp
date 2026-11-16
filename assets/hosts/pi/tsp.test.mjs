@@ -17,6 +17,7 @@ import tppExtension, {
   OFFER_TYPE,
   WORKTREE_PROBE_CAP,
   WORKTREE_PROBE_TIMEOUT_MS,
+  WORKTREE_PROBE_BUDGET_MS,
   observesGentleSession,
   parseTppCommand,
   statusFor,
@@ -1875,6 +1876,93 @@ test("a slow sibling ahead of hung ones cannot carry the sweep past its budget (
   assert.ok(clock.now <= SWEEP_BUDGET_MS, `the sweep took ${clock.now} ms, over its ${SWEEP_BUDGET_MS} ms budget: the last hung read may only run for what the budget has left`);
   assert.ok(reads.filter((dir) => hung.includes(dir)).length < hung.length, "hung worktrees behind a spent budget are never read");
   assert.deepEqual(h.asked, [], "nothing changed, so nothing is asked");
+});
+
+// #479: settle has its own total budget. The virtual clock charges a hung read the timeout it was given; a read
+// that answers costs nothing. The phase comes from the session root's second read: openTurn reads it first,
+// collectByRoot next, so every sibling read before that second one belongs to the opening sweep.
+function settleProbe(clock, { cwd, siblings = [], created = [], hungAtOpen = new Set(), emptyAtOpen = new Set(), hungAtSettle = new Set(), answers = new Map(), slowAtOpen = new Map(), slowAtSettle = new Map() }) {
+  const reads = [];
+  let worktreeCalls = 0;
+  const probe = {
+    state: (dir, opts) => {
+      const cwdReads = reads.filter((r) => r.dir === cwd).length;
+      const opening = dir === cwd ? cwdReads === 0 : cwdReads <= 1;
+      reads.push({ dir, opening, timeoutMs: opts?.timeoutMs, at: clock.now });
+      clock.now += (opening ? slowAtOpen : slowAtSettle).get(dir) ?? 0;
+      if ((opening && hungAtOpen.has(dir)) || (!opening && hungAtSettle.has(dir))) {
+        clock.now += opts?.timeoutMs ?? 0;
+        return undefined;
+      }
+      if (opening && emptyAtOpen.has(dir)) return undefined;
+      return answers.get(dir)?.shift();
+    },
+    committed: () => [],
+    worktrees: () => {
+      worktreeCalls += 1;
+      const listed = [...siblings, ...(worktreeCalls > 1 ? created : [])];
+      return [{ path: cwd, prunable: false }, ...listed.map((path) => ({ path, prunable: false }))];
+    },
+  };
+  return { probe, reads };
+}
+
+test("a sibling that failed at open is not re-read at settle (#479)", async (t) => {
+  const cwd = "/repo", timedOut = "/repo-worktrees/timed-out", empty = "/repo-worktrees/empty", healthy = "/repo-worktrees/healthy";
+  const clock = { now: 0 };
+  t.mock.method(Date, "now", () => clock.now);
+  const { probe, reads } = settleProbe(clock, {
+    cwd, siblings: [timedOut, empty, healthy],
+    hungAtOpen: new Set([timedOut]), emptyAtOpen: new Set([empty]),
+    answers: new Map([[cwd, [snapshot({}), snapshot({})]], [healthy, [snapshot({}), snapshot({ "src/add.js": "one" })]]]),
+  });
+  const h = offerHarness({ probe, cwd });
+  await h.run("delegate the retry", []);
+  assert.equal(reads.filter((r) => r.dir === timedOut).length, 1, "a worktree that timed out at open has no baseline to diff and is not read again");
+  assert.equal(reads.filter((r) => r.dir === empty).length, 1, "a worktree that answered nothing at open is likewise skipped");
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "check"), [{ argv: ROOT_CHECK(healthy, ["src/add.js"]), cwd: healthy }], "the healthy sibling's change is still offered");
+  assert.equal(h.asked.length, 1);
+});
+
+test("the settle re-read sweep ends within the shared budget and still offers a healthy change (#479)", async (t) => {
+  const cwd = "/repo", healthy = "/repo-worktrees/ok";
+  const hung = Array.from({ length: 19 }, (_, i) => `/repo-worktrees/hung${i}`);
+  const clock = { now: 0 };
+  t.mock.method(Date, "now", () => clock.now);
+  const { probe, reads } = settleProbe(clock, {
+    cwd, siblings: [healthy, ...hung], hungAtSettle: new Set(hung), slowAtOpen: new Map([[healthy, 1000]]), slowAtSettle: new Map([[healthy, 1000]]),
+    answers: new Map([
+      [cwd, [snapshot({}), snapshot({})]],
+      [healthy, [snapshot({}), snapshot({ "src/add.js": "one" })]],
+      ...hung.map((root) => [root, [snapshot({}), snapshot({})]]),
+    ]),
+  });
+  const h = offerHarness({ probe, cwd });
+  await h.run("delegate the retry", []);
+  const started = reads.find((r) => !r.opening && r.dir === cwd)?.at;
+  assert.ok(started !== undefined, "the session root was read again at settle");
+  assert.ok(clock.now - started <= WORKTREE_PROBE_BUDGET_MS, `the settle sweep took ${clock.now - started} ms, over its ${WORKTREE_PROBE_BUDGET_MS} ms budget`);
+  const settleHung = reads.filter((r) => !r.opening && hung.includes(r.dir));
+  assert.ok(settleHung.length < hung.length, "hung worktrees behind a spent budget are not re-read");
+  assert.ok(settleHung.at(-1).timeoutMs < WORKTREE_PROBE_TIMEOUT_MS, "the last read gets only what the budget has left");
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "check"), [{ argv: ROOT_CHECK(healthy, ["src/add.js"]), cwd: healthy }], "the healthy worktree's change is still offered");
+  assert.equal(h.asked.length, 1);
+});
+
+test("worktrees created during the turn count against the cap at settle (#479)", async (t) => {
+  const cwd = "/repo";
+  const created = Array.from({ length: WORKTREE_PROBE_CAP + 3 }, (_, i) => `/repo-worktrees/new${i}`);
+  const clock = { now: 0 };
+  t.mock.method(Date, "now", () => clock.now);
+  const { probe, reads } = settleProbe(clock, {
+    cwd, created,
+    answers: new Map([[cwd, [snapshot({}), snapshot({})]], ...created.map((root) => [root, [snapshot({ "src/new.js": "one" })]])]),
+  });
+  const h = offerHarness({ probe, cwd });
+  await h.run("make worktrees", []);
+  assert.equal(reads.filter((r) => !r.opening && created.includes(r.dir)).length, WORKTREE_PROBE_CAP, "the cap bounds worktrees created during the turn");
+  const checks = h.calls.filter((c) => c.argv[0] === "check");
+  assert.equal(checks.length, WORKTREE_PROBE_CAP, "a capped new worktree's change is still offered");
 });
 
 test("single-root parity: the session's own root is checked exactly as before", async () => {

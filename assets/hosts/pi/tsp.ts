@@ -795,6 +795,7 @@ interface Turn {
   common: string | undefined; // the git dir this clone shares with its linked worktrees
   head: string; // the commit the turn started from, in the session's own root
   opened: Map<string, RepoSnapshot | undefined>; // each probed root as the turn found it
+  failed: Set<string>; // siblings whose opening read had no snapshot: no baseline to diff against at settle
   known: Set<string>; // every sibling root the turn already looked at, probed or past the cap
   roots: Map<string, string | null>; // directory -> the root that holds it (null: not this clone, or no repository)
   probed: boolean; // the roots were read at the start: only then can a sibling worktree be discovered at settle
@@ -914,7 +915,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   };
   /** Reads the session's own root and the clone's sibling worktrees as the turn finds them. */
   const openTurn = (cwd: string): Turn => {
-    const of: Turn = { cwd, root: ownRoot(cwd), common: probe.commonDir?.(cwd), head: turnHead, opened: new Map(), known: new Set(), roots: new Map(), probed: true };
+    const of: Turn = { cwd, root: ownRoot(cwd), common: probe.commonDir?.(cwd), head: turnHead, opened: new Map(), failed: new Set(), known: new Set(), roots: new Map(), probed: true };
     of.opened.set(of.root, readState(of.root));
     let probed = 0;
     const started = Date.now();
@@ -928,26 +929,35 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       if (probed >= WORKTREE_PROBE_CAP || spent()) continue;
       probed += 1;
       // A read may not outlive the budget either: the last one gets only what the sweep has left of it.
-      of.opened.set(sibling, readState(sibling, Math.min(WORKTREE_PROBE_TIMEOUT_MS, left())));
+      const atOpen = readState(sibling, Math.min(WORKTREE_PROBE_TIMEOUT_MS, left()));
+      of.opened.set(sibling, atOpen);
+      if (atOpen === undefined) of.failed.add(slashPath(sibling));
     }
     return of;
   };
   /** A turn no root was opened for still groups the edit tools, without paying for a snapshot it cannot offer on. */
-  const bareTurn = (cwd: string): Turn => ({ cwd, root: ownRoot(cwd), common: probe.commonDir?.(cwd), head: turnHead, opened: new Map(), known: new Set(), roots: new Map(), probed: false });
+  const bareTurn = (cwd: string): Turn => ({ cwd, root: ownRoot(cwd), common: probe.commonDir?.(cwd), head: turnHead, opened: new Map(), failed: new Set(), known: new Set(), roots: new Map(), probed: false });
   /**: every root's own snapshot diff (files left
    * in the tree and commits made during the turn), a worktree created during the turn, then the edit and write tools.
    * Only roots of this clone are kept; a path in another repository, or outside any repository, is ignored as before.
    */
   const collectByRoot = (of: Turn): Map<string, { since: string; files: Set<string> }> => {
     const groups = new Map<string, { since: string; files: Set<string> }>();
+    // The settle re-reads get their own total budget: hung worktrees cannot add up to a timeout each (#479).
+    const started = Date.now();
+    const left = (): number => WORKTREE_PROBE_BUDGET_MS - (Date.now() - started);
+    const spent = (): boolean => left() <= 0;
+    /** A sibling read is bounded by both the short timeout and what the settle sweep has left of its budget. */
+    const readSibling = (root: string): RepoSnapshot | undefined =>
+      spent() ? undefined : readState(root, Math.min(WORKTREE_PROBE_TIMEOUT_MS, left()));
     const add = (root: string, since: string, path: string): void => {
       const group = groups.get(root);
       if (group === undefined) groups.set(root, { since, files: new Set([path]) });
       else group.files.add(path);
     };
     for (const [root, snapshot] of of.opened) {
-      if (snapshot === undefined) continue;
-      const now = readState(root, root === of.root ? undefined : WORKTREE_PROBE_TIMEOUT_MS);
+      if (snapshot === undefined || of.failed.has(slashPath(root))) continue;
+      const now = root === of.root ? readState(root) : readSibling(root);
       if (now === undefined) continue;
       for (const [path, hash] of now.files) if (snapshot.files.get(path) !== hash) add(root, snapshot.head, path);
       // A work unit committed in this turn leaves no worktree change: the commits it made are its changes.
@@ -956,10 +966,13 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       }
     }
     // A worktree created during the turn was not there to open, so everything it still holds is the turn's.
+    let created = 0;
     for (const root of of.probed ? siblingRoots(of) : []) {
       if (of.known.has(slashPath(root))) continue;
       of.known.add(slashPath(root));
-      const now = readState(root, WORKTREE_PROBE_TIMEOUT_MS);
+      if (created >= WORKTREE_PROBE_CAP || spent()) continue;
+      created += 1;
+      const now = readSibling(root);
       if (now === undefined) continue;
       for (const path of now.files.keys()) add(root, "", path);
     }
