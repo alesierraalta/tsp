@@ -12,7 +12,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /** Protocol with internal/mode (Go); mode.VerifiedGentleSignal accepts only this exact pair. */
@@ -437,24 +437,85 @@ export interface OfferOptions {
 /** One reading of the working tree: the commit at its head and a digest per source file it has changed. */
 export interface RepoSnapshot { head: string; files: ReadonlyMap<string, string> }
 
+/** One linked worktree of the clone, as `git worktree list --porcelain` reports it. */
+export interface WorktreeInfo { path: string; prunable: boolean }
+
 /**
- * What the offer reads besides the edit tools: the source a shell command changed, and a work unit this turn
- * committed (which leaves no worktree change to see). Undefined means the repository could not be read.
+ * What the offer reads besides the edit tools: the source a shell command changed, a work unit this turn
+ * committed (which leaves no worktree change to see), and the clone's worktrees so delegated work is seen too.
+ * Undefined means the repository could not be read.
  */
 export interface RepoProbe {
-  state(cwd: string): RepoSnapshot | undefined;
+  state(cwd: string, opts?: { timeoutMs?: number }): RepoSnapshot | undefined;
   committed(cwd: string, from: string, to: string): readonly string[];
+  /** The worktree root that holds a directory, or undefined outside any repository. */
+  toplevel?(dir: string): string | undefined;
+  /** The git directory this clone shares with its linked worktrees. */
+  commonDir?(dir: string): string | undefined;
+  /** Every worktree of the clone; the caller skips a prunable one and caps how many it reads. */
+  worktrees?(cwd: string): readonly WorktreeInfo[];
 }
 
-/** Runs git outside the checkout, for the same reason headAt does. */
-function gitOut(cwd: string, args: readonly string[]): string | undefined {
+/** Runs git outside the checkout, for the same reason headAt does; a timeout kills a probe that hangs. */
+function gitOut(cwd: string, args: readonly string[], timeoutMs?: number): string | undefined {
   try {
     return execFileSync("git", ["-C", cwd, ...args], {
       cwd: tmpdir(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
+      ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
     });
   } catch {
     return undefined;
   }
+}
+
+/** The nearest directory that exists, so a path whose file or directory is new still resolves to a worktree root. */
+function nearestDir(dir: string): string | undefined {
+  let cur = dir;
+  for (;;) {
+    if (existsSync(cur)) return cur;
+    const up = dirname(cur);
+    if (up === cur) return undefined;
+    cur = up;
+  }
+}
+
+/** A path as git and this module compare them: forward slashes, no trailing slash. */
+const slashPath = (p: string): string => {
+  const s = p.replace(/\\/g, "/");
+  return s.length > 1 ? s.replace(/\/+$/, "") : s;
+};
+
+/** `--git-common-dir` may be relative to the worktree root on older git; resolve it the way git meant it. */
+function commonDirOf(dir: string): string | undefined {
+  const at = nearestDir(dir);
+  if (at === undefined) return undefined;
+  const absolute = gitOut(at, ["rev-parse", "--path-format=absolute", "--git-common-dir"], WORKTREE_PROBE_TIMEOUT_MS);
+  if (absolute !== undefined && absolute.trim() !== "") return slashPath(absolute.trim());
+  const value = gitOut(at, ["rev-parse", "--git-common-dir"], WORKTREE_PROBE_TIMEOUT_MS);
+  if (value === undefined || value.trim() === "") return undefined;
+  const given = value.trim();
+  // The value is relative to the directory git was asked from, which is `at`, not necessarily the worktree root:
+  // from `repo/pkg` git prints `../.git`, and resolving that against the root would name the root's parent.
+  return slashPath(isAbsolute(given) ? given : resolve(at, given));
+}
+
+/** `git worktree list --porcelain`: each worktree root, and whether git already knows it is gone. */
+function worktreesOf(cwd: string): readonly WorktreeInfo[] {
+  const out = gitOut(cwd, ["worktree", "list", "--porcelain"], WORKTREE_PROBE_TIMEOUT_MS);
+  if (out === undefined) return [];
+  const found: WorktreeInfo[] = [];
+  let current: WorktreeInfo | undefined;
+  for (const line of out.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      if (current !== undefined) found.push(current);
+      current = { path: line.slice("worktree ".length).trim(), prunable: false };
+    } else if (line.startsWith("prunable") || line.trim() === "bare") {
+      // A bare repository holds no working tree, and a prunable one is already gone: neither is probed.
+      if (current !== undefined) current.prunable = true;
+    }
+  }
+  if (current !== undefined) found.push(current);
+  return found.map((w) => (!existsSync(w.path) ? { ...w, prunable: true } : w));
 }
 
 /** The file's content, or "" when it is gone: a digest tells a turn's change from a file that was already dirty. */
@@ -477,11 +538,12 @@ export function cwdPath(prefix: string, path: string): string | undefined {
 }
 
 export const repoProbe: RepoProbe = {
-  state(cwd) {
+  state(cwd, opts) {
+    const timeoutMs = opts?.timeoutMs;
     // Porcelain status is always root-relative, whatever a user config says: read the turn's own prefix first.
-    const prefix = gitOut(cwd, ["rev-parse", "--show-prefix"]);
+    const prefix = gitOut(cwd, ["rev-parse", "--show-prefix"], timeoutMs);
     if (prefix === undefined) return undefined;
-    const out = gitOut(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    const out = gitOut(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], timeoutMs);
     if (out === undefined) return undefined;
     const files = new Map<string, string>();
     const parts = out.split("\0");
@@ -503,6 +565,15 @@ export const repoProbe: RepoProbe = {
     if (out === undefined) return [];
     return out.split("\n").map((line) => line.trim()).filter((path) => path !== "");
   },
+  toplevel(dir) {
+    const at = nearestDir(dir);
+    if (at === undefined) return undefined;
+    const out = gitOut(at, ["rev-parse", "--show-toplevel"], WORKTREE_PROBE_TIMEOUT_MS);
+    const root = out?.trim() ?? "";
+    return root === "" ? undefined : slashPath(root);
+  },
+  commonDir: commonDirOf,
+  worktrees: worktreesOf,
 };
 
 /** The commit this turn starts from, or "" when it cannot be read: a repository with no commit yet owes nothing. */
@@ -552,6 +623,11 @@ const NO_STEP: LoopStep = { message: "", fix: "" };
 export const LOOP_TYPE = "tsp-loop";
 export const LOOP_FAILURE_TYPE = "tsp-loop-error";
 export const LOOP_FAILURE_TAIL = 400;
+/** The entry every offer leaves on the session, so a shown, answered or dismissed question is visible (#472). */
+export const OFFER_TYPE = "tsp-offer";
+/** How many linked worktrees of the clone one turn reads, and how long one of them may take before it is skipped. */
+export const WORKTREE_PROBE_CAP = 20;
+export const WORKTREE_PROBE_TIMEOUT_MS = 1500;
 
 /** One failed review step, as a headless session records it: there is no chat for the notice to land in. */
 export interface LoopFailure { command: string; exit: number; output: string }
@@ -678,6 +754,50 @@ export async function feedbackRequest(cwd: string, env: Readonly<Record<string, 
   }
 }
 
+/** One worktree root's share of a turn: the commit it started from and the paths (root-relative) that changed there. */
+interface RootChanges { root: string; since: string; files: string[] }
+
+/** The merged answer of every root a turn changed, and the roots that could not answer at all. */
+export interface MergedVerdict extends Verdict { root: string; errors: readonly string[] }
+
+const DECISION_RANK = { [DECISION_NONE]: 0, [DECISION_ASK]: 1, [DECISION_REQUIRED]: 2 } as const;
+
+/**
+ * The turn's debt, one check per worktree root and the strictest answer kept: required beats ask beats none, and a
+ * root that could not answer is carried alongside instead of replacing the debt another root declared (#472).
+ */
+async function verdictForRoots(groups: readonly RootChanges[], env: Readonly<Record<string, string | undefined>>, exec: ExecTpp): Promise<MergedVerdict | "stale" | undefined> {
+  const answered = await Promise.all(groups.map(async (group) => ({ group, verdict: await checkVerdict(group.root, env, exec, group.files, group.since) })));
+  const errors: string[] = [];
+  let stale = false;
+  let best: { group: RootChanges; verdict: Verdict } | undefined;
+  for (const { group, verdict } of answered) {
+    if (verdict === undefined) continue;
+    if (verdict === "stale") { stale = true; continue; }
+    if (verdict.decision === DECISION_ERROR) { errors.push(verdict.reason); continue; }
+    if (best === undefined || DECISION_RANK[verdict.decision] > DECISION_RANK[best.verdict.decision]) best = { group, verdict };
+  }
+  if (best === undefined) {
+    if (errors.length > 0) {
+      return { decision: DECISION_ERROR, named: false, debt: "", reason: errors.find((why) => why !== "") ?? "", root: groups[0]?.root ?? "", errors };
+    }
+    return stale ? "stale" : undefined;
+  }
+  return { ...best.verdict, root: best.group.root, errors };
+}
+
+/** What the extension remembers about the turn's repository tree: the roots it read, and where each change lives. */
+interface Turn {
+  cwd: string;
+  root: string; // the worktree root that holds ctx.cwd
+  common: string | undefined; // the git dir this clone shares with its linked worktrees
+  head: string; // the commit the turn started from, in the session's own root
+  opened: Map<string, RepoSnapshot | undefined>; // each probed root as the turn found it
+  known: Set<string>; // every sibling root the turn already looked at, probed or past the cap
+  roots: Map<string, string | null>; // directory -> the root that holds it (null: not this clone, or no repository)
+  probed: boolean; // the roots were read at the start: only then can a sibling worktree be discovered at settle
+}
+
 function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   const optedOut = opts.optedOut ?? ((cwd: string) => existsSync(join(cwd, ".no-testing-gate")));
   const env = opts.env ?? process.env;
@@ -688,7 +808,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   // Read at each check, not at load: gentle-pi may register its tools after this extension.
   const checkEnv = () => childEnv(env, { kind: "check", rest: [] }, observesGentleSession(pi.getAllTools()));
   const edited = new Set<string>(); // source paths changed in the current run through the edit tools
-  let opened: RepoSnapshot | undefined; // the working tree as this run found it, read only when the offer can fire
+  let turn: Turn | undefined; // the repository tree this run found, read only when the offer can fire
   const declined = new Set<string>(); // paths the user already said No to
   let turnHead = ""; // the commit this turn started from: what --since reads the work unit against
   let staleNotified = false; // a tsp too old to answer is reported once, not once per turn
@@ -762,6 +882,100 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   };
   // /tree changes the branch under the session: its entries are the state from now on.
   pi.on("session_tree", (_event, ctx) => restore(ctx));
+  /** A snapshot read that a short timeout or a broken repository may refuse: the turn goes on without it. */
+  const readState = (root: string, timeoutMs?: number): RepoSnapshot | undefined => {
+    try { return probe.state(root, timeoutMs === undefined ? undefined : { timeoutMs }); } catch { return undefined; }
+  };
+  /** The worktree root that holds ctx.cwd; without a git reader this is the session's own directory. */
+  const ownRoot = (cwd: string): string => probe.toplevel?.(cwd) ?? cwd;
+  /** Every worktree of this clone, minus the session's own root and the ones git already reports prunable. */
+  const siblingRoots = (of: Turn): string[] => {
+    const listed = probe.worktrees?.(of.cwd) ?? [];
+    return listed
+      .filter((w) => !w.prunable && w.path.trim() !== "" && slashPath(w.path) !== slashPath(of.root))
+      .map((w) => w.path);
+  };
+  /** True when a root shares its git directory with the session's: another repository's paths are not this turn's. */
+  const sameClone = (of: Turn, root: string): boolean => {
+    if (root === of.root || of.common === undefined) return true;
+    const other = probe.commonDir?.(root);
+    if (other === undefined) return true; // a git dir that cannot be read is never a reason to drop a change
+    return slashPath(resolve(of.root, of.common)) === slashPath(resolve(root, other));
+  };
+  /** The worktree root that holds a directory, cached per turn: one git process per directory, not per path. */
+  const turnRootOf = (of: Turn, dir: string): string | undefined => {
+    if (of.roots.has(dir)) return of.roots.get(dir) ?? undefined;
+    const found = probe.toplevel?.(dir);
+    const accepted = found !== undefined && sameClone(of, found) ? found : null;
+    of.roots.set(dir, accepted);
+    return accepted ?? undefined;
+  };
+  /** Reads the session's own root and the clone's sibling worktrees as the turn finds them. */
+  const openTurn = (cwd: string): Turn => {
+    const of: Turn = { cwd, root: ownRoot(cwd), common: probe.commonDir?.(cwd), head: turnHead, opened: new Map(), known: new Set(), roots: new Map(), probed: true };
+    of.opened.set(of.root, readState(of.root));
+    let probed = 0;
+    for (const sibling of siblingRoots(of)) {
+      of.known.add(slashPath(sibling));
+      if (probed >= WORKTREE_PROBE_CAP) continue; // bounded: a clone with many worktrees costs a fixed number of reads
+      probed += 1;
+      of.opened.set(sibling, readState(sibling, WORKTREE_PROBE_TIMEOUT_MS));
+    }
+    return of;
+  };
+  /** A turn no root was opened for still groups the edit tools, without paying for a snapshot it cannot offer on. */
+  const bareTurn = (cwd: string): Turn => ({ cwd, root: ownRoot(cwd), common: probe.commonDir?.(cwd), head: turnHead, opened: new Map(), known: new Set(), roots: new Map(), probed: false });
+  /**: every root's own snapshot diff (files left
+   * in the tree and commits made during the turn), a worktree created during the turn, then the edit and write tools.
+   * Only roots of this clone are kept; a path in another repository, or outside any repository, is ignored as before.
+   */
+  const collectByRoot = (of: Turn): Map<string, { since: string; files: Set<string> }> => {
+    const groups = new Map<string, { since: string; files: Set<string> }>();
+    const add = (root: string, since: string, path: string): void => {
+      const group = groups.get(root);
+      if (group === undefined) groups.set(root, { since, files: new Set([path]) });
+      else group.files.add(path);
+    };
+    for (const [root, snapshot] of of.opened) {
+      if (snapshot === undefined) continue;
+      const now = readState(root, root === of.root ? undefined : WORKTREE_PROBE_TIMEOUT_MS);
+      if (now === undefined) continue;
+      for (const [path, hash] of now.files) if (snapshot.files.get(path) !== hash) add(root, snapshot.head, path);
+      // A work unit committed in this turn leaves no worktree change: the commits it made are its changes.
+      if (snapshot.head !== "" && now.head !== "" && now.head !== snapshot.head) {
+        for (const path of probe.committed(root, snapshot.head, now.head)) add(root, snapshot.head, path);
+      }
+    }
+    // A worktree created during the turn was not there to open, so everything it still holds is the turn's.
+    for (const root of of.probed ? siblingRoots(of) : []) {
+      if (of.known.has(slashPath(root))) continue;
+      of.known.add(slashPath(root));
+      const now = readState(root, WORKTREE_PROBE_TIMEOUT_MS);
+      if (now === undefined) continue;
+      for (const path of now.files.keys()) add(root, "", path);
+    }
+    for (const given of edited) {
+      const absolute = isAbsolute(given) ? resolve(given) : resolve(of.cwd, given);
+      // A directory no git can place (no repository, or a git reader that cannot answer) keeps the old reading: the
+      // session's own root. A path the root does not hold is dropped by the relative check below.
+      const root = turnRootOf(of, dirname(absolute)) ?? of.root;
+      const path = slashPath(relative(root, absolute));
+      if (path === "" || path === ".." || path.startsWith("../") || isAbsolute(path)) continue;
+      add(root, of.opened.get(root)?.head ?? (root === of.root ? of.head : ""), path);
+    }
+    return groups;
+  };
+  /** The groups that hold at least one path the filter keeps, ready for one check per root. */
+  const rootChanges = (groups: Map<string, { since: string; files: Set<string> }>, keep: (path: string) => boolean): RootChanges[] =>
+    [...groups].map(([root, group]) => ({ root, since: group.since, files: [...group.files].filter(keep) })).filter((group) => group.files.length > 0);
+  /** Where the loop judges this turn: the session's own root when it changed, else the root that changed most. */
+  const reviewRoot = (of: Turn | undefined, groups: Map<string, { since: string; files: Set<string> }>, fallback: string): string => {
+    if (of === undefined) return fallback;
+    if (groups.has(of.root)) return of.root;
+    let best = of.root, size = 0;
+    for (const [root, group] of groups) if (group.files.size > size) { best = root; size = group.files.size; }
+    return best;
+  };
   pi.on("before_agent_start", (event, ctx) => {
     edited.clear();
     turnHead = head(ctx.cwd);
@@ -775,7 +989,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     tspRun = !feedbackRun && !fixRun && user && (mine === "round" || mine === "commit" || isTspRequest(event.prompt));
     // A run that can never ask, or that is the TSP itself, needs no snapshot: reading git costs a process.
     // A headless session still needs it: the repository's requirement reaches the agent through the boundary.
-    opened = child || optedOut(ctx.cwd) || feedbackRun || fixRun || tspRun ? undefined : probe.state(ctx.cwd);
+    turn = child || optedOut(ctx.cwd) || feedbackRun || fixRun || tspRun ? undefined : openTurn(ctx.cwd);
   });
   pi.on("tool_result", (event, ctx) => {
     if (!feedbackRun && !fixRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) tspRun = true;
@@ -783,31 +997,15 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     const path = (event.input as { path?: unknown }).path;
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string") edited.add(path);
   });
-  /** The source paths this run changed, from the edit tools and the working tree it opened; never filtered by a decline. */
-  const collectAll = (cwd: string): string[] => {
-    const fresh = new Set(edited);
-    if (opened !== undefined) {
-      const now = probe.state(cwd);
-      if (now !== undefined) {
-        for (const [path, hash] of now.files) if (opened.files.get(path) !== hash) fresh.add(path);
-        // A work unit committed in this turn leaves no worktree change: the commits it made are its changes.
-        if (opened.head !== "" && now.head !== "" && now.head !== opened.head) {
-          for (const path of probe.committed(cwd, opened.head, now.head)) fresh.add(path);
-        }
-      }
-    }
-    return [...fresh];
-  };
-  /** The source paths this run changed, which is what the offer answers. */
-  const collect = (cwd: string): string[] => collectAll(cwd).filter(isSourcePath);
   pi.on("agent_before_settle", async (event, ctx) => {
     // Without a UI nobody can answer the offer's question, so only the repository's own requirement runs, and it
     // reaches the agent as one continuation: an aborted run never fires this boundary, a child has nobody to run
     // for, and the branch's run or this turn's continuation already answers it.
     if (ctx.hasUI || child || continued || ran || feedbackRun || fixRun || tspRun || optedOut(ctx.cwd)) return;
-    const paths = collect(ctx.cwd);
-    if (paths.length === 0) return;
-    const verdict = await checkVerdict(ctx.cwd, checkEnv(), exec, paths, turnHead);
+    if (turn === undefined) return;
+    const groups = rootChanges(collectByRoot(turn), isSourcePath);
+    if (groups.length === 0) return;
+    const verdict = await verdictForRoots(groups, checkEnv(), exec);
     if (verdict === undefined || verdict === "stale" || verdict.decision !== DECISION_REQUIRED) return;
     // The toggle decides who acts on the debt. Off there is nobody to ask in a session without a UI, so the required
     // run is not requested either: the debt stands and the human keeps deciding (#471).
@@ -820,13 +1018,17 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   });
   const settle = async (event: { aborted: boolean }, ctx: ExtensionContext) => {
     continued = false;
-    // The paths this turn changed, unfiltered: what the repository requires is read before a remembered
-    // decline is applied, because a decline answers one question and cannot silence a later policy.
-    const fresh = collect(ctx.cwd);
-    // A test the turn wrote is what a finding has to be recorded for, and collect() keeps only source paths.
-    const freshTests = collectAll(ctx.cwd).filter((p) => TEST_PATH.test(p));
+    // The paths this turn changed, unfiltered and grouped by the root that holds each: what the repository requires
+    // is read before a remembered decline is applied, because a decline answers one question and cannot silence a
+    // later policy.
+    const tree = turn ?? bareTurn(ctx.cwd);
+    const groups = collectByRoot(tree);
+    const fresh = rootChanges(groups, () => true).flatMap((group) => group.files);
+    // A test the turn wrote is what a finding has to be recorded for, and the offer keeps only source paths.
+    const freshTests = fresh.filter((path) => TEST_PATH.test(path));
+    const loopCwd = reviewRoot(tree, groups, ctx.cwd);
     edited.clear();
-    opened = undefined;
+    turn = undefined;
     if (event.aborted || child || optedOut(ctx.cwd)) { pending = ""; return; }
     // Without a UI the loop runs itself, on the same answers and bounds, and only when the automatic run is on:
     // off there is nobody to ask, so nothing is driven. With a UI the same loop runs as it always has (#471).
@@ -885,7 +1087,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       return;
     }
     if (tspRun || fixRun) {
-      const step = await reviewFindings(ctx.cwd, env, exec, notify, tspRun, showReview, logFailure);
+      const step = await reviewFindings(loopCwd, env, exec, notify, tspRun, showReview, logFailure);
       if (step.refused === undefined) logLoop?.(step); // a refusal is the commit request, not the loop's answer
       loop = step.loop;
       // The loop's own round bound decides how many continuations this session may send: two per round.
@@ -903,7 +1105,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
         commitPending = true;
         persist();
         // Only the change's tests and its tracked source may be named; an untracked secret beside them is not.
-        const stillChanged = probe.state(ctx.cwd);
+        const stillChanged = probe.state(loopCwd);
         const named = commitTargets(stillChanged === undefined ? [] : [...stillChanged.files.keys()]);
         continueLoop(commitRequest(step.refused, named), "commit");
         return;
@@ -922,11 +1124,11 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       // reader sees, so the branch is asked once to record it, and the marker is written with the notice, before
       // it goes out (#398).
       if (tspRun && !recordNudged) {
-        const count = await planFindingCount(ctx.cwd, env, exec);
+        const count = await planFindingCount(loopCwd, env, exec);
         const noticeText = count === undefined ? "" : unrecordedRunNotice(count, freshTests);
         if (noticeText !== "") { recordNudged = true; pendingRecord = noticeText; persist(); }
       }
-      const request = tspRun && !commitRun && !feedbackGiven ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
+      const request = tspRun && !commitRun && !feedbackGiven ? await feedbackRequest(loopCwd, env, exec, notify) : "";
       if (request !== "") { pending = step.message; persist(); continueLoop(request, "feedback"); return; }
       if (step.message !== "") { continueLoop(step.message, loopKind(step.message)); return; }
       // Nothing else is owed this turn, so the recording notice goes now rather than waiting for a turn that may
@@ -941,12 +1143,13 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     }
     // The offer is a question: only a human can answer it, so a session without a UI stops here.
     if (!ctx.hasUI) { pending = ""; return; }
-    const paths = fresh;
+    const sourceGroups = rootChanges(groups, isSourcePath);
+    const paths = sourceGroups.flatMap((group) => group.files);
     if (paths.length === 0) return;
     // The branch's run already happened; the check still answers ask (or required) until a round is booked, and
     // repeating the run every turn is exactly the loop #342 reports. A fresh session offers again.
     if (ran) return;
-    const verdict = await checkVerdict(ctx.cwd, checkEnv(), exec, paths, turnHead);
+    const verdict = await verdictForRoots(sourceGroups, checkEnv(), exec);
     if (verdict === "stale") {
       decision = undefined; // a check that cannot answer names no debt
       // Once per session: an install that cannot answer is worth one sentence, not one per turn.
@@ -957,14 +1160,15 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       return;
     }
     if (verdict === undefined) return;
+    // A policy that cannot be read may mean a required run was skipped: silence would hide exactly that. It is said
+    // once, and it never replaces the debt another root declared.
+    if (verdict.errors.length > 0 && !errorNotified) {
+      errorNotified = true;
+      const why = verdict.errors.find((line) => line !== "") ?? "the repository could not say whether TSP is required";
+      ctx.ui.notify(notice(`tsp check: ${why}`), "warning");
+    }
     if (verdict.decision === DECISION_ERROR) {
       decision = undefined;
-      // A policy that cannot be read may mean a required run was skipped: silence would hide exactly that.
-      if (!errorNotified) {
-        errorNotified = true;
-        const why = verdict.reason === "" ? "the repository could not say whether TSP is required" : verdict.reason;
-        ctx.ui.notify(notice(`tsp check: ${why}`), "warning");
-      }
       return;
     }
     if (verdict.decision === DECISION_NONE) { decision = DECISION_NONE; return; }
@@ -992,6 +1196,9 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     // and a No has cleared the debt by then, so without this the line never showed it at all (#404).
     paint(ctx);
     const answer = await ctx.ui.select(`${OFFER_QUESTION}\n${owed}`, [OFFER_YES, OFFER_NO]);
+    // Every offer is kept on the session, so a question that was shown and dismissed is visible to a later reading.
+    const recorded = answer === OFFER_YES ? "yes" : answer === OFFER_NO ? "no" : "dismissed";
+    pi.appendEntry(OFFER_TYPE, { debt: owed, answer: recorded });
     if (answer === OFFER_YES) {
       declined.clear();
       persist();

@@ -19,6 +19,7 @@ Pinned: Pi 1.5.0 (`pi --version`), extension at `assets/hosts/pi/tsp.ts` on `mai
 | A `required` verdict (`.tsp.json` `"gate":"always"`) runs TSP without asking | pass |
 | Source changed by `sed -i` through the `bash` tool produces the offer | pass (gap closed by #345; it was a known gap) |
 | Source changed by another process during the turn (what a delegated worker does) produces the offer | pass (gap closed by #345) |
+| Source changed only in a linked worktree outside `ctx.cwd` (the orchestrator/writer split branch isolation mandates) produces the offer, and the check is rooted at that worktree | pass (closed by #472) |
 | A file that was already dirty before the turn and not touched by it produces no offer | pass |
 | A `required` verdict in a session without a UI (`--mode json`) puts "haz el TSP — …" in front of the model exactly once | pass (gap closed by #347; fails on the extension before it) |
 | A Gentle session (a Gentle-owned tool registered, no `.tsp.json`) runs TSP without asking, with a UI | pass (fails on the extension before #418) |
@@ -47,7 +48,7 @@ Since #471 that continuation's run is followed by the loop as well, whenever the
 
 No Pi event reports what a shell command changed: `tool_result` and `tool_execution_end` for `bash` carry the command and its output only. Delegated workers run as separate `pi --mode rpc` processes, the extension disables itself there, and the parent sees only the subagent tool result. Edits made inside a `codemode` script do reach `tool_result` as nested `edit` calls, so that route is not a gap.
 
-The supported way to close it is not an event but a read: at `agent_settled`, compare the repository with a snapshot taken at `before_agent_start` and let `tsp check --json --paths ... --since <head>` answer. The extension does this since #345 (`gitWatch`), and the live harness shows the offer for a `sed -i` and for a write by another process. `tsp check --json` without `--paths` already reports a `sed -i` change, and `--since <commit>` reports a unit already committed.
+The supported way to close it is not an event but a read: at `agent_settled`, compare the repository with a snapshot taken at `before_agent_start` and let `tsp check --json --paths ... --since <head>` answer. The extension does this since #345 (`gitWatch`), and the live harness shows the offer for a `sed -i` and for a write by another process. `tsp check --json` without `--paths` already reports a `sed -i` change, and `--since <commit>` reports a unit already committed. Since #472 the read is per worktree root: a change is checked from the root that holds it (so a linked worktree outside `ctx.cwd` is no longer refused as out of repository), and the clone's other worktrees are snapshotted the same way, so a delegated worker's change left or committed in its own worktree reaches the parent's offer. `tsp check --json` without `--paths` already reports a `sed -i` change, and `--since <commit>` reports a unit already committed.
 
 ## Limits of this proof
 
