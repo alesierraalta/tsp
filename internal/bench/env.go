@@ -298,6 +298,35 @@ const (
 	agentConfigDir  = "agent-config"
 )
 
+// benchProcessEnv is the inherited base for every process a bench run starts: a fixture or catch
+// suite, or one of the agents (#481). Git stops climbing at each named directory, so neither the
+// workspace nor a suite's TMPDIR can discover a repository the operator keeps above them. Both are
+// named because a suite's own tests use t.TempDir, which is under TMPDIR, not under the workspace.
+// An inherited ceiling is replaced: a run must not inherit a directory that hides its own workspace.
+func benchProcessEnv(dir string, base []string) []string {
+	var parts []string
+	seen := map[string]bool{}
+	for _, p := range []string{filepath.Dir(dir), os.TempDir()} {
+		abs, err := filepath.Abs(p)
+		if err != nil || abs == "" || seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		parts = append(parts, abs)
+	}
+	out := make([]string, 0, len(base)+1)
+	for _, e := range base {
+		if strings.HasPrefix(e, "GIT_CEILING_DIRECTORIES=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	if len(parts) > 0 {
+		out = append(out, "GIT_CEILING_DIRECTORIES="+strings.Join(parts, string(os.PathListSeparator)))
+	}
+	return out
+}
+
 // agentEnv returns the environment for the agent process: CLAUDE_CONFIG_DIR set to cfgDir,
 // replacing any inherited value, and binDir first on PATH so the flow finds the binary under
 // test. Empty cfgDir and binDir mean "inherit unchanged".

@@ -1303,7 +1303,7 @@ func claudeArgs(prompt string, opts Options) []string {
 func claudeAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 	cmd := exec.CommandContext(ctx, "claude", claudeArgs(agentPrompt(key, opts), opts)...)
 	cmd.Dir = ws
-	cmd.Env = agentEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
+	cmd.Env = agentEnv(benchProcessEnv(ws, os.Environ()), opts.ConfigDir, opts.BinDir)
 	boundProcessTree(cmd)
 	cmd.Stdin = strings.NewReader("")
 	var out, errb bytes.Buffer

@@ -2,6 +2,7 @@ package bench
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,6 +65,65 @@ func TestCorpusSourceCasesAreComplete(t *testing.T) {
 		for _, d := range key.Defects {
 			if !strings.Contains(string(patch), "+++ b/"+d.File+"\n") {
 				t.Errorf("%s: defect %s sits in %s, which %s does not change", c, d.ID, d.File, src.Patch)
+			}
+		}
+	}
+}
+
+// An own-history fixture is this repository's tree at the fix's parent, which ships every other case's
+// answer key and the findings rows of the plan an agent is asked to write. Those answers must be declared
+// as exclusions and absent from both the fixture and fix/all, before the agent sees the tree.
+func TestCorpusOwnHistoryCasesHideOtherAnswers(t *testing.T) {
+	files, _ := filepath.Glob(filepath.Join(corpusDir(t), "o*", SourceFile))
+	if len(files) == 0 {
+		t.Fatal("no own-history source cases")
+	}
+	cache := DefaultCaseCache()
+	// The corpus gate is also read offline. Without a fetched source it checks the declaration; with one,
+	// it checks the bytes the agent would actually receive.
+	_, fetchedErr := os.Stat(filepath.Join(cache, "repos", "https_github.com_alesierraalta_tsp.git"))
+	for _, f := range files {
+		c := filepath.Dir(f)
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Error(err)
+			continue
+		}
+		var src Source
+		if err := json.Unmarshal(raw, &src); err != nil {
+			t.Errorf("%s: %v", c, err)
+			continue
+		}
+		declared := map[string]bool{}
+		for _, p := range src.Exclude {
+			declared[p] = true
+		}
+		for _, answer := range []string{"bench/cases", "docs/testing/test-plan.md"} {
+			if !declared[answer] {
+				t.Errorf("%s: %s does not exclude %s", c, filepath.Base(f), answer)
+			}
+		}
+		if fetchedErr != nil {
+			continue
+		}
+		dir, err := MaterializeCase(c, cache)
+		if err != nil {
+			t.Errorf("%s: materialize: %v", c, err)
+			continue
+		}
+		for _, tree := range []string{filepath.Join(dir, FixtureDir), filepath.Join(dir, FixDir, "all")} {
+			err := filepath.WalkDir(tree, func(path string, entry os.DirEntry, err error) error {
+				if err != nil || entry.IsDir() {
+					return err
+				}
+				rel := filepath.ToSlash(strings.TrimPrefix(path, tree+string(filepath.Separator)))
+				if rel == "docs/testing/test-plan.md" || (strings.HasPrefix(rel, "bench/cases/") && strings.HasSuffix(rel, "/KEY.json")) {
+					return fmt.Errorf("%s still carries %s", tree, rel)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Error(err)
 			}
 		}
 	}

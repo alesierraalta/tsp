@@ -352,7 +352,7 @@ func gentleReviewAgent(ctx context.Context, ws string, _ Key, opts Options) (Age
 	if model == "" {
 		model = DefaultModel(RunnerGentleReview)
 	}
-	env := append(withoutShimEnv(os.Environ()),
+	env := append(withoutShimEnv(benchProcessEnv(ws, os.Environ())),
 		"PATH="+shimDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		shimEnv+"=1", shimRealEnv+"="+realClaude, shimModelEnv+"="+model, shimLogEnv+"="+logPath)
 	runGentle := func(args ...string) ([]byte, error) {

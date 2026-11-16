@@ -1,5 +1,6 @@
 {
   "repo": "https://github.com/alesierraalta/tsp",
   "commit": "2367ff16e438be79d92324f228dda798731a9fff",
-  "patch": "fix.patch"
+  "patch": "fix.patch",
+  "exclude": ["bench/cases", "docs/testing/test-plan.md"]
 }
