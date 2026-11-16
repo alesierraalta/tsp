@@ -70,7 +70,7 @@ func runCapture(dir string, argv []string, timeout time.Duration) (int, string) 
 	_ = os.Remove(report)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+	cmd.Env = append(benchProcessEnv(dir, os.Environ()), "PYTHONDONTWRITEBYTECODE=1")
 	boundProcessTree(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf

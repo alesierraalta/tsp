@@ -20,7 +20,7 @@ import (
 func codexAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 	cmd := exec.CommandContext(ctx, "codex", codexArgs(key, opts, ws)...)
 	cmd.Dir = ws
-	cmd.Env = codexEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
+	cmd.Env = codexEnv(benchProcessEnv(ws, os.Environ()), opts.ConfigDir, opts.BinDir)
 	boundProcessTree(cmd)
 	// Codex reads extra prompt input from stdin when it is open; an empty reader ends that read.
 	cmd.Stdin = strings.NewReader("")

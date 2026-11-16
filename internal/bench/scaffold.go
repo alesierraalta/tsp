@@ -83,6 +83,7 @@ func RunSuite(ws, suite string, timeout time.Duration) (SuiteResult, error) {
 	argv := suiteArgv(ws, fields)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = ws
+	cmd.Env = benchProcessEnv(ws, os.Environ())
 	boundProcessTree(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf

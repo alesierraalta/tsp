@@ -65,7 +65,7 @@ func reviewAgent(ctx context.Context, ws string, key Key, opts Options) (AgentRe
 	cmd.Dir = ws
 	// The environment goes in before the tree is bounded: bounding adds the run's mark to it, and replacing it
 	// afterwards would drop the mark and leave the run's descendants unkillable.
-	cmd.Env = piEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
+	cmd.Env = piEnv(benchProcessEnv(ws, os.Environ()), opts.ConfigDir, opts.BinDir)
 	boundProcessTree(cmd)
 	cmd.Stdin = strings.NewReader("")
 	var out, errb bytes.Buffer

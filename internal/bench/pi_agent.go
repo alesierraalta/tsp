@@ -20,11 +20,11 @@ import (
 func piAgent(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
 	cmd := exec.CommandContext(ctx, "pi", piArgs(key, opts)...)
 	cmd.Dir = ws
-	cmd.Env = piEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
+	cmd.Env = piEnv(benchProcessEnv(ws, os.Environ()), opts.ConfigDir, opts.BinDir)
 	if opts.ConfigMode == ConfigProduct {
 		// The extension acts on the gate it reads from its children: without the observation a print-mode
 		// session has nobody to answer the offer, and the arm would measure the skill alone again.
-		cmd.Env = piProductEnv(os.Environ(), opts.ConfigDir, opts.BinDir)
+		cmd.Env = piProductEnv(benchProcessEnv(ws, os.Environ()), opts.ConfigDir, opts.BinDir)
 	}
 	boundProcessTree(cmd)
 	cmd.Stdin = strings.NewReader("")

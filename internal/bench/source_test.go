@@ -1,9 +1,11 @@
 package bench
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -79,6 +81,89 @@ func TestSourceCaseMaterializesFixtureAndFix(t *testing.T) {
 	again, err := MaterializeCase(caseDir, cache)
 	if err != nil || again != dir {
 		t.Fatalf("second materialization = %s, %v; want the cached %s", again, err, dir)
+	}
+}
+
+// sourceWithExclusions is a source case whose upstream tree also carries the answers of other cases.
+func sourceWithExclusions(t *testing.T, repo, commit, exclude string) string {
+	t.Helper()
+	dir := sourceCase(t, repo, commit)
+	writeFile(t, dir, SourceFile, `{"repo":"`+repo+`","commit":"`+commit+`","patch":"fix.patch","exclude":`+exclude+`}`)
+	return dir
+}
+
+// An exclusion is declared in SOURCE.json and applied to both sides of the case before the fixture
+// reaches the agent. The paths a case needs are kept; what was dropped is recorded beside the fixture.
+func TestSourceCaseExcludesDeclaredPaths(t *testing.T) {
+	repo, commit := upstreamRepo(t)
+	// Commit the leaked answers after upstreamRepo's base commit.
+	writeFile(t, repo, "bench/cases/o01/KEY.json", `{"id":"other"}`)
+	writeFile(t, repo, "docs/testing/test-plan.md", "| F45 | findings row |\n")
+	writeFile(t, repo, "docs/testing/keep.md", "needed by the suite\n")
+	if out, err := exec.Command("git", "-C", repo, "add", "-A").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "answers").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit = strings.TrimSpace(string(out))
+
+	caseDir := sourceWithExclusions(t, repo, commit, `["bench/cases","docs/testing/test-plan.md"]`)
+	dir, err := MaterializeCase(caseDir, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tree := range []string{filepath.Join(dir, FixtureDir), filepath.Join(dir, FixDir, "all")} {
+		if _, err := os.Stat(filepath.Join(tree, "bench", "cases")); !os.IsNotExist(err) {
+			t.Errorf("%s still carries bench/cases: %v", tree, err)
+		}
+		if _, err := os.Stat(filepath.Join(tree, "docs", "testing", "test-plan.md")); !os.IsNotExist(err) {
+			t.Errorf("%s still carries the test plan: %v", tree, err)
+		}
+		if _, err := os.Stat(filepath.Join(tree, "docs", "testing", "keep.md")); err != nil {
+			t.Errorf("%s lost the file the suite needs: %v", tree, err)
+		}
+	}
+	manifest, err := os.ReadFile(filepath.Join(dir, "source-exclusions.json"))
+	if err != nil {
+		t.Fatalf("exclusions were not recorded in the case: %v", err)
+	}
+	var dropped []string
+	if err := json.Unmarshal(manifest, &dropped); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"bench/cases", "docs/testing/test-plan.md"}
+	if !reflect.DeepEqual(dropped, want) {
+		t.Fatalf("recorded exclusions = %q, want %q", dropped, want)
+	}
+}
+
+// The exclusion is part of the case's identity: editing it must move the materialized case (and so its
+// digest) instead of silently reusing a cache built with the answers in place.
+func TestSourceDigestRecordsExclusions(t *testing.T) {
+	repo, commit := upstreamRepo(t)
+	plain, err := MaterializeCase(sourceCase(t, repo, commit), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	excluded, err := MaterializeCase(sourceWithExclusions(t, repo, commit, `["calc_test.go"]`), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(plain) == filepath.Base(excluded) {
+		t.Fatalf("both layouts hashed to %s: an exclusion did not change the case digest", filepath.Base(plain))
+	}
+}
+
+// A path that escapes the tree cannot be used to delete something outside the cache.
+func TestSourceRefusesAnExclusionOutsideTheTree(t *testing.T) {
+	repo, commit := upstreamRepo(t)
+	if _, err := MaterializeCase(sourceWithExclusions(t, repo, commit, `["../outside"]`), t.TempDir()); err == nil || !strings.Contains(err.Error(), "exclude") {
+		t.Fatalf("err = %v, want one naming the bad exclusion", err)
 	}
 }
 

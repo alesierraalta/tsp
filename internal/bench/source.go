@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -22,11 +23,16 @@ const SourceFile = "SOURCE.json"
 
 const sourceDeletionsFile = "source-deletions.json"
 
+// sourceExclusionsFile records the paths SOURCE.json told the build to drop, so a materialized case
+// says what the agent did not see.
+const sourceExclusionsFile = "source-exclusions.json"
+
 // Source is the content of SOURCE.json.
 type Source struct {
-	Repo   string `json:"repo"`   // anything git fetch accepts: a URL or, in tests, a local path
-	Commit string `json:"commit"` // the full commit whose tree is the fixture
-	Patch  string `json:"patch"`  // the fix, relative to the case directory, applied with -p1
+	Repo    string   `json:"repo"`              // anything git fetch accepts: a URL or, in tests, a local path
+	Commit  string   `json:"commit"`            // the full commit whose tree is the fixture
+	Patch   string   `json:"patch"`             // the fix, relative to the case directory, applied with -p1
+	Exclude []string `json:"exclude,omitempty"` // slash-separated paths dropped from both fixture and fix/all
 }
 
 var fullCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -69,6 +75,9 @@ func MaterializeCase(caseDir, cache string) (string, error) {
 	if src.Repo == "" || !fullCommit.MatchString(src.Commit) || src.Patch == "" {
 		return "", fmt.Errorf("%s needs repo, a full 40-hex commit and patch", SourceFile)
 	}
+	if err := validateExclusions(src.Exclude); err != nil {
+		return "", fmt.Errorf("%s: %w", SourceFile, err)
+	}
 	patch, err := os.ReadFile(filepath.Join(caseDir, filepath.Clean(src.Patch)))
 	if err != nil {
 		return "", err
@@ -77,7 +86,10 @@ func MaterializeCase(caseDir, cache string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(append(append([]byte("source-layout-v2\x00"), append(raw, 0)...), patch...))
+	// The raw SOURCE.json is hashed with the patch, so an added, removed or renamed exclusion moves the
+	// cache key and hence the corpus digest: a reading with the answers hidden is a new series. The layout
+	// tag changes too, so earlier caches built without exclusions are never silently reused.
+	sum := sha256.Sum256(append(append([]byte("source-layout-v3\x00"), append(raw, 0)...), patch...))
 	dir := filepath.Join(cache, filepath.Base(caseDir)+"-"+hex.EncodeToString(sum[:])[:cacheSuffixLen])
 	if _, err := os.Stat(filepath.Join(dir, FixDir, "all")); err != nil {
 		if err := buildSourceCase(src, patch, cache, dir); err != nil {
@@ -86,6 +98,9 @@ func MaterializeCase(caseDir, cache string) (string, error) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, sourceDeletionsFile)); err != nil {
 		return "", fmt.Errorf("source cache deletion manifest: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, sourceExclusionsFile)); err != nil {
+		return "", fmt.Errorf("source cache exclusion manifest: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, KeyFile), key, 0o644); err != nil {
 		return "", err
@@ -123,6 +138,13 @@ func buildSourceCase(src Source, patch []byte, cache, dir string) error {
 	if out, err := apply.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s does not apply to %s: %s", src.Patch, src.Commit, strings.TrimSpace(string(out)))
 	}
+	// Drop the declared answers from both sides after the patch has been applied: a patch to an excluded
+	// path is still checked, but neither tree the agent or the scorer copies carries that path.
+	for _, tree := range []string{fixture, fixed} {
+		if err := applyExclusions(tree, src.Exclude); err != nil {
+			return err
+		}
+	}
 	deleted := []string{}
 	if err := filepath.WalkDir(fixture, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
@@ -144,7 +166,35 @@ func buildSourceCase(src Source, patch []byte, cache, dir string) error {
 	if err := writeJSON(filepath.Join(tmp, sourceDeletionsFile), deleted); err != nil {
 		return err
 	}
+	if err := writeJSON(filepath.Join(tmp, sourceExclusionsFile), src.Exclude); err != nil {
+		return err
+	}
 	return os.Rename(tmp, dir)
+}
+
+// validateExclusions keeps a declared path from reaching outside the materialized tree: paths are
+// slash-separated, relative, and never name the tree itself.
+func validateExclusions(excludes []string) error {
+	for _, raw := range excludes {
+		p := path.Clean(raw)
+		if raw == "" || strings.ContainsAny(raw, "\\\x00") || path.IsAbs(raw) ||
+			p == "." || p == ".." || strings.HasPrefix(p, "../") {
+			return fmt.Errorf("exclude %q is not a path inside the tree", raw)
+		}
+	}
+	return nil
+}
+
+// applyExclusions drops declared files and subtrees from both sides of a case while it is being built,
+// before the fixture is copied anywhere an agent can read it. A path is a file or a whole directory.
+func applyExclusions(root string, excludes []string) error {
+	for _, raw := range excludes {
+		target := filepath.Join(root, filepath.FromSlash(path.Clean(raw)))
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("exclude %s: %w", raw, err)
+		}
+	}
+	return nil
 }
 
 // fetchCommit returns a bare repository under cache that holds src.Commit, fetching only that commit.
