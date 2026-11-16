@@ -14,6 +14,9 @@ import tppExtension, {
   FIX_LEAD,
   GENTLE_OBSERVATION_ENV,
   GENTLE_OBSERVATION_VALUE,
+  OFFER_TYPE,
+  WORKTREE_PROBE_CAP,
+  WORKTREE_PROBE_TIMEOUT_MS,
   observesGentleSession,
   parseTppCommand,
   statusFor,
@@ -225,7 +228,7 @@ function offerHarness(opts = {}) {
     // defaults states its own (headless-loop is off by default, and an unreadable status keeps it off).
     const featuresOn = { stdout: JSON.stringify({ features: [{ id: "auto-run", enabled: true }, { id: "headless-loop", enabled: true }] }), stderr: "", code: 0 };
     const outcome = argv[0] === "check" && argv[1] === "--cwd"
-      ? (typeof check === "function" ? check(calls.length) : check)
+      ? (typeof check === "function" ? check(calls.length, argv) : check)
       : argv[0] === "plan" && argv[1] === "count" ? opts.planCount ?? { stdout: '{"findings":1,"evidence":1}\n', stderr: "", code: 0 }
       : argv[0] === "status" ? status ?? featuresOn
       : findings[argv[1]] ?? fallback;
@@ -1696,5 +1699,194 @@ test("headless: the suggested git add quotes each path for a POSIX shell", async
     assert.equal(command, "'tests/a b.test.js' 'src/it'\\''s.js' 'src/x;touch pwned.js'", request);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #472: branch isolation puts the orchestrator in the main checkout and its writers in linked worktrees, so a turn's
+// source change is often outside ctx.cwd. A path handed to a check rooted at ctx.cwd is refused as out of repository,
+// which is why the offer went silent on 11 real sessions. The turn's paths are grouped by the worktree root that
+// holds each one and checked there, and the clone's sibling worktrees are probed so delegated work is seen too.
+
+// The check's argv for a root other than the session's own: that root as --cwd, its own commit as --since, and one
+// --paths per path relative to it.
+const ROOT_CHECK = (root, paths, since = "abc123") =>
+  ["check", "--cwd", root, "--json", ...(since === "" ? [] : ["--since", since]), ...paths.flatMap((p) => ["--paths", p])];
+
+// A clone as git reports it to the grouping and the sibling probe: `cwd` and `wt` are two worktree roots of one clone,
+// `other` is a different clone, `worktrees` is what `git worktree list --porcelain` lists, and `states` answers a
+// root's snapshot (the turn's opening read first, then its closing one).
+function cloneProbe({ cwd, wt, extra = [], states = () => undefined, other, worktrees, calls = [] } = {}) {
+  const under = (dir, root) => dir === root || dir.startsWith(`${root}/`);
+  const probe = {
+    state: (dir, opts) => { calls.push(["state", dir, opts]); return states(dir); },
+    committed: (dir, from, to) => { calls.push(["committed", dir, from, to]); return []; },
+    toplevel: (dir) => {
+      calls.push(["toplevel", dir]);
+      if (under(dir, cwd) || under(dir, wt)) return under(dir, wt) && wt !== cwd ? wt : cwd;
+      const extraRoot = extra.find((p) => under(dir, p));
+      if (extraRoot !== undefined) return extraRoot;
+      return other !== undefined && under(dir, other) ? other : undefined;
+    },
+    commonDir: (dir) => (other !== undefined && under(dir, other) ? "/other/.git" : "/repo/.git"),
+    worktrees: () => worktrees ?? [{ path: wt, prunable: false }],
+  };
+  return { probe, calls };
+}
+
+test("a source edit in a linked worktree outside the session cwd offers, checked at that worktree's root", async () => {
+  const cwd = "/repo", wt = "/repo-worktrees/wt";
+  const { probe } = cloneProbe({ cwd, wt });
+  const h = offerHarness({ probe, cwd });
+  await h.run("add a retry", [["edit", `${wt}/src/retry.js`]]);
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "check"), [{ argv: ROOT_CHECK(wt, ["src/retry.js"], ""), cwd: wt }], "the change is checked from the worktree that holds it, never from the session cwd");
+  assert.equal(h.asked.length, 1, "a linked worktree's change is the session's turn");
+  assert.deepEqual(h.sent, ["haz el TSP"]);
+});
+
+test("a linked worktree that requires TSP gets the run without asking", async () => {
+  const cwd = "/repo", wt = "/repo-worktrees/wt";
+  const { probe } = cloneProbe({ cwd, wt });
+  const h = offerHarness({ probe, cwd, check: requiredVerdict("no test was added or changed with it") });
+  await h.run("add a retry", [["edit", `${wt}/src/retry.js`]]);
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "check"), [{ argv: ROOT_CHECK(wt, ["src/retry.js"], ""), cwd: wt }]);
+  assert.deepEqual(h.asked, [], "the repository already answered");
+  assert.deepEqual(h.sent, ["haz el TSP"]);
+});
+
+test("a delegated change left in a sibling worktree offers without any edit tool call", async () => {
+  const cwd = "/repo", wt = "/repo-worktrees/wt";
+  const queues = new Map([[cwd, [snapshot({}), snapshot({})]], [wt, [snapshot({ "src/add.js": "one" }), snapshot({ "src/add.js": "two" })]]]);
+  const { probe } = cloneProbe({ cwd, wt, states: (dir) => queues.get(dir)?.shift() });
+  const h = offerHarness({ probe, cwd });
+  await h.run("delegate the retry", []);
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "check"), [{ argv: ROOT_CHECK(wt, ["src/add.js"]), cwd: wt }], "the worktree's own snapshot diff is the turn's change");
+  assert.equal(h.asked.length, 1, "work a subagent left in its worktree is this session's turn");
+});
+
+test("an error in one worktree never hides another worktree's debt", async () => {
+  const cwd = "/repo", wt = "/repo-worktrees/wt";
+  const { probe } = cloneProbe({ cwd, wt });
+  const h = offerHarness({ probe, cwd, check: (_n, argv) => argv[2] === wt ? errorVerdict("the plan declaration could not be read") : askVerdict("run m1: layers swept: 1 of 3") });
+  await h.run("change both", [["edit", "a.go"], ["edit", `${wt}/b.js`]]);
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "check").map((c) => c.argv[2]).sort(), [cwd, wt], "each root is checked in its own place");
+  assert.equal(h.asked.length, 1, "the ask from one root still reaches the human");
+  assert.match(h.asked[0].title, /layers swept/, "the debt that was named is what the question shows");
+  assert.deepEqual(h.notes.filter((n) => n.type === "warning").map((n) => n.message), ["tsp check: the plan declaration could not be read"], "the root that could not answer is reported once, without silencing the debt");
+});
+
+test("a path in another repository is ignored, never checked and never answered as debt", async () => {
+  const cwd = "/repo", other = "/other";
+  const { probe } = cloneProbe({ cwd, wt: "/repo-worktrees/wt", other });
+  const h = offerHarness({ probe, cwd });
+  await h.run("touch another checkout", [["edit", `${other}/src/x.js`]]);
+  assert.deepEqual(h.calls, [], "a repository the session is not in is never checked");
+  assert.deepEqual(h.asked, []);
+  const mixed = offerHarness({ probe, cwd });
+  await mixed.run("change both", [["edit", `${other}/src/x.js`], ["edit", "src/a.js"]]);
+  assert.deepEqual(mixed.calls.filter((c) => c.argv[0] === "check"), [{ argv: ROOT_CHECK(cwd, ["src/a.js"]), cwd }], "the same clone's path is still checked, and the other repository's is dropped");
+});
+
+test("the sibling probe is bounded: prunable worktrees skipped, at most the cap probed", async () => {
+  const cwd = "/repo";
+  const many = Array.from({ length: WORKTREE_PROBE_CAP + 5 }, (_, i) => ({ path: `/repo-worktrees/w${i}`, prunable: false }));
+  const states = [];
+  const { probe } = cloneProbe({ cwd, wt: many[0].path, states: (dir) => { states.push(dir); return undefined; }, worktrees: [{ path: "/gone", prunable: true }, { path: "", prunable: false }, ...many] });
+  const h = offerHarness({ probe, cwd });
+  await h.run("just looking", []);
+  const siblings = states.filter((dir) => dir !== cwd);
+  assert.equal(siblings.length, WORKTREE_PROBE_CAP, "the cap bounds how many worktrees a turn probes");
+  assert.ok(!siblings.includes("/gone"), "a prunable worktree is never probed");
+  assert.ok(siblings.every((dir) => dir !== ""), "an empty worktree path is never probed");
+});
+
+test("a sibling probe that cannot answer in time is skipped, and the rest of the turn is still offered", async () => {
+  const cwd = "/repo", slow = "/repo-worktrees/slow";
+  const probed = [];
+  const { probe } = cloneProbe({ cwd, wt: slow, states: (dir) => { probed.push(dir); if (dir === slow) throw Object.assign(new Error("ETIMEDOUT"), { code: "ETIMEDOUT" }); return undefined; }, worktrees: [{ path: slow, prunable: false }] });
+  const h = offerHarness({ probe, cwd });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.ok(probed.includes(slow), "the worktree was probed");
+  assert.equal(h.asked.length, 1, "a worktree that times out does not take the turn down with it");
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "check"), [{ argv: ROOT_CHECK(cwd, ["a.go"]), cwd }]);
+});
+
+test("every sibling probe states its own short timeout", async () => {
+  const cwd = "/repo", wt = "/repo-worktrees/wt";
+  const { probe, calls } = cloneProbe({ cwd, wt });
+  const h = offerHarness({ probe, cwd });
+  await h.run("just looking", []);
+  const sibling = calls.filter((c) => c[0] === "state" && c[1] === wt);
+  assert.ok(sibling.length >= 1, "the sibling worktree was probed");
+  assert.ok(sibling.every((c) => c[2]?.timeoutMs === WORKTREE_PROBE_TIMEOUT_MS), "a sibling probe is bounded by the short timeout");
+  const own = calls.filter((c) => c[0] === "state" && c[1] === cwd);
+  assert.ok(own.length >= 1 && own.every((c) => c[2] === undefined), "the session's own repository is probed as before");
+});
+
+test("single-root parity: the session's own root is checked exactly as before", async () => {
+  const cwd = "/repo";
+  const { calls, probe } = cloneProbe({ cwd, wt: cwd, worktrees: [{ path: cwd, prunable: false }] });
+  const h = offerHarness({ probe, cwd });
+  await h.run("change a", [["edit", "a.go"]]);
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "check"), [{ argv: CHECK(["a.go"]), cwd }], "one root, one check, the same argv the single-root extension sent");
+  assert.equal(calls.filter((c) => c[0] === "state").length, 1, "a start snapshot that could not be read is not read again: the edit tools decide, as before");
+});
+
+test("every offer is kept on the session, answered yes, no or dismissed", async () => {
+  for (const [answer, recorded] of [["Sí", "yes"], ["No", "no"], [undefined, "dismissed"]]) {
+    const h = offerHarness({ answer });
+    await h.run("change a", [["edit", "a.go"]]);
+    const offers = h.entries.filter((e) => e.customType === OFFER_TYPE);
+    assert.deepEqual(offers.map((e) => e.data), [{ debt: "run m1: layers swept: 1 of 3", answer: recorded }], `answer ${String(answer)}`);
+  }
+});
+
+test("headless: a required verdict from a linked worktree still asks the model to run TSP", async () => {
+  const cwd = "/repo", wt = "/repo-worktrees/wt";
+  const { probe } = cloneProbe({ cwd, wt });
+  const h = offerHarness({ hasUI: false, probe, cwd, check: requiredVerdict("no test was added or changed with it") });
+  const proposal = await h.run("delegate the retry", [["edit", `${wt}/src/a.js`]]);
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "check"), [{ argv: ROOT_CHECK(wt, ["src/a.js"], ""), cwd: wt }]);
+  assert.equal(proposal?.continue, true);
+  assert.equal(proposal?.entries?.at(-1)?.content, "haz el TSP");
+});
+
+test("a TSP run whose change lives in a linked worktree records and asks next there", async () => {
+  const cwd = "/repo", wt = "/repo-worktrees/wt";
+  const { probe } = cloneProbe({ cwd, wt });
+  const h = offerHarness({ probe, cwd, findings: { record: { stdout: "F1 recorded src/a_test.js TestA\n", stderr: "", code: 0 }, next: FIX_REPLY("t1") } });
+  await h.run("haz el TSP", [["edit", `${wt}/src/a_test.js`]]);
+  const findings = h.calls.filter((c) => c.argv[0] === "findings");
+  assert.deepEqual(findings.map((c) => c.cwd), [wt, wt], "the loop judges the tree the run changed, wherever that worktree lives");
+  assert.deepEqual(findings[0].argv, ["findings", "record", "--cwd", wt]);
+  assert.deepEqual(findings[1].argv, ["findings", "next", "--cwd", wt, "--json"]);
+});
+
+// The grouping asks git where a path lives, which clone it shares and which worktrees the clone has; the live
+// harness covers the offer end to end, and this pins the three reads it depends on against a real repository.
+test("the git probe names a path's worktree root, the clone it shares, and the clone's worktrees", () => {
+  const base = mkdtempSync(join(tmpdir(), "tsp-worktrees-"));
+  const dir = join(base, "repo"), linked = join(base, "wt");
+  const git = (at, ...args) => childProcess.execFileSync("git", ["-C", at, ...args], { encoding: "utf8" });
+  try {
+    mkdirSync(dir);
+    git(dir, "init", "-q");
+    git(dir, "config", "user.email", "t@example.test");
+    git(dir, "config", "user.name", "t");
+    mkdirSync(join(dir, "pkg"));
+    writeFileSync(join(dir, "pkg", "a.go"), "package a\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "one");
+    git(dir, "worktree", "add", "-q", linked, "-b", "wt");
+    assert.equal(gitProbe.toplevel(join(dir, "pkg")), dir, "a directory inside the clone names its worktree root");
+    assert.equal(gitProbe.toplevel(linked), linked, "a linked worktree is a root of its own");
+    assert.equal(gitProbe.toplevel(join(base, "outside")), undefined, "a directory outside any repository has no root");
+    assert.equal(gitProbe.commonDir(linked), gitProbe.commonDir(dir), "a linked worktree shares its clone's git directory");
+    assert.equal(gitProbe.commonDir(dir), gitProbe.commonDir(join(dir, "pkg")), "a subdirectory names the same clone");
+    assert.deepEqual(gitProbe.worktrees(dir).filter((w) => !w.prunable).map((w) => w.path).sort(), [dir, linked].sort(), "both worktrees of the clone are listed");
+    rmSync(linked, { recursive: true, force: true });
+    const gone = gitProbe.worktrees(dir).find((w) => w.path === linked);
+    assert.equal(gone?.prunable, true, "a worktree whose directory is gone is prunable, so the turn does not probe it");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
   }
 });

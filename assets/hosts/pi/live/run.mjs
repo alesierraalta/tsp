@@ -79,6 +79,12 @@ const CASES = [
   { name: "offer fires for a source change made by another process (a delegated worker)",
     script: [{ tool: "bash", args: { command: "node -e \"require('fs').writeFileSync('src/add.js','export const add=(a,b)=>a+b+1\\n')\"" } }, text()],
     prompts: ["change it"], answer: () => "No", want: (r) => offers(r).length === 1 },
+  // #472: the orchestrator sits in the main checkout while its writers work in linked worktrees. The change is
+  // outside ctx.cwd, and a check rooted there refuses it as out of repository; the extension groups it by the
+  // worktree that holds it and checks it there, so the offer fires for what the delegate left behind.
+  { name: "offer fires for a source change left in a linked worktree outside the session cwd (#472)", worktree: true,
+    script: [{ tool: "bash", args: { command: "node -e \"require('fs').writeFileSync('../wt/src/add.js','export const add=(a,b)=>a+b+1\\n')\"" } }, text()],
+    prompts: ["delegate the change"], answer: () => "No", want: (r) => offers(r).length === 1 && r.tspCalls.some((c) => c.startsWith("check --cwd ") && c.includes("/wt --json")) },
   { name: "no offer for a file that was dirty before the turn and not touched by it", dirty: { "src/add.js": "export const add = (a, b) => a + b // earlier work\n" },
     script: [text("nothing to change")], prompts: ["explain it"], answer: () => "No", want: (r) => offers(r).length === 0 && checks(r) === 0 },
   { name: "a required verdict without a UI asks the model to run TSP, once", mode: "json", files: { ".tsp.json": '{"gate":"always"}\n' },
@@ -154,6 +160,9 @@ function sandbox(c) {
   const git = (...a) => execFileSync("git", ["-C", repo, ...a], { stdio: "ignore" });
   git("init", "-q"); git("config", "user.email", "live@example.test"); git("config", "user.name", "live");
   git("add", "-A"); git("commit", "-qm", "init");
+  // A linked worktree outside the checkout, the way branch isolation gives a writer its own tree (#472).
+  const worktree = join(dir, "wt");
+  if (c.worktree) git("worktree", "add", "-q", worktree, "-b", "wt");
   for (const [name, body] of Object.entries(c.dirty ?? {})) writeFileSync(join(repo, name), body); // left uncommitted: earlier work
   // A logging wrapper: the extension runs `tsp` from PATH, and this is how a silent extension is told from a broken
   // one. A case may script the answers of the subcommands the loop reads (`tsp`), so a loop continuation is observed
@@ -170,7 +179,7 @@ function sandbox(c) {
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: agent, XDG_CONFIG_HOME: join(dir, "xdg"),
     PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_LIVE_SCRIPT: JSON.stringify(c.script) };
   delete env.GENTLE_PI_AGENTS_CHILD;
-  return { dir, repo, log, env };
+  return { dir, repo, worktree, log, env };
 }
 
 const BASE_FLAGS = ["--no-extensions", ...(process.env.PI_LIVE_WITHOUT_TSP ? [] : ["--extension", process.env.PI_LIVE_EXTENSION ?? join(PI_DIR, "tsp.ts")]), "--extension", join(HERE, "scripted-model.ts"),
@@ -256,7 +265,8 @@ for (const c of CASES.filter((x) => !filter || x.name.includes(filter))) {
   }
   // A case only counts when the session ran AND the repository really changed: a sed that matched nothing would fake a gap.
   r.seen = readLines(join(sb.dir, "seen.jsonl")).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
-  r.changed = execFileSync("git", ["-C", sb.repo, "status", "--porcelain"], { encoding: "utf8" });
+  r.changed = [execFileSync("git", ["-C", sb.repo, "status", "--porcelain"], { encoding: "utf8" }),
+    ...(c.worktree ? [execFileSync("git", ["-C", sb.worktree, "status", "--porcelain"], { encoding: "utf8" })] : [])].join("\n");
   // A case may commit what it changed, so the repository really changed even with a clean tree (one commit above init).
   r.commits = Number(execFileSync("git", ["-C", sb.repo, "rev-list", "--count", "HEAD"], { encoding: "utf8" }).trim()) - 1;
   const ran = r.settled > 0 && (r.changed.includes("src/") || r.commits > 0);
