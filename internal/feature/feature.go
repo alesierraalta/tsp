@@ -19,6 +19,11 @@ type Feature struct {
 	Default bool   // false: opt-in
 }
 
+// The ids a caller may name without duplicating a declaration's string.
+const (
+	HeadlessLoopID = "headless-loop"
+)
+
 var declarations = []Feature{
 	{
 		ID:      "feedback",
@@ -35,6 +40,16 @@ var declarations = []Feature{
 		Help:    "On, a required verdict starts the run; off, it asks first. A repository that leaves the decision to you is never affected.",
 		Preview: "With the automatic run off, a required verdict asks the same question a repository that leaves the decision to you asks: Sí runs TSP, No declines it for that file.",
 		Default: true,
+	},
+	{
+		// Opt-in: the hard23 A/B of the headless loop read flat recall (70/91) at +91% cost, so driving the loop is
+		// a session's own choice, never something every headless session pays for.
+		ID:      HeadlessLoopID,
+		Title:   "Headless TSP loop",
+		Prompt:  "¿Quieres que una sesión sin interfaz arregle y vuelva a verificar sola lo que TSP encuentre?",
+		Help:    "Driving fix, round and record with no UI costs more model turns: the loop is bounded at twice its round limit.",
+		Preview: "On, a session without a UI keeps driving the TSP loop itself: it sends the fix, round and record continuations (and asks the agent to commit), at most twice the loop's round limit per session, so it costs more model turns. Off, a session without a UI stops after the TSP run.",
+		Default: false,
 	},
 }
 

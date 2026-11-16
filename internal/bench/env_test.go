@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/alesierraalta/tsp/internal/assets"
+	"github.com/alesierraalta/tsp/internal/feature"
 )
 
 // A benchmark case must measure the testing skills, not whatever else the machine's global
@@ -454,6 +455,50 @@ func TestClaudeArgsKeepAnIsolatedRunToItsOwnConfig(t *testing.T) {
 	for _, want := range []string{"-p prompt", "--output-format stream-json", "--max-turns 5", "--permission-mode bypassPermissions"} {
 		if !strings.Contains(inherited, want) {
 			t.Fatalf("args = %q, want %q", inherited, want)
+		}
+	}
+}
+
+// The product arm measures the product as configured, and the headless loop is opt-in, so the arm has to turn it on
+// in the throwaway state root it owns — the same <agent config>/home/.config/tsp piProductEnv pins as TSP_HOME, which
+// internal/state reads. Nothing of the operator's is touched, and the rest of the state file survives.
+func TestTheProductArmEnablesTheHeadlessLoopInItsOwnStateRoot(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "pi")
+	root := filepath.Join(cfg, IsolatedHomeDir, ".config", "tsp")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A state entry an earlier configuration carried: the loop toggle is added, nothing else is lost.
+	existing := `{"schemaVersion":1,"features":{"feedback":{"enabled":true}}}`
+	if err := os.WriteFile(filepath.Join(root, "state.json"), []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnableProductLoop(cfg); err != nil {
+		t.Fatalf("EnableProductLoop: %v", err)
+	}
+	// The root it wrote is the one the product env pins for the extension's own children.
+	env := piProductEnv([]string{"PATH=/bin"}, cfg, "")
+	if got := envValues(env, "TSP_HOME"); !reflect.DeepEqual(got, []string{root}) {
+		t.Fatalf("TSP_HOME = %v, want %s", got, root)
+	}
+	t.Setenv("TSP_HOME", root)
+	if enabled, err := feature.Enabled(feature.HeadlessLoopID); err != nil || !enabled {
+		t.Fatalf("headless-loop = %v, %v; the product arm must turn it on", enabled, err)
+	}
+	if enabled, err := feature.Enabled("feedback"); err != nil || !enabled {
+		t.Fatalf("feedback = %v, %v; an existing toggle must survive", enabled, err)
+	}
+}
+
+// A loop reading and one that never drove the loop are different instruments: the product arm records that it turned
+// the feature on, so compare refuses the pair instead of reading the loop's turns as noise.
+func TestAProductReadingRecordsTheHeadlessLoop(t *testing.T) {
+	if p := provenanceForRun(Options{ConfigMode: ConfigProduct}, "sha256:corpus", 1); !p.HeadlessLoop {
+		t.Fatal("a product reading must record that it enabled the headless loop")
+	}
+	for _, mode := range []string{ConfigBench, ConfigBenchAll, ConfigNone} {
+		if p := provenanceForRun(Options{ConfigMode: mode}, "sha256:corpus", 1); p.HeadlessLoop {
+			t.Fatalf("%s: a reading without the extension must not claim the headless loop", mode)
 		}
 	}
 }

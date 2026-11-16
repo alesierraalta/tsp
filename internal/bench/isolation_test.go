@@ -244,6 +244,22 @@ func TestPiProductEnvAnswersTheOfferAndDropsTheParentSession(t *testing.T) {
 	if got := envValues(product, "HOME"); !reflect.DeepEqual(got, []string{filepath.Join(cfg, IsolatedHomeDir)}) {
 		t.Fatalf("HOME = %v, want the config's own home", got)
 	}
+	// The extension's own `tsp` children resolve their state root from these (internal/state/state.go Root),
+	// so an inherited one would make a product run read and write the operator's findings registry (#471).
+	withState := append(append([]string{}, base...), "TSP_HOME=/operator/tsp", "TPP_HOME=/operator/tpp", "RDD_PLUS_HOME=/operator/rdd")
+	product = piProductEnv(withState, cfg, "/build")
+	if got := envValues(product, "TSP_HOME"); !reflect.DeepEqual(got, []string{filepath.Join(cfg, IsolatedHomeDir, ".config", "tsp")}) {
+		t.Fatalf("TSP_HOME = %v, want the run's own state root", got)
+	}
+	for _, key := range []string{"TPP_HOME", "RDD_PLUS_HOME"} {
+		if got := envValues(product, key); len(got) != 0 {
+			t.Fatalf("%s = %v, want the operator's dropped", key, got)
+		}
+	}
+	// No config dir means no throwaway home to pin: whatever the process inherited stays as it was.
+	if got := envValues(piProductEnv(withState, "", ""), "TSP_HOME"); !reflect.DeepEqual(got, []string{"/operator/tsp"}) {
+		t.Fatalf("TSP_HOME = %v without a config dir, want the inherited root untouched", got)
+	}
 	// A bench or bare run declares nothing: the extension does not run there, and an inherited observation would
 	// change what the agent's own `tsp check` answers about the case.
 	for _, mode := range []string{ConfigBench, ConfigBenchAll, ConfigNone} {

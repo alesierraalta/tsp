@@ -203,6 +203,52 @@ export const TSP_PROMPT = "haz el TSP";
 export const FEEDBACK_LEAD = "The TSP run has ended. Record honest feedback on it.";
 export const FIX_LEAD = "The TSP loop found defects to settle.";
 export const ROUND_LEAD = `${TSP_PROMPT} — `;
+// The loop judges commits, so `findings record` and `findings next` refuse an uncommitted tree (#471):
+// internal/findings/loop.go errDirtyRecord ("commit them, then record, so the loop judges a commit") and
+// errDirtyNext ("commit the fix, then run `tsp findings next`"), printed as "tsp findings: <that>" by failure().
+export const DIRTY_TREE_REFUSAL = /the working tree has uncommitted changes: (commit them, then record, so the loop judges a commit|commit the fix, then run `tsp findings next`)/;
+const HEADLESS_CAP_FACTOR = 2; // two continuations per round of the loop's own bound
+const HEADLESS_FALLBACK_CAP = 10; // used until an answer carries the loop's own bound
+export const COMMIT_LEAD = "The TSP loop cannot judge an uncommitted working tree.";
+/** What a session without a UI sends when the loop cannot judge the tree: commit what the run wrote, then it records. */
+export function commitRequest(refused: string, paths: readonly string[]): string {
+  // A model may simply obey this, so it names only what the loop is allowed to commit: naming every changed path
+  // would put an untracked secret beside the work into the instruction, and a blanket add into the commit.
+  const named = paths.length === 0
+    ? "Commit the tests this run wrote together with the source changes they pin, and nothing else."
+    : `Commit exactly these paths, and nothing else: ${paths.join(", ")}. Run \`git add -- ${paths.map(shellQuote).join(" ")}\` and then \`git commit -m "<why>"\`.`;
+  return `${COMMIT_LEAD} ${named} Never \`git add -A\` or \`git commit -a\`, and leave every other file untouched. ` +
+    `The loop judges commits, so once they are committed the loop records the round and asks next.\n\n${refused}`;
+}
+
+// A path a commit request may never name, whatever its extension: a key, or a directory that holds secrets.
+const SECRET_PATH = /(^|\/)(id_rsa[^/]*|id_ed25519[^/]*)|[.](pem|key|p12|pfx|jks|keystore)$/i;
+const SECRET_DIRS = new Set(["secrets"]);
+
+/** True for a changed path the loop may put in a commit: a test, or a source file, but never a dotfile or a secret. */
+export function committablePath(path: string): boolean {
+  const p = path.replace(/\\/g, "/");
+  const parts = p.split("/");
+  const base = parts[parts.length - 1] ?? p;
+  if (base.startsWith(".")) return false;
+  if (SECRET_PATH.test(p) || parts.slice(0, -1).some((part) => SECRET_DIRS.has(part))) return false;
+  return TEST_PATH.test(p) || isSourcePath(p);
+}
+
+/**
+ * The paths a commit request may name: the change's test files and the source it modified or added — tracked or new,
+ * because a fix that adds a file is the same change as one that edits it. Tests first: the loop records what they pin.
+ */
+export function commitTargets(changed: readonly string[]): string[] {
+  return changed
+    .filter(committablePath)
+    .sort((a, b) => Number(TEST_PATH.test(b)) - Number(TEST_PATH.test(a)));
+}
+
+/** A path as a POSIX shell word: single quotes, with every embedded quote closed, escaped and reopened. */
+export function shellQuote(path: string): string {
+  return `'${path.replace(/'/g, "'\\''")}'`;
+}
 
 const SOURCE_EXT = /\.(go|ts|tsx|js|jsx|mjs|cjs|py|rs|java|kt|rb|php|cs|c|cc|cpp|h|hpp|swift|scala|sh)$/;
 const TEST_PATH = /(^|\/)(tests?|__tests__|testdata|e2e|spec)\/|_test\.(go|py)$|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$/;
@@ -241,7 +287,7 @@ const FILE_READER = /^\s*(cat|head|tail|less|more|bat|sed)\s/;
 const isTspRequest = (prompt: string | undefined): boolean =>
   SKILL_BLOCK.test(prompt ?? "") || (prompt ?? "").trim().toLowerCase() === TSP_PROMPT.toLowerCase();
 /** Which of its own messages the extension last sent: only that exact text is a feedback run, a fix run or a round. */
-type OwnMessage = { prompt: string; kind: "feedback" | "fix" | "round" | "record" };
+type OwnMessage = { prompt: string; kind: "feedback" | "fix" | "round" | "record" | "commit" };
 const loopKind = (message: string): OwnMessage["kind"] => (message.startsWith(FIX_LEAD) ? "fix" : "round");
 function isLoadedSkill(path: string, cwd: string): boolean {
   if (!SKILL_FILE.test(path)) return false;
@@ -312,26 +358,33 @@ async function checkVerdict(cwd: string, env: Readonly<Record<string, string | u
 // What a tsp that predates `check --json` prints instead of a verdict: the flag parser's own words, never a check's.
 const STALE_CHECK = /flag provided but not defined|unknown flag|invalid option/i;
 
-// The automatic run is a toggle, not a verdict: `required` names the debt, and this says whether the
-// extension may act on it without asking. An unreadable answer keeps the shipped behaviour (act).
+// The features are toggles, not verdicts: `required` names the debt, and these say who may act on it. An unreadable
+// answer keeps each shipped default: auto-run acts (as it always has) and the headless loop stays off, because it is
+// opt-in and spends the session's turns (#471).
 const AUTO_RUN_FEATURE = "auto-run";
-async function autoRunEnabled(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp): Promise<boolean> {
+const HEADLESS_LOOP_FEATURE = "headless-loop";
+interface Features { autoRun: boolean; headlessLoop: boolean }
+async function readFeatures(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp): Promise<Features> {
+  const shipped: Features = { autoRun: true, headlessLoop: false };
   let result: ExecResult;
   try {
     result = await exec(["status", "--json"], { cwd, env: { ...env } });
   } catch {
-    return true;
+    return shipped;
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(result.stdout.trim());
   } catch {
-    return true;
+    return shipped;
   }
   const report = (parsed ?? {}) as { features?: unknown };
-  if (!Array.isArray(report.features)) return true;
-  const entry = report.features.find((item) => (item as { id?: unknown }).id === AUTO_RUN_FEATURE) as { enabled?: unknown } | undefined;
-  return entry === undefined ? true : entry.enabled === true;
+  if (!Array.isArray(report.features)) return shipped;
+  const on = (id: string, fallback: boolean): boolean => {
+    const entry = report.features.find((item) => (item as { id?: unknown }).id === id) as { enabled?: unknown } | undefined;
+    return entry === undefined ? fallback : entry.enabled === true;
+  };
+  return { autoRun: on(AUTO_RUN_FEATURE, shipped.autoRun), headlessLoop: on(HEADLESS_LOOP_FEATURE, shipped.headlessLoop) };
 }
 
 export interface Verdict {
@@ -485,12 +538,31 @@ export function statusFor(decision: string | undefined, loop: LoopStatus | undef
 }
 
 /** What the offer remembers on the session branch: a reload, a resume or a fork rebuilds exactly this. */
-interface OfferState { declined: string[]; lastFix: string; pending: string; ran: boolean; recordNudged: boolean; own?: OwnMessage; loop?: LoopStatus }
+interface OfferState {
+  declined: string[]; lastFix: string; pending: string; ran: boolean; recordNudged: boolean;
+  own?: OwnMessage; loop?: LoopStatus;
+  continues?: number; cap?: number; commitPending?: boolean; // the headless loop's own brake, kept with the loop
+}
 const STATE_TYPE = "tsp-state";
 
 /** What the loop sends the agent next ("" for nothing) and, for a fix answer, the tree and message that identify it. */
-export interface LoopStep { message: string; fix: string; loop?: LoopStatus }
+export interface LoopStep { message: string; fix: string; loop?: LoopStatus; refused?: string; answer?: LoopAnswer }
 const NO_STEP: LoopStep = { message: "", fix: "" };
+
+export const LOOP_TYPE = "tsp-loop";
+export const LOOP_FAILURE_TYPE = "tsp-loop-error";
+export const LOOP_FAILURE_TAIL = 400;
+
+/** One failed review step, as a headless session records it: there is no chat for the notice to land in. */
+export interface LoopFailure { command: string; exit: number; output: string }
+/** What `tsp findings next` answered: the loop's own word, kept on a headless run's branch. */
+export type LoopAnswer = "fix" | "tsp" | "done" | "stop" | "error";
+
+/** The entry a headless session keeps for a review that failed: what ran, how it ended and the tail of what it said. */
+export function loopFailure(command: string, exit: number, output: string): LoopFailure {
+  const seen = output.trim();
+  return { command, exit, output: seen.length <= LOOP_FAILURE_TAIL ? seen : "…" + seen.slice(-LOOP_FAILURE_TAIL) };
+}
 
 /**
  * Records the TSP run's witnesses (a record that cannot run stops there), asks `tsp findings next` what the loop owes,
@@ -507,9 +579,11 @@ export async function planFindingCount(cwd: string, env: Readonly<Record<string,
   } catch { return undefined; }
 }
 
-export async function reviewFindings(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, notify: Notify, record = true, show?: (text: string | undefined) => void): Promise<LoopStep> {
+export async function reviewFindings(cwd: string, env: Readonly<Record<string, string | undefined>>, exec: ExecTpp, notify: Notify, record = true, show?: (text: string | undefined) => void, log?: (failure: LoopFailure) => void): Promise<LoopStep> {
   const run = (sub: string, args: string[] = []) => exec(["findings", sub, "--cwd", cwd, ...args], { cwd, env: { ...env } });
   const shown = (r: ExecResult) => notice(r.stdout.trim() || r.stderr.trim() || `tsp findings: exited ${r.code}`);
+  // What a child printed, in its own words: stderr first, because that is where a runner puts why it failed.
+  const printed = (r: ExecResult) => [r.stderr.trim(), r.stdout.trim()].filter(Boolean).join("\n");
   // A review too long for a toast is shown whole in the panel; the toast keeps the verdict and says where it is.
   const showOrNotify = (text: string, type: "info" | "warning" | "error") => {
     if (show !== undefined && text.trim().length > MAX_NOTICE) { show(text); notify(`tsp findings: the whole review is in the panel`, type); return; }
@@ -518,7 +592,16 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
   try {
     if (record) {
       const recorded = await run("record");
-      if (recorded.code !== 0 && recorded.code !== 1) { notify(shown(recorded), "error"); return NO_STEP; }
+      if (recorded.code !== 0 && recorded.code !== 1) {
+        const said = shown(recorded);
+        notify(said, "error");
+        // An uncommitted tree is not a judgment that failed: it is a step somebody has to take. With a UI the human
+        // reads this and commits; without one the caller asks the agent to (#471).
+        if (DIRTY_TREE_REFUSAL.test(said)) return { message: "", fix: "", refused: said };
+        // Anything else is a judgment that failed, and a session without a UI has nowhere to show it (#471).
+        log?.(loopFailure("findings record", recorded.code, printed(recorded) || said));
+        return NO_STEP;
+      }
     }
     const result = await run("next", ["--json"]);
     let parsed: unknown;
@@ -537,6 +620,8 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
       }
       const diagnostic = [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n");
       const why = diagnostic === "" ? `tsp findings next: exited ${result.code} with no answer` : `tsp findings next: ${diagnostic}`;
+      // A failed judgment is the one thing a headless session must not lose: it is where the loop died.
+      log?.(loopFailure("findings next --json", result.code, diagnostic === "" ? why : diagnostic));
       showOrNotify(`${why}\n${shownReview}`, "error");
       return NO_STEP;
     }
@@ -551,13 +636,18 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
     showOrNotify(shownLines.filter((s): s is string => typeof s === "string" && s !== "").join("\n"), reply.next === "stop" || reply.next === "error" ? "warning" : "info");
     if (reply.next === "fix") {
       const tree = typeof reply.tree === "string" ? reply.tree : "";
-      return { message: `${FIX_LEAD}\n\n${message}`, fix: tree === "" ? "" : `${tree}\n${message}`, loop };
+      return { message: `${FIX_LEAD}\n\n${message}`, fix: tree === "" ? "" : `${tree}\n${message}`, loop, answer: reply.next as LoopAnswer };
     }
     // The loop ended: nothing is running any more, so the panel that held its review is cleared.
     if (terminal) show?.(undefined);
-    return { message: reply.next === "tsp" ? `${ROUND_LEAD}${message}` : "", fix: "", loop: terminal ? undefined : loop };
+    // `next` refuses an uncommitted tree as an `error` answer rather than a failed judgment, so its own words decide.
+    const refused = terminal && DIRTY_TREE_REFUSAL.test(message) ? message : undefined;
+    const answer = reply.next as LoopAnswer;
+    return { message: reply.next === "tsp" ? `${ROUND_LEAD}${message}` : "", fix: "", loop: terminal ? undefined : loop, refused, answer };
   } catch (error) {
-    notify(notice(`tsp: ${error instanceof Error ? error.message : String(error)}`), "error");
+    const why = `tsp: ${error instanceof Error ? error.message : String(error)}`;
+    notify(notice(why), "error");
+    log?.(loopFailure("tsp findings", -1, why));
     return NO_STEP;
   }
 }
@@ -607,6 +697,11 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   let feedbackGiven = false; // the agent already submitted this run's feedback itself, so asking again counts it twice
   let feedbackRun = false;
   let fixRun = false;
+  let commitRun = false; // a commit request the extension sent: a loop turn that records and asks next again
+  let continues = 0; // headless loop continuations sent on this branch: fix, round, record and commit requests
+  let loopCap = 0; // the headless bound, sized from the loop's own max_rounds once an answer carries it
+  let commitPending = false; // a commit request is outstanding: the agent has not committed since it was sent
+  let capped = false; // the bound already ended this loop, so its entry is written once
   let pending = "";
   let lastFix = ""; // the fix answer the agent was last sent: the same one again after its fix run means it changed nothing
   let ran = false; // a TSP run already happened on this branch: one run per branch, never one per turn
@@ -618,9 +713,10 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   // A user's message that merely starts like one of the extension's own is the user's: it never runs the loop.
   let own: OwnMessage | undefined;
   // The decisions live on the session branch, so a reload, a resume and a fork rebuild them instead of forgetting them.
-  const persist = () => pi.appendEntry(STATE_TYPE, { declined: [...declined], lastFix, pending, ran, recordNudged, own, loop } satisfies OfferState);
+  const persist = () => pi.appendEntry(STATE_TYPE, { declined: [...declined], lastFix, pending, ran, recordNudged, own, loop, continues, cap: loopCap, commitPending } satisfies OfferState);
   const restore = (ctx: { sessionManager?: { getBranch?: () => readonly unknown[] } }) => {
     declined.clear(); lastFix = ""; pending = ""; ran = false; recordNudged = false; own = undefined; loop = undefined; decision = undefined;
+    continues = 0; loopCap = 0; commitPending = false;
     try {
       let data: unknown;
       for (const entry of (ctx.sessionManager?.getBranch?.() ?? []) as { type?: unknown; customType?: unknown; data?: unknown }[]) {
@@ -632,12 +728,15 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       if (typeof s.pending === "string") pending = s.pending;
       if (s.ran === true) ran = true;
       if (s.recordNudged === true) recordNudged = true;
+      if (typeof s.continues === "number" && Number.isFinite(s.continues) && s.continues >= 0) continues = s.continues;
+      if (typeof s.cap === "number" && Number.isFinite(s.cap) && s.cap >= 0) loopCap = s.cap;
+      if (s.commitPending === true) commitPending = true;
       const saved = s.loop as Partial<LoopStatus> | undefined;
       loop = saved !== null && typeof saved === "object" && typeof saved.next === "string" && ["fix", "tsp", "done", "stop", "error"].includes(saved.next)
         && [saved.round, saved.maxRounds, saved.open].every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0)
         ? { next: saved.next, round: saved.round as number, maxRounds: saved.maxRounds as number, open: saved.open as number } : undefined;
       const sent = s.own as { prompt?: unknown; kind?: unknown } | undefined;
-      if (sent !== null && typeof sent === "object" && typeof sent.prompt === "string" && (sent.kind === "feedback" || sent.kind === "fix" || sent.kind === "round")) {
+      if (sent !== null && typeof sent === "object" && typeof sent.prompt === "string" && (sent.kind === "feedback" || sent.kind === "fix" || sent.kind === "round" || sent.kind === "commit")) {
         own = { prompt: sent.prompt, kind: sent.kind };
       }
     } catch {
@@ -670,9 +769,10 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     const mine = user && own !== undefined && (event.prompt ?? "").trim() === own.prompt.trim() ? own.kind : undefined;
     if (user) { if (own !== undefined) { own = undefined; persist(); } feedbackGiven = false; }
     feedbackRun = mine === "feedback";
+    commitRun = mine === "commit";
     if (user && !feedbackRun) pending = "";
     fixRun = mine === "fix";
-    tspRun = !feedbackRun && !fixRun && user && (mine === "round" || isTspRequest(event.prompt));
+    tspRun = !feedbackRun && !fixRun && user && (mine === "round" || mine === "commit" || isTspRequest(event.prompt));
     // A run that can never ask, or that is the TSP itself, needs no snapshot: reading git costs a process.
     // A headless session still needs it: the repository's requirement reaches the agent through the boundary.
     opened = child || optedOut(ctx.cwd) || feedbackRun || fixRun || tspRun ? undefined : probe.state(ctx.cwd);
@@ -709,6 +809,9 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     if (paths.length === 0) return;
     const verdict = await checkVerdict(ctx.cwd, checkEnv(), exec, paths, turnHead);
     if (verdict === undefined || verdict === "stale" || verdict.decision !== DECISION_REQUIRED) return;
+    // The toggle decides who acts on the debt. Off there is nobody to ask in a session without a UI, so the required
+    // run is not requested either: the debt stands and the human keeps deciding (#471).
+    if (!(await readFeatures(ctx.cwd, env, exec)).autoRun) return;
     continued = true;
     return {
       entries: [...((event as { entries?: readonly unknown[] }).entries ?? []), { type: "custom_message", customType: "tsp-required", content: TSP_PROMPT, display: false }],
@@ -725,28 +828,86 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     edited.clear();
     opened = undefined;
     if (event.aborted || child || optedOut(ctx.cwd)) { pending = ""; return; }
-    if (pendingRecord !== "" && !tspRun && !fixRun) {
-      // The notice waits for a turn of its own: sent beside the loop's message, it would read as one instruction.
-      const text = pendingRecord;
-      pendingRecord = "";
-      if (ctx.hasUI) { ctx.ui.notify(notice("this TSP run pinned a test and recorded no finding, so the plan does not hold it"), "warning"); send(text, "record"); return; }
-    }
-    if (!ctx.hasUI) {
+    // Without a UI the loop runs itself, on the same answers and bounds, and only when the automatic run is on:
+    // off there is nobody to ask, so nothing is driven. With a UI the same loop runs as it always has (#471).
+    const owedWork = pendingRecord !== "" || feedbackRun || tspRun || fixRun;
+    if (!ctx.hasUI && !(owedWork && (await readFeatures(ctx.cwd, env, exec)).headlessLoop)) {
       // The boundary requested the run; a TSP run that did happen still marks the branch, so it is not requested twice.
       if (tspRun) { ran = true; persist(); }
       pending = "";
       return;
     }
+    // A notification is a UI write, so a headless loop sends the same continuation and renders nothing: there is no
+    // chat to toast into and no panel to hold a review. Every continuation is the interactive loop's own message.
+    const notify: Notify = (message, type) => { if (ctx.hasUI) ctx.ui.notify(message, type); };
+    let showReview: ((text: string | undefined) => void) | undefined;
+    if (ctx.hasUI) showReview = (text) => ctx.ui.setWidget("tsp-review", text === undefined ? undefined : text.split("\n"));
+    // A review that fails has nobody to read its notice without a UI, so the session keeps it as an entry: the
+    // transcript of a headless run is the only place the loop's death is visible (#471).
+    const logFailure = ctx.hasUI ? undefined : (failure: LoopFailure) => pi.appendEntry(LOOP_FAILURE_TYPE, failure);
+    // A headless run leaves no status line, so the loop's answer itself is kept on the branch: it is the only
+    // place a reading can see that the loop ran, and what it said (#471).
+    const logLoop = ctx.hasUI ? undefined : (step: LoopStep) => {
+      if (step.answer === undefined) return;
+      pi.appendEntry(LOOP_TYPE, { next: step.answer, round: step.loop?.round ?? 0, maxRounds: step.loop?.maxRounds ?? 0, open: step.loop?.open ?? 0 });
+    };
+    /** Ends the loop with its reason on the session, once, and clears what this branch was carrying. */
+    const endLoop = (command: string, why: string) => {
+      if (!capped) { capped = true; pi.appendEntry(LOOP_FAILURE_TYPE, loopFailure(command, 0, why)); }
+      loop = undefined;
+      commitPending = false;
+      pending = ""; // a loop message the bound will never deliver must not be replayed after a resume
+      persist();
+    };
+    /** Sends one loop continuation; a session without a UI stops at its bound instead of sending past it. */
+    const continueLoop = (prompt: string, kind: OwnMessage["kind"]): boolean => {
+      if (!ctx.hasUI) {
+        if (continues >= (loopCap > 0 ? loopCap : HEADLESS_FALLBACK_CAP)) {
+          endLoop("headless-bound", `the headless loop sent ${continues} continuations (fix, round, record and commit requests): its bound stopped it, and it needs a human`);
+          return false;
+        }
+        continues += 1;
+      }
+      send(prompt, kind);
+      return true;
+    };
+    if (pendingRecord !== "" && !tspRun && !fixRun) {
+      // The notice waits for a turn of its own: sent beside the loop's message, it would read as one instruction.
+      const text = pendingRecord;
+      pendingRecord = "";
+      if (ctx.hasUI) notify(notice("this TSP run pinned a test and recorded no finding, so the plan does not hold it"), "warning");
+      continueLoop(text, "record");
+      return;
+    }
     if (feedbackRun) {
-      if (pending !== "") { const next = pending; pending = ""; send(next, loopKind(next)); }
+      if (pending !== "") { const next = pending; pending = ""; continueLoop(next, loopKind(next)); }
       persist();
       return;
     }
     if (tspRun || fixRun) {
-      const notify: Notify = (message, type) => ctx.ui.notify(message, type);
-      const step = await reviewFindings(ctx.cwd, env, exec, notify, tspRun, (text) => ctx.ui.setWidget("tsp-review", text === undefined ? undefined : text.split("\n")));
+      const step = await reviewFindings(ctx.cwd, env, exec, notify, tspRun, showReview, logFailure);
+      if (step.refused === undefined) logLoop?.(step); // a refusal is the commit request, not the loop's answer
       loop = step.loop;
+      // The loop's own round bound decides how many continuations this session may send: two per round.
+      if (!ctx.hasUI && loopCap === 0 && loop !== undefined && loop.maxRounds > 0) loopCap = loop.maxRounds * HEADLESS_CAP_FACTOR;
       if (tspRun) { ran = true; decision = undefined; persist(); }
+      if (step.answer !== undefined) commitPending = false; // a record that judged the tree means the commit landed
+      if (step.refused !== undefined && !ctx.hasUI) {
+        // The loop judges commits. With a UI the refusal is a notification and the human commits; without one the
+        // agent is asked once per settle, and a second request it did not answer ends the loop, because asking again
+        // would never end (#471). The turn this asks for is a loop turn, so it records the round and asks next again.
+        if (commitPending) {
+          endLoop("commit-request-unanswered", `the agent did not commit after the commit request, so the loop stopped: ${step.refused}`);
+          return;
+        }
+        commitPending = true;
+        persist();
+        // Only the change's tests and its tracked source may be named; an untracked secret beside them is not.
+        const stillChanged = probe.state(ctx.cwd);
+        const named = commitTargets(stillChanged === undefined ? [] : [...stillChanged.files.keys()]);
+        continueLoop(commitRequest(step.refused, named), "commit");
+        return;
+      }
       if (fixRun && step.fix !== "" && step.fix === lastFix) {
         // The fix run left the tree and the items as they were: sending the same fix again would never end.
         lastFix = "";
@@ -765,19 +926,21 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
         const noticeText = count === undefined ? "" : unrecordedRunNotice(count, freshTests);
         if (noticeText !== "") { recordNudged = true; pendingRecord = noticeText; persist(); }
       }
-      const request = tspRun && !feedbackGiven ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
-      if (request !== "") { pending = step.message; persist(); send(request, "feedback"); return; }
-      if (step.message !== "") { send(step.message, loopKind(step.message)); return; }
+      const request = tspRun && !commitRun && !feedbackGiven ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
+      if (request !== "") { pending = step.message; persist(); continueLoop(request, "feedback"); return; }
+      if (step.message !== "") { continueLoop(step.message, loopKind(step.message)); return; }
       // Nothing else is owed this turn, so the recording notice goes now rather than waiting for a turn that may
       // never come; when the loop did send its message, it went out on the next settle instead.
       if (pendingRecord !== "") {
         const text = pendingRecord;
         pendingRecord = "";
         notify(notice("this TSP run pinned a test and recorded no finding, so the plan does not hold it"), "warning");
-        send(text, "record");
+        continueLoop(text, "record");
       }
       return;
     }
+    // The offer is a question: only a human can answer it, so a session without a UI stops here.
+    if (!ctx.hasUI) { pending = ""; return; }
     const paths = fresh;
     if (paths.length === 0) return;
     // The branch's run already happened; the check still answers ask (or required) until a round is booked, and
@@ -810,7 +973,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       const why = verdict.reason === "" ? "the repository requires it" : verdict.reason;
       // The verdict names the debt; the toggle decides who acts on it. Off, the human still answers: the
       // repository is not overruled, only the automatic send is.
-      if (await autoRunEnabled(ctx.cwd, env, exec)) {
+      if ((await readFeatures(ctx.cwd, env, exec)).autoRun) {
         // The repository decided this run happens; asking would be a question whose answer is already known.
         declined.clear();
         persist();

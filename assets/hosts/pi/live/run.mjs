@@ -88,8 +88,61 @@ const CASES = [
     files: { "docs/testing/test-plan.md": PLAN_WITHOUT_FINDINGS },
     script: [edit("src/add.test.js"), text(), ...fillers], prompts: ["haz el TSP"], answer: () => "No",
     want: (r) => r.users.filter((u) => u.includes("tsp plan add-finding")).length === 1 },
+  // #471: without a UI and with the automatic run on, the extension drives the loop itself. The fix continuation it
+  // sends is a user message, which Pi defers out of `agent_settled` and runs as the next request of the same
+  // print-mode session: one more model request and one more settled run, with nothing rendered. `tsp` is scripted for
+  // the two answers the loop reads, so the case proves the headless continuation and not the repository's plan.
+  { name: "a TSP loop without a UI sends the fix continuation and Pi runs it", mode: "json", headless: true,
+    tsp: {
+      "findings record": [{ out: "F1 recorded src/add.test.js TestAdd", exit: 0 }],
+      "findings next": [{ out: JSON.stringify({ next: "fix", round: 1, max_rounds: 5, tree: "t1", items: [{ id: "F1" }], reason: "round 1 of 5 left 1 item unsettled", review: "review", message: "F1 open src/add.test.js TestAdd" }), exit: 1 }],
+    },
+    script: [edit("src/add.js"), text(), text("fixed it")], prompts: ["haz el TSP"],
+    want: (r) => r.settled >= 2 && r.seen.some((m) => m.text.startsWith("The TSP loop found defects to settle.")) },
+  // #471: the loop judges commits, so `findings record` refuses an uncommitted tree. A session without a UI has nobody
+  // to read that, so the extension asks the agent to commit and the turn it asks for records the round and continues.
+  { name: "a TSP loop without a UI asks the agent to commit, and records after it", mode: "json", headless: true,
+    tsp: {
+      "findings record": [
+        { out: "tsp findings: the working tree has uncommitted changes: commit them, then record, so the loop judges a commit", exit: 2 },
+        { out: "F1 recorded src/add.test.js TestAdd", exit: 0 },
+      ],
+      "findings next": [{ out: JSON.stringify({ next: "fix", round: 1, max_rounds: 5, tree: "t1", items: [{ id: "F1" }], reason: "round 1 of 5 left 1 item unsettled", review: "review", message: "F1 open src/add.test.js TestAdd" }), exit: 1 }],
+    },
+    // Named paths, as the commit request asks: the tests it names, never a blanket add.
+    script: [edit("src/add.test.js"), text(), { tool: "bash", args: { command: "git add -- src/add.test.js && git commit -qm tests" } }, text(), text("fixed it")],
+    prompts: ["haz el TSP"],
+    want: (r) => r.commits > 0 &&
+      r.users.some((u) => u.startsWith("The TSP loop cannot judge an uncommitted working tree.")) &&
+      r.users.some((u) => u.startsWith("The TSP loop found defects to settle.")) },
 
 ];
+
+/** The logging `tsp` wrapper the extension finds first on PATH: the real binary, except for the answers a case scripts. */
+function tspWrapper(log, stub = {}) {
+  const spec = JSON.stringify({ bin: TSP_BIN, log, stub });
+  return `#!/usr/bin/env node
+// The logging wrapper: the real tsp, except for the subcommands this case scripts (one answer per call, in order).
+const { appendFileSync, existsSync, readFileSync, writeFileSync } = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const spec = ${spec};
+const argv = process.argv.slice(2);
+const line = argv.join(" ");
+appendFileSync(spec.log, line + "\\n");
+const countersFile = spec.log + ".counters";
+const counters = existsSync(countersFile) ? JSON.parse(readFileSync(countersFile, "utf8")) : {};
+for (const [prefix, answers] of Object.entries(spec.stub)) {
+  if (!line.startsWith(prefix)) continue;
+  const i = counters[prefix] ?? 0;
+  counters[prefix] = i + 1;
+  writeFileSync(countersFile, JSON.stringify(counters));
+  const answer = answers[Math.min(i, answers.length - 1)];
+  process.stdout.write(answer.out + "\\n");
+  process.exit(answer.exit);
+}
+process.exit(spawnSync(spec.bin, argv, { stdio: "inherit" }).status ?? 1);
+`;
+}
 
 function sandbox(c) {
   const dir = mkdtempSync(join(tmpdir(), "pi-live-"));
@@ -102,9 +155,18 @@ function sandbox(c) {
   git("init", "-q"); git("config", "user.email", "live@example.test"); git("config", "user.name", "live");
   git("add", "-A"); git("commit", "-qm", "init");
   for (const [name, body] of Object.entries(c.dirty ?? {})) writeFileSync(join(repo, name), body); // left uncommitted: earlier work
-  // A logging wrapper: the extension runs `tsp` from PATH, and this is how a silent extension is told from a broken one.
-  writeFileSync(join(bin, "tsp"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexec "${TSP_BIN}" "$@"\n`);
+  // A logging wrapper: the extension runs `tsp` from PATH, and this is how a silent extension is told from a broken
+  // one. A case may script the answers of the subcommands the loop reads (`tsp`), so a loop continuation is observed
+  // without a repository that has a plan to judge; everything else runs the real binary.
+  writeFileSync(join(bin, "tsp"), tspWrapper(log, c.tsp));
   chmodSync(join(bin, "tsp"), 0o755);
+  // The headless loop is opt-in, so a case that drives it turns it on where the extension's own `tsp status --json`
+  // reads it: the sandbox's throwaway state root, never the operator's.
+  if (c.headless) {
+    const root = join(dir, "xdg", "tsp");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "state.json"), JSON.stringify({ schemaVersion: 1, features: { "headless-loop": { enabled: true } } }) + "\n");
+  }
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PI_CODING_AGENT_DIR: agent, XDG_CONFIG_HOME: join(dir, "xdg"),
     PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_LIVE_SCRIPT: JSON.stringify(c.script) };
   delete env.GENTLE_PI_AGENTS_CHILD;
@@ -195,7 +257,9 @@ for (const c of CASES.filter((x) => !filter || x.name.includes(filter))) {
   // A case only counts when the session ran AND the repository really changed: a sed that matched nothing would fake a gap.
   r.seen = readLines(join(sb.dir, "seen.jsonl")).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
   r.changed = execFileSync("git", ["-C", sb.repo, "status", "--porcelain"], { encoding: "utf8" });
-  const ran = r.settled > 0 && r.changed.includes("src/");
+  // A case may commit what it changed, so the repository really changed even with a clean tree (one commit above init).
+  r.commits = Number(execFileSync("git", ["-C", sb.repo, "rev-list", "--count", "HEAD"], { encoding: "utf8" }).trim()) - 1;
+  const ran = r.settled > 0 && (r.changed.includes("src/") || r.commits > 0);
   const wanted = ran && c.want(r);
   const verdict = !ran ? "FAIL (no run or no change)" : c.gap ? (wanted ? "GAP CLOSED, remove the marker" : `known gap ${c.gap}`) : wanted ? "pass" : "FAIL";
   if (verdict.startsWith("FAIL") || verdict.startsWith("GAP CLOSED")) failed++;

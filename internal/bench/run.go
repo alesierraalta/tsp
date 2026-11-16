@@ -788,7 +788,7 @@ func runOnce(caseDir string, key Key, run int, opts Options) Result {
 		// `--out bench/results/<run>`) would point at nothing from there.
 		clone, err := filepath.Abs(filepath.Join(filepath.Dir(ws), agentConfigDir))
 		if err == nil {
-			err = copyTree(opts.ConfigDir, clone)
+			err = cloneAgentConfig(opts.ConfigDir, clone, runOpts.ConfigMode)
 		}
 		if err != nil {
 			res.Failed, res.FailReason = true, "agent config could not be copied: "+err.Error()
@@ -978,7 +978,23 @@ func rescaffold(caseDir, ws string, key Key, configClone string, opts Options) e
 	if err := removeTree(configClone); err != nil {
 		return err
 	}
-	return copyTree(opts.ConfigDir, configClone)
+	return cloneAgentConfig(opts.ConfigDir, configClone, opts.ConfigMode)
+}
+
+// cloneAgentConfig copies a bench config into the run's own directory and, for the product arm, switches the opt-in
+// headless loop on in the copy's state root — the `<agent dir>/home/.config/tsp` piProductEnv pins as TSP_HOME.
+// Every clone goes through it (the first attempt and an escalation's rescaffold), so a re-clone can never drop the
+// toggle while the reading still claims headless_loop.
+func cloneAgentConfig(from, to, mode string) error {
+	if err := copyTree(from, to); err != nil {
+		return err
+	}
+	if mode == ConfigProduct {
+		if err := EnableProductLoop(to); err != nil {
+			return fmt.Errorf("enable the headless loop for the product arm: %w", err)
+		}
+	}
+	return nil
 }
 
 // writeAgentLog keeps the tail of each attempt's raw stream beside result.json.

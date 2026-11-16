@@ -277,11 +277,19 @@ exports: `GENTLE_PI_AGENTS_CHILD=1` left in place makes the extension read every
 child and stay silent.
 
 The arm measures what the extension's headless path does, and only that. The offer itself (a
-`ui.select`), the fix / round / record loop and the feedback request are gated on a real UI in the
-extension, so a product reading shows the offered run, never those later turns; a reading that
-mentions them was not headless. Because the configuration differs, `bench compare` and `bench gate`
-refuse a product reading against a bench one, exactly as they refuse any other agent-config change:
-the arm is measured as its own instrument, against its own baseline.
+`ui.select`) and the feedback request are gated on a real UI in the extension, so a product reading
+shows the run the boundary starts, never a dialog. The fix / round / record / commit loop is its own
+opt-in feature (`headless-loop`, off by default: it costs more model turns), and this arm turns it
+on in the run's own throwaway state root (`<agent config>/home/.config/tsp`, the root the arm pins
+as `TSP_HOME`), so a product reading keeps measuring the loop. Every copy of that config gets the
+toggle — including the re-clone an `--escalate-model` rescaffold makes — so a reading can never claim
+the loop while an escalated attempt ran without it. The reading records that in its
+provenance as `headless_loop: true`, and `bench compare` and `bench gate` refuse a loop reading
+against one that never drove the loop, because the extra turns are work the other reading never
+paid for. Because the configuration differs anyway, they also refuse a product reading against a
+bench one, exactly as they refuse any other agent-config change: the arm is measured as its own
+instrument, against its own baseline. The 4-run hard23 A/B of this loop read flat recall (70/91 at
+roughly +91% cost), which is why the feature is not on by default.
 
 Trimming the corpus is the lever that does cost quality. Of the fifteen cases in that measurement, thirteen produced
 different numbers across the four skill versions measured so far; only `n01` and `n05` were
