@@ -1822,6 +1822,61 @@ test("every sibling probe states its own short timeout", async () => {
   assert.ok(own.length >= 1 && own.every((c) => c[2] === undefined), "the session's own repository is probed as before");
 });
 
+// #476: the opening sweep over the clone's sibling worktrees has one total budget, so hung worktrees cannot add up to a
+// per-worktree timeout each. Date.now is a virtual clock here and no real time passes: a git read that hangs costs the
+// timeout it was given, a slow read costs its time once (the opening read), and a read that answers costs nothing, so
+// the clock measures the opening sweep alone.
+const SWEEP_BUDGET_MS = 3000; // the total budget the issue sets for one phase's sibling probe
+function sweepProbe(clock, { cwd, siblings, hung = new Set(), answers = new Map(), slow = new Map() }) {
+  const reads = [];
+  const probe = {
+    state: (dir, opts) => {
+      const opening = !reads.includes(dir);
+      reads.push(dir);
+      if (hung.has(dir)) { clock.now += opts?.timeoutMs ?? 0; return undefined; }
+      if (opening) clock.now += slow.get(dir) ?? 0;
+      return answers.get(dir)?.shift();
+    },
+    committed: () => [],
+    worktrees: () => [{ path: cwd, prunable: false }, ...siblings.map((path) => ({ path, prunable: false }))],
+  };
+  return { probe, reads };
+}
+
+test("a sibling sweep stopped by its total budget ends within it, and a healthy worktree listed first is still offered (#476)", async (t) => {
+  const cwd = "/repo", healthy = "/repo-worktrees/ok";
+  const hung = Array.from({ length: 19 }, (_, i) => `/repo-worktrees/hung${i}`);
+  const clock = { now: 0 };
+  t.mock.method(Date, "now", () => clock.now);
+  const { probe, reads } = sweepProbe(clock, {
+    cwd, siblings: [healthy, ...hung], hung: new Set(hung),
+    answers: new Map([[cwd, [snapshot({}), snapshot({})]], [healthy, [snapshot({}), snapshot({ "src/add.js": "one" })]]]),
+  });
+  const h = offerHarness({ probe, cwd });
+  await h.run("delegate the retry", []);
+  assert.ok(clock.now <= SWEEP_BUDGET_MS, `the sweep took ${clock.now} ms, over its ${SWEEP_BUDGET_MS} ms budget`);
+  assert.ok(reads.filter((dir) => hung.includes(dir)).length < hung.length, "hung worktrees behind a spent budget are never read");
+  assert.deepEqual(h.calls.filter((c) => c.argv[0] === "check"), [{ argv: ROOT_CHECK(healthy, ["src/add.js"]), cwd: healthy }], "the healthy worktree's change is still offered");
+  assert.equal(h.asked.length, 1, "a delegated change left in a healthy worktree is this session's turn");
+});
+
+test("a slow sibling ahead of hung ones cannot carry the sweep past its budget (#476)", async (t) => {
+  const cwd = "/repo", slow = "/repo-worktrees/slow";
+  const hung = Array.from({ length: 19 }, (_, i) => `/repo-worktrees/hung${i}`);
+  const clock = { now: 0 };
+  t.mock.method(Date, "now", () => clock.now);
+  const { probe, reads } = sweepProbe(clock, {
+    cwd, siblings: [slow, ...hung], hung: new Set(hung),
+    answers: new Map([[cwd, [snapshot({}), snapshot({})]], [slow, [snapshot({}), snapshot({})]]]),
+    slow: new Map([[slow, 1000]]),
+  });
+  const h = offerHarness({ probe, cwd });
+  await h.run("just looking", []);
+  assert.ok(clock.now <= SWEEP_BUDGET_MS, `the sweep took ${clock.now} ms, over its ${SWEEP_BUDGET_MS} ms budget: the last hung read may only run for what the budget has left`);
+  assert.ok(reads.filter((dir) => hung.includes(dir)).length < hung.length, "hung worktrees behind a spent budget are never read");
+  assert.deepEqual(h.asked, [], "nothing changed, so nothing is asked");
+});
+
 test("single-root parity: the session's own root is checked exactly as before", async () => {
   const cwd = "/repo";
   const { calls, probe } = cloneProbe({ cwd, wt: cwd, worktrees: [{ path: cwd, prunable: false }] });
