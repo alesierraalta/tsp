@@ -1471,21 +1471,25 @@ test("headless: the commit request names the change's tests and tracked source, 
   try {
     mkdirSync(join(dir, "tests"));
     mkdirSync(join(dir, "deploy"));
+    mkdirSync(join(dir, "src"));
     writeFileSync(join(dir, "app.js"), "export const v = 1\n");
     writeFileSync(join(dir, "tests/app.test.js"), "test('v', () => {})\n");
     git("init", "-q"); git("config", "user.email", "t@example.test"); git("config", "user.name", "t"); git("add", "-A"); git("commit", "-qm", "init");
     writeFileSync(join(dir, "tests/app.test.js"), "test('v', () => { expect(1) })\n"); // the test the run wrote
     writeFileSync(join(dir, "app.js"), "export const v = 2\n"); // the fix it pins
+    writeFileSync(join(dir, "src/added.js"), "export const added = 1\n"); // a NEW source file the fix added (untracked)
     writeFileSync(join(dir, ".env.local"), "API_KEY=sk-live-REAL\n"); // untracked, not ignored: a secret
     writeFileSync(join(dir, "deploy/id_rsa"), "PRIVATE KEY\n"); // untracked, not ignored: a key
     writeFileSync(join(dir, "notes.md"), "operator notes\n"); // untracked, unrelated work
+    writeFileSync(join(dir, "src/key.pem"), "PEM\n"); // a secret-looking file
     const h = offerHarness({ hasUI: false, cwd: dir, probe: gitProbe, findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
     await h.run("haz el TSP", []);
     const [request] = h.sent;
     assert.match(request, /tests\/app\.test\.js/, "the test the run wrote is named");
     assert.match(request, /app\.js/, "the tracked source the change modified is named");
-    for (const hidden of [".env.local", "deploy/id_rsa", "notes.md"]) assert.ok(!request.includes(hidden), `${hidden} must not be named`);
-    assert.match(request, /git add -- tests\/app\.test\.js app\.js/, "the exact pathspec to add is spelled out");
+    assert.match(request, /src\/added\.js/, "an untracked NEW source file the fix added is named, or the obedient agent leaves it behind");
+    for (const hidden of [".env.local", "deploy/id_rsa", "notes.md", "key.pem"]) assert.ok(!request.includes(hidden), `${hidden} must not be named`);
+    assert.match(request, /git add -- 'tests\/app\.test\.js' 'app\.js' 'src\/added\.js'/, "the exact pathspec to add is spelled out, each path quoted for a POSIX shell");
     assert.match(request, /Never `git add -A` or `git commit -a`/, "and the blanket forms are refused");
     assert.match(request, /leave every other file untouched/);
   } finally {
@@ -1647,4 +1651,50 @@ test("headless: headless-loop on drives the loop as before, and says the toggle 
   assert.equal(h.sent.length, 1);
   assert.ok(h.sent[0].startsWith(FIX_LEAD));
   assert.ok(h.calls.some((c) => c.argv[0] === "status" && c.argv[1] === "--json"), "the toggle is read from status --json");
+});
+
+// D6: the feedback request and the loop message it holds back are continuations too, so the headless bound has to
+// count them; otherwise a feedback-enabled loop is a side channel around the cap.
+test("headless: the feedback request and its pending replay count toward the bound", async () => {
+  let i = 0;
+  const next = () => {
+    i += 1;
+    return { stdout: JSON.stringify({ next: "tsp", round: i, max_rounds: 5, tree: `t${i}`, items: [], reason: `round ${i} of 5 — the last fix changed a source file`, message: `round ${i} of 5 of the TSP loop`, review: "", lines: [], notes: [] }), stderr: "", code: 1 };
+  };
+  const h = offerHarness({ hasUI: false, findings: { record: { stdout: "recorded\n", stderr: "", code: 0 }, get next() { return next(); } }, feedback: { stdout: TEMPLATE, stderr: "", code: 0 } });
+  await h.run("haz el TSP", []);
+  const kinds = [];
+  for (let turn = 0; turn < 40 && h.sent.length > kinds.length; turn++) {
+    const message = h.sent[kinds.length];
+    kinds.push(message.startsWith(FEEDBACK_LEAD) ? "feedback" : message.startsWith(ROUND_LEAD) ? "round" : "other");
+    await h.run(message, [["edit", "a.go"]]);
+  }
+  assert.equal(h.sent.length, 10, `sends: ${h.sent.length} kinds: ${JSON.stringify(kinds)}`);
+  assert.deepEqual([...new Set(kinds)], ["feedback", "round"], "each cycle is a feedback request and the round it holds back");
+  assert.ok(loopErrors(h).some((e) => e.data.command === "headless-bound"), "the bound stopped it, and says so");
+});
+
+// D8: the suggested command is pasted into a shell, so a path is quoted and an embedded quote is escaped: a name
+// carrying a space or a `;` must never reach the shell as syntax.
+test("headless: the suggested git add quotes each path for a POSIX shell", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "tsp-quote-"));
+  const git = (...args) => childProcess.execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+  try {
+    mkdirSync(join(dir, "tests"));
+    mkdirSync(join(dir, "src"));
+    writeFileSync(join(dir, "tests/a b.test.js"), "test('space', () => {})\n");
+    writeFileSync(join(dir, "src/x;touch pwned.js"), "export const x = 1\n");
+    writeFileSync(join(dir, "src/it's.js"), "export const it = 1\n");
+    git("init", "-q"); git("config", "user.email", "t@example.test"); git("config", "user.name", "t"); git("add", "-A"); git("commit", "-qm", "init");
+    writeFileSync(join(dir, "tests/a b.test.js"), "test('space', () => { expect(1) })\n");
+    writeFileSync(join(dir, "src/x;touch pwned.js"), "export const x = 2\n");
+    writeFileSync(join(dir, "src/it's.js"), "export const it = 2\n");
+    const h = offerHarness({ hasUI: false, cwd: dir, probe: gitProbe, findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
+    await h.run("haz el TSP", []);
+    const [request] = h.sent;
+    const command = request.match(/Run `git add -- ([^`]+)`/)?.[1];
+    assert.equal(command, "'tests/a b.test.js' 'src/it'\\''s.js' 'src/x;touch pwned.js'", request);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -2,6 +2,7 @@ package bench
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/alesierraalta/tsp/internal/feature"
+	"github.com/alesierraalta/tsp/internal/state"
 )
 
 // escalateCase is a Go case whose only defect sits in model.Order ("cab" where "abc" is promised).
@@ -127,5 +131,68 @@ func TestRunWithoutAnEscalationModelRunsOnce(t *testing.T) {
 	}
 	if res.Escalated || res.Caught != 0 {
 		t.Fatalf("escalated = %v caught = %d, want one unescalated miss", res.Escalated, res.Caught)
+	}
+}
+
+// productLoopEnabledAt answers whether the run's config copy carries the opt-in headless loop, read the way the
+// extension's own `tsp status --json` reads it (internal/state over the copy's own state file).
+func productLoopStateAt(agentDir string) string {
+	b, err := os.ReadFile(filepath.Join(agentDir, IsolatedHomeDir, ".config", "tsp", "state.json"))
+	if err != nil {
+		return "missing: " + err.Error()
+	}
+	var st state.State
+	if err := json.Unmarshal(b, &st); err != nil {
+		return "unreadable: " + err.Error()
+	}
+	if st.Features[feature.HeadlessLoopID].Enabled {
+		return "on"
+	}
+	return "off"
+}
+
+// loopRecordingAgent records, per attempt, whether the config copy it was handed had the headless loop on.
+type loopRecordingAgent struct {
+	mu    sync.Mutex
+	tests map[string]string
+	seen  []string
+}
+
+func (a *loopRecordingAgent) run(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+	a.mu.Lock()
+	a.seen = append(a.seen, productLoopStateAt(opts.ConfigDir))
+	a.mu.Unlock()
+	if err := os.WriteFile(filepath.Join(ws, "model", "agent_test.go"), []byte(a.tests[opts.Model]), 0o644); err != nil {
+		return AgentResult{}, err
+	}
+	return AgentResult{CostUSD: 1, Turns: 2}, nil
+}
+
+// An escalation rescaffolds the workspace and re-clones the config, so the loop toggle has to ride every clone: a
+// reading that says headless_loop must never be one whose escalated attempt ran without it.
+func TestAnEscalatedProductRunStillHasTheHeadlessLoopEnabled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs git and go test")
+	}
+	for _, bin := range []string{"go", "git"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not on PATH", bin)
+		}
+	}
+	cfg := filepath.Join(t.TempDir(), "product")
+	if err := os.MkdirAll(filepath.Join(cfg, IsolatedHomeDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	agent := &loopRecordingAgent{tests: map[string]string{"cheap": blindTest, "strong": witnessTest}}
+	Run(Options{CasesGlob: escalateCase(t), Runs: 1, Model: "cheap", EscalateModel: "strong",
+		ConfigMode: ConfigProduct, ConfigDir: cfg, Timeout: 2 * time.Minute, SuiteTimeout: 2 * time.Minute,
+		Out: filepath.Join(t.TempDir(), "results"), BenchDir: t.TempDir(), Agent: agent.run})
+	if len(agent.seen) != 2 {
+		t.Fatalf("attempts = %v, want 2 (the escalation runs a second one)", agent.seen)
+	}
+	for i, state := range agent.seen {
+		if state != "on" {
+			t.Fatalf("attempt %d was handed a config copy whose headless loop is %q, while the reading still claims headless_loop", i+1, state)
+		}
 	}
 }

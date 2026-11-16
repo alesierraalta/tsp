@@ -216,18 +216,38 @@ export function commitRequest(refused: string, paths: readonly string[]): string
   // would put an untracked secret beside the work into the instruction, and a blanket add into the commit.
   const named = paths.length === 0
     ? "Commit the tests this run wrote together with the source changes they pin, and nothing else."
-    : `Commit exactly these paths, and nothing else: ${paths.join(", ")}. Run \`git add -- ${paths.join(" ")}\` and then \`git commit -m "<why>"\`.`;
+    : `Commit exactly these paths, and nothing else: ${paths.join(", ")}. Run \`git add -- ${paths.map(shellQuote).join(" ")}\` and then \`git commit -m "<why>"\`.`;
   return `${COMMIT_LEAD} ${named} Never \`git add -A\` or \`git commit -a\`, and leave every other file untouched. ` +
     `The loop judges commits, so once they are committed the loop records the round and asks next.\n\n${refused}`;
 }
 
-/** The paths a commit request may name: the change's test files, and the tracked source it modified (#471). */
-export function commitTargets(cwd: string, changed: readonly string[]): string[] {
-  const tracked = new Set((gitOut(cwd, ["ls-files", "-z"]) ?? "").split("\0").filter((p) => p !== ""));
-  // Tests first: the loop records what they pin, so they lead the pathspec the agent is told to add.
+// A path a commit request may never name, whatever its extension: a key, or a directory that holds secrets.
+const SECRET_PATH = /(^|\/)(id_rsa[^/]*|id_ed25519[^/]*)|[.](pem|key|p12|pfx|jks|keystore)$/i;
+const SECRET_DIRS = new Set(["secrets"]);
+
+/** True for a changed path the loop may put in a commit: a test, or a source file, but never a dotfile or a secret. */
+export function committablePath(path: string): boolean {
+  const p = path.replace(/\\/g, "/");
+  const parts = p.split("/");
+  const base = parts[parts.length - 1] ?? p;
+  if (base.startsWith(".")) return false;
+  if (SECRET_PATH.test(p) || parts.slice(0, -1).some((part) => SECRET_DIRS.has(part))) return false;
+  return TEST_PATH.test(p) || isSourcePath(p);
+}
+
+/**
+ * The paths a commit request may name: the change's test files and the source it modified or added — tracked or new,
+ * because a fix that adds a file is the same change as one that edits it. Tests first: the loop records what they pin.
+ */
+export function commitTargets(changed: readonly string[]): string[] {
   return changed
-    .filter((p) => TEST_PATH.test(p) || (tracked.has(p) && isSourcePath(p)))
+    .filter(committablePath)
     .sort((a, b) => Number(TEST_PATH.test(b)) - Number(TEST_PATH.test(a)));
+}
+
+/** A path as a POSIX shell word: single quotes, with every embedded quote closed, escaped and reopened. */
+export function shellQuote(path: string): string {
+  return `'${path.replace(/'/g, "'\\''")}'`;
 }
 
 const SOURCE_EXT = /\.(go|ts|tsx|js|jsx|mjs|cjs|py|rs|java|kt|rb|php|cs|c|cc|cpp|h|hpp|swift|scala|sh)$/;
@@ -836,6 +856,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       if (!capped) { capped = true; pi.appendEntry(LOOP_FAILURE_TYPE, loopFailure(command, 0, why)); }
       loop = undefined;
       commitPending = false;
+      pending = ""; // a loop message the bound will never deliver must not be replayed after a resume
       persist();
     };
     /** Sends one loop continuation; a session without a UI stops at its bound instead of sending past it. */
@@ -859,7 +880,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       return;
     }
     if (feedbackRun) {
-      if (pending !== "") { const next = pending; pending = ""; send(next, loopKind(next)); }
+      if (pending !== "") { const next = pending; pending = ""; continueLoop(next, loopKind(next)); }
       persist();
       return;
     }
@@ -883,7 +904,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
         persist();
         // Only the change's tests and its tracked source may be named; an untracked secret beside them is not.
         const stillChanged = probe.state(ctx.cwd);
-        const named = commitTargets(ctx.cwd, stillChanged === undefined ? [] : [...stillChanged.files.keys()]);
+        const named = commitTargets(stillChanged === undefined ? [] : [...stillChanged.files.keys()]);
         continueLoop(commitRequest(step.refused, named), "commit");
         return;
       }
@@ -906,7 +927,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
         if (noticeText !== "") { recordNudged = true; pendingRecord = noticeText; persist(); }
       }
       const request = tspRun && !commitRun && !feedbackGiven ? await feedbackRequest(ctx.cwd, env, exec, notify) : "";
-      if (request !== "") { pending = step.message; persist(); send(request, "feedback"); return; }
+      if (request !== "") { pending = step.message; persist(); continueLoop(request, "feedback"); return; }
       if (step.message !== "") { continueLoop(step.message, loopKind(step.message)); return; }
       // Nothing else is owed this turn, so the recording notice goes now rather than waiting for a turn that may
       // never come; when the loop did send its message, it went out on the next settle instead.

@@ -281,7 +281,9 @@ The arm measures what the extension's headless path does, and only that. The off
 shows the run the boundary starts, never a dialog. The fix / round / record / commit loop is its own
 opt-in feature (`headless-loop`, off by default: it costs more model turns), and this arm turns it
 on in the run's own throwaway state root (`<agent config>/home/.config/tsp`, the root the arm pins
-as `TSP_HOME`), so a product reading keeps measuring the loop. The reading records that in its
+as `TSP_HOME`), so a product reading keeps measuring the loop. Every copy of that config gets the
+toggle — including the re-clone an `--escalate-model` rescaffold makes — so a reading can never claim
+the loop while an escalated attempt ran without it. The reading records that in its
 provenance as `headless_loop: true`, and `bench compare` and `bench gate` refuse a loop reading
 against one that never drove the loop, because the extra turns are work the other reading never
 paid for. Because the configuration differs anyway, they also refuse a product reading against a
