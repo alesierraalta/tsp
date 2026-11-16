@@ -628,6 +628,8 @@ export const OFFER_TYPE = "tsp-offer";
 /** How many linked worktrees of the clone one turn reads, and how long one of them may take before it is skipped. */
 export const WORKTREE_PROBE_CAP = 20;
 export const WORKTREE_PROBE_TIMEOUT_MS = 1500;
+/** The whole sibling sweep's budget: a per-worktree timeout alone lets hung worktrees add up (#476). */
+export const WORKTREE_PROBE_BUDGET_MS = 3000;
 
 /** One failed review step, as a headless session records it: there is no chat for the notice to land in. */
 export interface LoopFailure { command: string; exit: number; output: string }
@@ -915,11 +917,18 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     const of: Turn = { cwd, root: ownRoot(cwd), common: probe.commonDir?.(cwd), head: turnHead, opened: new Map(), known: new Set(), roots: new Map(), probed: true };
     of.opened.set(of.root, readState(of.root));
     let probed = 0;
+    const started = Date.now();
+    /** What the whole sweep has left of its budget: a per-worktree timeout alone lets hung trees add up. */
+    const left = (): number => WORKTREE_PROBE_BUDGET_MS - (Date.now() - started);
+    /** True once the whole sweep has spent its budget. */
+    const spent = (): boolean => left() <= 0;
     for (const sibling of siblingRoots(of)) {
       of.known.add(slashPath(sibling));
-      if (probed >= WORKTREE_PROBE_CAP) continue; // bounded: a clone with many worktrees costs a fixed number of reads
+      // Bounded twice: a fixed number of reads, and a whole-sweep budget so hung worktrees cannot add up.
+      if (probed >= WORKTREE_PROBE_CAP || spent()) continue;
       probed += 1;
-      of.opened.set(sibling, readState(sibling, WORKTREE_PROBE_TIMEOUT_MS));
+      // A read may not outlive the budget either: the last one gets only what the sweep has left of it.
+      of.opened.set(sibling, readState(sibling, Math.min(WORKTREE_PROBE_TIMEOUT_MS, left())));
     }
     return of;
   };
