@@ -7,12 +7,37 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alesierraalta/tsp/internal/testutil"
 )
+
+// moduleUpstreamRepo gives the source case its own module. A moduleless fixture makes the Go
+// toolchain walk past TMPDIR for a module root; when TMPDIR itself sits inside a repository (a
+// developer's home, #483), it finds that .git and the contract becomes environment-dependent.
+func moduleUpstreamRepo(t *testing.T) (string, string) {
+	t.Helper()
+	repo, _ := upstreamRepo(t)
+	writeFile(t, repo, "go.mod", "module example.com/calc\n\ngo 1.22\n")
+	for _, args := range [][]string{
+		{"add", "go.mod"},
+		{"commit", "-qm", "module"},
+	} {
+		if out, err := gitRun(repo, args...); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	out, err := gitRun(repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo, strings.TrimSpace(out)
+}
 
 func TestOracleSourceRecordedName(t *testing.T) {
 	for _, changed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unchanged", true: "changed"}[changed], func(t *testing.T) {
-			repo, commit := upstreamRepo(t)
+			testutil.CeilingGitAt(t, os.TempDir())
+			repo, commit := moduleUpstreamRepo(t)
 			source := sourceCase(t, repo, commit)
 			run, opts := oracleReading(t)
 			caseDir := filepath.Join(opts.BenchDir, "cases", filepath.Base(source))

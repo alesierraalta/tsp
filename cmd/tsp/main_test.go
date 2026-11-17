@@ -23,6 +23,7 @@ import (
 	"github.com/alesierraalta/tsp/internal/evidence"
 	plancheck "github.com/alesierraalta/tsp/internal/plan"
 	"github.com/alesierraalta/tsp/internal/sanitize"
+	"github.com/alesierraalta/tsp/internal/testutil"
 )
 
 // buildCLI compiles the command once per test binary; the contract under test is the process's,
@@ -242,6 +243,7 @@ func TestFindingsVerdictReopens(t *testing.T) {
 }
 
 func TestFindingsVerdictRefusals(t *testing.T) {
+	testutil.CeilingGitAt(t, os.TempDir())
 	run, path, dir := verdictCLI(t)
 	before, _ := os.ReadFile(path)
 	unchanged := func() {
@@ -3130,6 +3132,7 @@ func TestBenchHistoryMasksPlanlessStoredRows(t *testing.T) {
 }
 
 func TestBindCLIStoresAndUnsetsPerSessionBindings(t *testing.T) {
+	testutil.CeilingGitAt(t, os.TempDir())
 	repo := t.TempDir()
 	if out, err := exec.Command("git", "init", repo).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
