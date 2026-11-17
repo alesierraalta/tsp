@@ -70,9 +70,23 @@ func TestCorpusSourceCasesAreComplete(t *testing.T) {
 	}
 }
 
+// ownHistoryPlanReaders are the cases whose own suite reads the shipped test plan. Their SOURCE.json keeps
+// docs/testing/test-plan.md, so the plan's findings rows stay visible to the agent there — the leak #481
+// targeted, documented in bench/README.md rather than hidden. Every other o* case excludes the plan.
+// The suite-and-trigger check in own_history_suite_test.go finds any other case that needs it.
+var ownHistoryPlanReaders = map[string]bool{
+	"o01-plan-gaps-two-owners":           true,
+	"o02-plan-blank-line-hides-rows":     true,
+	"o03-plan-path-cite-build-files":     true,
+	"o04-plan-duplicate-row-ids":         true,
+	"o05-plan-finding-status-vocabulary": true,
+	"o06-plan-lock-wait-bound":           true,
+}
+
 // An own-history fixture is this repository's tree at the fix's parent, which ships every other case's
-// answer key and the findings rows of the plan an agent is asked to write. Those answers must be declared
-// as exclusions and absent from both the fixture and fix/all, before the agent sees the tree.
+// answer key and the findings rows of the plan an agent is asked to write. Other cases' keys must be
+// declared as exclusions and absent from both the fixture and fix/all; the plan is excluded too except in
+// the cases whose own suite reads it, where the leak stays and is documented.
 func TestCorpusOwnHistoryCasesHideOtherAnswers(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(corpusDir(t), "o*", SourceFile))
 	if len(files) == 0 {
@@ -94,11 +108,18 @@ func TestCorpusOwnHistoryCasesHideOtherAnswers(t *testing.T) {
 			t.Errorf("%s: %v", c, err)
 			continue
 		}
+		needsPlan := ownHistoryPlanReaders[filepath.Base(c)]
 		declared := map[string]bool{}
 		for _, p := range src.Exclude {
 			declared[p] = true
 		}
 		for _, answer := range []string{"bench/cases", "docs/testing/test-plan.md"} {
+			if answer == "docs/testing/test-plan.md" && needsPlan {
+				if declared[answer] {
+					t.Errorf("%s: %s excludes the plan its suite reads", c, filepath.Base(f))
+				}
+				continue
+			}
 			if !declared[answer] {
 				t.Errorf("%s: %s does not exclude %s", c, filepath.Base(f), answer)
 			}
@@ -117,13 +138,21 @@ func TestCorpusOwnHistoryCasesHideOtherAnswers(t *testing.T) {
 					return err
 				}
 				rel := filepath.ToSlash(strings.TrimPrefix(path, tree+string(filepath.Separator)))
-				if rel == "docs/testing/test-plan.md" || (strings.HasPrefix(rel, "bench/cases/") && strings.HasSuffix(rel, "/KEY.json")) {
+				if (strings.HasPrefix(rel, "bench/cases/") && strings.HasSuffix(rel, "/KEY.json")) ||
+					(rel == "docs/testing/test-plan.md" && !needsPlan) {
 					return fmt.Errorf("%s still carries %s", tree, rel)
 				}
 				return nil
 			})
 			if err != nil {
 				t.Error(err)
+			}
+		}
+		if needsPlan {
+			for _, tree := range []string{filepath.Join(dir, FixtureDir), filepath.Join(dir, FixDir, "all")} {
+				if _, err := os.Stat(filepath.Join(tree, "docs/testing/test-plan.md")); err != nil {
+					t.Errorf("%s: %s must keep the plan its suite reads: %v", filepath.Base(c), tree, err)
+				}
 			}
 		}
 	}

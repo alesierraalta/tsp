@@ -139,6 +139,8 @@ bench/cases/<id>/
   fix.patch         the fix commit's Go diff without its test files, applied with -p1
 ```
 
+The plan exclusion is the default; the six plan cases below omit it.
+
 An own-history case is one of this repository's own bug-fix commits, one defect each. `SOURCE.json` names the
 fix's parent as the fixture and `fix.patch` is the source half of the commit, so `fix/all` is the parent plus
 the fix and nothing else: the test the commit came with is deliberately left out, because it is the oracle.
@@ -174,7 +176,19 @@ the corpus: unpinned, an `o*` workspace would ship other cases' `KEY.json` files
 recorded in the case's `source-exclusions.json` and hashed into its cache key, so the corpus digest moves.
 Nothing a case's own suite or trigger needs is dropped: o08 and o10 run `go test ./internal/bench`, and their
 corpus checks simply skip when the excluded `bench/cases` directory is absent, so the whole directory can go
-rather than just the keys inside it. A reading of `o*` is its own series: the case set differs from `h*` and
+rather than just the keys inside it.
+
+The six cases whose suite is `go test ./internal/plan` — o01-plan-gaps-two-owners,
+o02-plan-blank-line-hides-rows, o03-plan-path-cite-build-files, o04-plan-duplicate-row-ids,
+o05-plan-finding-status-vocabulary and o06-plan-lock-wait-bound — read `docs/testing/test-plan.md` from the
+shipped tree, so their `SOURCE.json` excludes only `bench/cases`. The plan (and its findings rows) stays
+visible to the agent in exactly those six workspaces: that is the leak #481 targeted, kept here because the
+alternative is an invalid case, and documented rather than hidden. Every other o* case keeps the plan
+excluded. The corpus check `TestCorpusOwnHistoryFixtureSuitesUnderAnEnclosingRepository` materializes all
+22 o* cases through `MaterializeCase` + `Scaffold`, requires a green fixture suite and the KEY trigger red on
+the fixture and green on `fix/all`, so a future exclusion that a suite needs fails before a paid reading.
+
+A reading of `o*` is its own series: the case set differs from `h*` and
 `r*`, so `bench compare` starts a new series instead of reporting a delta, and its digest is not comparable
 with a hard23 reading or with an o* reading taken before the exclusions.
 
