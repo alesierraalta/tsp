@@ -83,6 +83,44 @@ var ownHistoryPlanReaders = map[string]bool{
 	"o06-plan-lock-wait-bound":           true,
 }
 
+// o* triggers are the only KEY triggers a bench path executes: the corpus check hands the whole command to
+// `sh -c` (dash on Debian/Ubuntu). RunSuite splits that command with hookcmd.ShellWords, which drops quote
+// characters but keeps backslashes, so a quoted shell metacharacter arrives unquoted and dash reads `(` as
+// syntax. Keep these commands quote- and parenthesis-free, with ^, $ and | backslash-escaped: they then
+// survive splitting and run under any POSIX shell. h* triggers are oracle text no bench path runs.
+var ownHistoryTriggerBashOnly = []string{
+	"((", "[[", "]]", "<<<", "<(", ">(", "$(", "`", "'", "(", ")",
+}
+
+var ownHistoryBase64Line = regexp.MustCompile(`^printf %s [A-Za-z0-9+/=]+ \| base64 -d > [^ ]+$`)
+
+func TestCorpusOwnHistoryTriggersArePortableSh(t *testing.T) {
+	files, _ := filepath.Glob(filepath.Join(corpusDir(t), "o*", "KEY.json"))
+	if len(files) == 0 {
+		t.Fatal("no own-history keys")
+	}
+	for _, f := range files {
+		key, err := LoadKey(filepath.Dir(f))
+		if err != nil {
+			t.Errorf("%s: %v", f, err)
+			continue
+		}
+		for _, defect := range key.Defects {
+			cmd := defect.Trigger.Input
+			for _, bad := range ownHistoryTriggerBashOnly {
+				if strings.Contains(cmd, bad) {
+					t.Errorf("%s %s: trigger uses %q, which is not portable through the bench's sh path", filepath.Base(filepath.Dir(f)), defect.ID, bad)
+				}
+			}
+			for _, line := range strings.Split(cmd, "\n") {
+				if strings.HasPrefix(line, "printf %s ") && !ownHistoryBase64Line.MatchString(line) {
+					t.Errorf("%s %s: wrapped or quoted base64 input: %q", filepath.Base(filepath.Dir(f)), defect.ID, line)
+				}
+			}
+		}
+	}
+}
+
 // An own-history fixture is this repository's tree at the fix's parent, which ships every other case's
 // answer key and the findings rows of the plan an agent is asked to write. Other cases' keys must be
 // declared as exclusions and absent from both the fixture and fix/all; the plan is excluded too except in

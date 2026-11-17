@@ -32,6 +32,15 @@ func corpusTmp(t *testing.T) string {
 	return tmp
 }
 
+// triggerShell is the shell the corpus check uses for KEY triggers. The default is `sh`: dash on
+// Debian/Ubuntu, where the regression appeared. TSP_O_TRIGGER_SHELL=bash runs the same check under bash.
+func triggerShell() string {
+	if shell := os.Getenv("TSP_O_TRIGGER_SHELL"); shell != "" {
+		return shell
+	}
+	return "sh"
+}
+
 // Every o* case must survive the path a reading takes: SOURCE.json to a materialized case, scaffold to a
 // fixture suite that is green, and the key's own trigger, which must distinguish the fixture from fix/all.
 // An exclusion that breaks a suite or a trigger fails here, before a paid reading can spend a run on it.
@@ -91,8 +100,8 @@ func TestCorpusOwnHistoryFixtureSuitesUnderAnEnclosingRepository(t *testing.T) {
 				} {
 					t.Run(defect.ID+"-"+check.name, func(t *testing.T) {
 						// A key trigger is a shell command: it pipes a base64 probe into a test file and then
-						// runs go test. RunSuite takes command words, so hand the whole command to sh.
-						out, err := RunSuite(check.dir, "sh -c "+shellQuote(defect.Trigger.Input), 10*time.Minute)
+						// runs go test. RunSuite takes command words, so hand the whole command to one shell.
+						out, err := RunSuite(check.dir, triggerShell()+" -c "+shellQuote(defect.Trigger.Input), 10*time.Minute)
 						if err != nil {
 							t.Fatalf("trigger: %v", err)
 						}

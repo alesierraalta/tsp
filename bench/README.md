@@ -145,7 +145,12 @@ An own-history case is one of this repository's own bug-fix commits, one defect 
 fix's parent as the fixture and `fix.patch` is the source half of the commit, so `fix/all` is the parent plus
 the fix and nothing else: the test the commit came with is deliberately left out, because it is the oracle.
 The defect line is where the defective statement sits in the parent, and `defects[0].trigger.input` plants
-that commit's own test and runs it — red on `fixture/`, green on `fix/all`. Provenance sits in
+that commit's own test and runs it — red on `fixture/`, green on `fix/all`. Those trigger commands are POSIX
+`sh`: the base64 payload is one unquoted word and the `-run` regex spells anchored alternation as
+`\^Name\$\|\^Name\$` rather than a quoted `^(Name|Name)$`. The bench passes a trigger to `sh -c` through
+`hookcmd.ShellWords`, which strips quotes but keeps backslashes; dash rejects the unquoted `(` and a space in
+the base64 input that quoting used to leave behind. `TestCorpusOwnHistoryTriggersArePortableSh` refuses
+quotes, parentheses and bash-only constructs in o* triggers. Provenance sits in
 `defects[0].description`: the fix commit and its date, so a reading can be cut by date. Like `r*`, nothing is
 vendored: a fixture is this repository's whole tree at the parent (~2,700 files minus the declared
 exclusions below), built into `~/.cache/tsp/bench-cases` on first use, and each key's `suite` is the one
