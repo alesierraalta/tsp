@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alesierraalta/tsp/internal/testutil"
 )
 
 // redcheckRepo commits a Go module whose Order breaks its "sorted" contract, then lets the test add files.
@@ -54,6 +56,7 @@ func runRedcheckCLI(t *testing.T, bin, dir string) (int, string) {
 // judged. A new test that passes beside a witness may check a promise the code keeps, so it is listed but
 // never turns the verdict: telling the agent to make it fail would push it to break a correct test.
 func TestRedcheckExitCodesAndReport(t *testing.T) {
+	testutil.CeilingGitAt(t, os.TempDir())
 	if testing.Short() {
 		t.Skip("builds the CLI and runs go test")
 	}

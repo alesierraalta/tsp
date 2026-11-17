@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/alesierraalta/tsp/internal/findings"
+	"github.com/alesierraalta/tsp/internal/testutil"
 )
 
 const wait = 30 * time.Second
@@ -226,6 +227,7 @@ func TestD5ReportWithoutPromise(t *testing.T) {
 	}
 }
 func TestD6ExitCodes(t *testing.T) {
+	testutil.CeilingGitAt(t, os.TempDir())
 	d := repo(t)
 	if out, c := recordSuite(t, d, ""); c != 1 {
 		t.Fatalf("no witness: %d %s", c, out)
@@ -478,5 +480,25 @@ func TestHasRoundReadsTheBranchRecord(t *testing.T) {
 	}
 	if _, e := findings.HasRound(d); e == nil || findings.NoRecord(e) {
 		t.Fatalf("a registry that is there and unreadable is not a missing record: e=%v", e)
+	}
+}
+
+// A throwaway directory below a repository must still answer "not a repository" once the
+// enclosing repository is ceiled off. This is the contract the tests' shared git ceiling pins.
+func TestOutsideTempDirUnderEnclosingRepositoryIsNotARepository(t *testing.T) {
+	t.Setenv("TSP_HOME", t.TempDir())
+	outer := t.TempDir()
+	command(t, outer, "git", "init", "-q", "-b", "outer")
+	root := filepath.Join(outer, "tmp-root")
+	outside := filepath.Join(root, "outside")
+	if e := os.MkdirAll(outside, 0o700); e != nil {
+		t.Fatal(e)
+	}
+	if top := command(t, outside, "git", "rev-parse", "--show-toplevel"); top != outer {
+		t.Fatalf("fixture has no enclosing repository: top=%q want %q", top, outer)
+	}
+	testutil.CeilingGitAt(t, root)
+	if out, c := findings.Check(outside, wait); c != 2 {
+		t.Fatalf("outside a repository: exit=%d %q", c, out)
 	}
 }
