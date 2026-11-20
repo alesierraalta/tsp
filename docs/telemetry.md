@@ -105,6 +105,13 @@ interesting line in the ledger.
 
 ## `host_run` events
 
+One per agent run. The Pi extension writes them:
+
+- **Pi** (`assets/hosts/pi/tsp.ts`): when the extension detects a TSP run it mints a `run_id`
+  (`tsp-<epoch ms>-<hex>`), exports it as `TSP_RUN_ID` to every tsp it spawns, accumulates the
+  usage of each assistant message, tool calls by name, tool errors and compactions, and sends one
+  event through `tsp telemetry record` on settle. A declined or dismissed offer is sent with
+  `offer` set and no `run_id`.
 Other hosts send the same shape:
 
 ```sh

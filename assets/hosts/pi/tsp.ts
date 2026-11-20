@@ -9,7 +9,7 @@
 // authority is never called; UI writes are guarded by ctx.hasUI.
 
 import { execFile, execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -110,6 +110,73 @@ export function childEnv(base: Readonly<Record<string, string | undefined>>, d: 
 type ExecResult = { stdout: string; stderr: string; code: number };
 type ExecOpts = { cwd: string; env: Record<string, string | undefined> };
 export type ExecTpp = (argv: readonly string[], opts: ExecOpts) => Promise<ExecResult>;
+
+// --- Usage telemetry (#491) -------------------------------------------------------------------
+// The extension is the host the ledger measures: it mints a run id, hands it to every tsp it spawns through
+// TSP_RUN_ID, and reports the run's usage to `tsp telemetry record` on settle. The record is the same closed shape
+// internal/telemetry/record.go validates, so anything free-form here is a refusal there — never a line in the ledger.
+export const RUN_ID_ENV = "TSP_RUN_ID";
+const RUN_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const MODEL_RE = /^[A-Za-z0-9._:/@-]{1,128}$/;
+const TOOL_NAME_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+const MAX_TELEMETRY_TOOLS = 200;
+const MAX_TELEMETRY_TURNS = 5000;
+
+export type OfferOutcome = "accepted" | "declined" | "aborted" | "none";
+export interface TelemetryTokens { input?: number; output?: number; cache_read?: number; cache_write?: number }
+export interface TelemetryHost {
+  model?: string; turns: number; tool_calls: number; tool_errors: number; compactions: number;
+  wall_ms: number; first_tsp_ms?: number; tokens?: TelemetryTokens; cost_usd?: number;
+  per_turn?: TelemetryTokens[]; tools?: Record<string, number>; offer: OfferOutcome;
+}
+export interface TelemetryRecord { source: "pi"; run_id?: string; session?: string; host: TelemetryHost }
+export type TelemetrySink = (record: TelemetryRecord, opts: ExecOpts) => void | Promise<void>;
+
+/** A run id in the one shape the ledger accepts: tunable only so a test can pin the bytes it mints. */
+export function mintRunId(now: number = Date.now(), random: () => Buffer = () => randomBytes(4)): string {
+  const id = `tsp-${now}-${random().toString("hex")}`;
+  return RUN_ID_RE.test(id) ? id : `tsp-${now}-${randomBytes(4).toString("hex")}`;
+}
+
+/** A session id the ledger would accept, or undefined: a host id outside the pattern is omitted, never refused. */
+export function telemetrySession(id: unknown): string | undefined {
+  return typeof id === "string" && RUN_ID_RE.test(id) ? id : undefined;
+}
+
+/** Sends one host event to `tsp telemetry record` on stdin. It resolves silently on every failure: a missing tsp, a
+ * refused event or telemetry switched off must never surface in the session. */
+export function sendTelemetry(record: TelemetryRecord, opts: ExecOpts): Promise<void> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof execFile>;
+    try {
+      child = execFile("tsp", ["telemetry", "record"], { cwd: opts.cwd, env: opts.env as NodeJS.ProcessEnv, encoding: "utf8" }, () => resolve());
+    } catch {
+      resolve();
+      return;
+    }
+    child.on?.("error", () => resolve());
+    try { child.stdin?.end(JSON.stringify(record)); } catch { resolve(); }
+  });
+}
+
+interface RunUsage {
+  startedAt: number;
+  firstTspMs: number | undefined;
+  turns: number;
+  input: number; output: number; cacheRead: number; cacheWrite: number; hasTokens: boolean;
+  cost: number; hasCost: boolean;
+  perTurn: TelemetryTokens[];
+  tools: Map<string, number>;
+  toolCalls: number; toolErrors: number; compactions: number;
+  model: string | undefined;
+}
+const emptyUsage = (): RunUsage => ({
+  startedAt: Date.now(), firstTspMs: undefined, turns: 0,
+  input: 0, output: 0, cacheRead: 0, cacheWrite: 0, hasTokens: false,
+  cost: 0, hasCost: false, perTurn: [], tools: new Map(), toolCalls: 0, toolErrors: 0, compactions: 0, model: undefined,
+});
+const countOf = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 
 // Node's default 1 MiB would kill a long answer with "stdout maxBuffer length exceeded"; notices truncate it anyway.
 const MAX_CHILD_OUTPUT = 64 * 1024 * 1024;
@@ -432,6 +499,7 @@ export interface OfferOptions {
   exec?: ExecTpp; // defaults to the tsp binary
   head?: (cwd: string) => string; // the commit a turn starts from; defaults to asking git
   probe?: RepoProbe; // the working tree outside the edit tools; defaults to asking git
+  record?: TelemetrySink; // the host_run sink; defaults to `tsp telemetry record`
 }
 
 /** One reading of the working tree: the commit at its head and a digest per source file it has changed. */
@@ -804,12 +872,83 @@ interface Turn {
 function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   const optedOut = opts.optedOut ?? ((cwd: string) => existsSync(join(cwd, ".no-testing-gate")));
   const env = opts.env ?? process.env;
-  const exec = opts.exec ?? execTpp;
   const head = opts.head ?? headAt;
   const probe = opts.probe ?? repoProbe;
+  const record = opts.record ?? sendTelemetry;
   const child = env.GENTLE_PI_AGENTS_CHILD === "1";
   // Read at each check, not at load: gentle-pi may register its tools after this extension.
   const checkEnv = () => childEnv(env, { kind: "check", rest: [] }, observesGentleSession(pi.getAllTools()));
+  // The run's usage, reset on every run: absent means the host did not measure it, and a zero stays a measurement.
+  let usage = emptyUsage();
+  let runId: string | undefined;
+  let offer: OfferOutcome = "none"; // what this run was offered, or that an offer was declined
+  let pendingOffer: OfferOutcome | undefined; // an accepted offer: the TSP run it starts carries it
+  const resetUsage = () => { usage = emptyUsage(); runId = undefined; };
+  // The one wrapper every tsp the offer spawns goes through: the run id rides the child env, and the first child is
+  // how long the run took to reach tsp. A wrapper, not process.env, so nothing leaks into the host process.
+  const rawExec = opts.exec ?? execTpp;
+  const exec: ExecTpp = (argv, o) => {
+    if (runId === undefined) return rawExec(argv, o);
+    if (usage.firstTspMs === undefined) usage.firstTspMs = Math.max(0, Date.now() - usage.startedAt);
+    return rawExec(argv, { ...o, env: { ...o.env, [RUN_ID_ENV]: runId } });
+  };
+  // Assistant messages are the model calls, so each one is a turn and one per_turn entry.
+  pi.on("message_end", (event) => {
+    const message = (event as { message?: { role?: unknown; model?: unknown; usage?: unknown } }).message;
+    if (message === undefined || message.role !== "assistant") return;
+    usage.turns += 1;
+    if (typeof message.model === "string" && MODEL_RE.test(message.model)) usage.model = message.model;
+    const raw = message.usage as { input?: unknown; output?: unknown; cacheRead?: unknown; cacheWrite?: unknown; cost?: { total?: unknown } } | undefined;
+    if (raw === null || typeof raw !== "object") return;
+    const input = countOf(raw.input), output = countOf(raw.output), cacheRead = countOf(raw.cacheRead), cacheWrite = countOf(raw.cacheWrite);
+    if (input !== undefined || output !== undefined || cacheRead !== undefined || cacheWrite !== undefined) {
+      usage.hasTokens = true;
+      usage.input += input ?? 0; usage.output += output ?? 0; usage.cacheRead += cacheRead ?? 0; usage.cacheWrite += cacheWrite ?? 0;
+      if (usage.perTurn.length < MAX_TELEMETRY_TURNS) {
+        const turn: TelemetryTokens = {};
+        if (input !== undefined) turn.input = input;
+        if (output !== undefined) turn.output = output;
+        if (cacheRead !== undefined) turn.cache_read = cacheRead;
+        if (cacheWrite !== undefined) turn.cache_write = cacheWrite;
+        usage.perTurn.push(turn);
+      }
+    }
+    const cost = countOf(raw.cost?.total);
+    if (cost !== undefined) { usage.hasCost = true; usage.cost += cost; }
+  });
+  // A compaction is measured even when there is none: counting the events is how the extension knows.
+  pi.on("session_compact", () => { usage.compactions += 1; });
+  /** The run's host body: every measured count present, every unmeasured field absent. */
+  const hostBody = (outcome: OfferOutcome): TelemetryHost => {
+    const host: TelemetryHost = {
+      turns: usage.turns, tool_calls: usage.toolCalls, tool_errors: usage.toolErrors, compactions: usage.compactions,
+      wall_ms: Math.max(0, Date.now() - usage.startedAt), offer: outcome,
+    };
+    if (usage.model !== undefined) host.model = usage.model;
+    if (usage.firstTspMs !== undefined) host.first_tsp_ms = usage.firstTspMs;
+    if (usage.hasTokens) host.tokens = { input: usage.input, output: usage.output, cache_read: usage.cacheRead, cache_write: usage.cacheWrite };
+    if (usage.hasCost) host.cost_usd = usage.cost;
+    if (usage.perTurn.length > 0) host.per_turn = [...usage.perTurn];
+    if (usage.tools.size > 0) host.tools = Object.fromEntries(usage.tools);
+    return host;
+  };
+  /** One host_run on settle, and only when a TSP run happened or an offer was declined. Silence on every failure. */
+  const flushHostRun = async (aborted: boolean, ctx: { cwd: string; sessionManager?: { getSessionId?: () => string } }) => {
+    const offered = offer === "declined" || offer === "aborted";
+    if (child || (runId === undefined && !offered)) { resetUsage(); return; }
+    const outcome: OfferOutcome = aborted && runId !== undefined ? "aborted" : offer;
+    const event: TelemetryRecord = { source: "pi", host: hostBody(outcome) };
+    if (runId !== undefined) event.run_id = runId;
+    let session: string | undefined;
+    try { session = telemetrySession(ctx.sessionManager?.getSessionId?.()); } catch { session = undefined; }
+    if (session !== undefined) event.session = session;
+    const activeRun = runId;
+    resetUsage();
+    offer = "none";
+    // The recording child is a tsp spawn of the same run, so it carries the id too; the record also names it.
+    const childEnvForRecord = activeRun === undefined ? { ...env } : { ...env, [RUN_ID_ENV]: activeRun };
+    try { await record(event, { cwd: ctx.cwd, env: childEnvForRecord }); } catch { /* telemetry never fails a session */ }
+  };
   const edited = new Set<string>(); // source paths changed in the current run through the edit tools
   let turn: Turn | undefined; // the repository tree this run found, read only when the offer can fire
   const declined = new Set<string>(); // paths the user already said No to
@@ -839,7 +978,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   const persist = () => pi.appendEntry(STATE_TYPE, { declined: [...declined], lastFix, pending, ran, recordNudged, own, loop, continues, cap: loopCap, commitPending } satisfies OfferState);
   const restore = (ctx: { sessionManager?: { getBranch?: () => readonly unknown[] } }) => {
     declined.clear(); lastFix = ""; pending = ""; ran = false; recordNudged = false; own = undefined; loop = undefined; decision = undefined;
-    continues = 0; loopCap = 0; commitPending = false;
+    continues = 0; loopCap = 0; commitPending = false; pendingOffer = undefined;
     try {
       let data: unknown;
       for (const entry of (ctx.sessionManager?.getBranch?.() ?? []) as { type?: unknown; customType?: unknown; data?: unknown }[]) {
@@ -1000,6 +1139,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
   };
   pi.on("before_agent_start", (event, ctx) => {
     edited.clear();
+    resetUsage();
     turnHead = head(ctx.cwd);
     const user = event.messageType === "user";
     const mine = user && own !== undefined && (event.prompt ?? "").trim() === own.prompt.trim() ? own.kind : undefined;
@@ -1009,12 +1149,28 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     if (user && !feedbackRun) pending = "";
     fixRun = mine === "fix";
     tspRun = !feedbackRun && !fixRun && user && (mine === "round" || mine === "commit" || isTspRequest(event.prompt));
+    // The run id belongs to the TSP run, so it is minted here and reset by the next run; an accepted offer is how
+    // this run came to be, and it is consumed now so a later run never inherits it.
+    offer = "none";
+    if (tspRun) { runId = mintRunId(); offer = pendingOffer ?? "none"; }
+    pendingOffer = undefined;
     // A run that can never ask, or that is the TSP itself, needs no snapshot: reading git costs a process.
     // A headless session still needs it: the repository's requirement reaches the agent through the boundary.
     turn = child || optedOut(ctx.cwd) || feedbackRun || fixRun || tspRun ? undefined : openTurn(ctx.cwd);
   });
   pi.on("tool_result", (event, ctx) => {
-    if (!feedbackRun && !fixRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) tspRun = true;
+    if (typeof event.toolName === "string" && TOOL_NAME_RE.test(event.toolName)) {
+      usage.toolCalls += 1;
+      if (event.isError) usage.toolErrors += 1;
+      if (usage.tools.has(event.toolName) || usage.tools.size < MAX_TELEMETRY_TOOLS) {
+        usage.tools.set(event.toolName, (usage.tools.get(event.toolName) ?? 0) + 1);
+      }
+    }
+    if (!feedbackRun && !fixRun && !event.isError && loadsTspSkill(event.toolName, event.input, ctx.cwd)) {
+      tspRun = true;
+      // A run the skill load identifies starts here too, so the tsp children that follow carry its id.
+      if (runId === undefined) { runId = mintRunId(); offer = pendingOffer ?? "none"; pendingOffer = undefined; }
+    }
     if (!event.isError && submitsFeedback(event.toolName, event.input, event.content)) feedbackGiven = true;
     const path = (event.input as { path?: unknown }).path;
     if ((event.toolName === "edit" || event.toolName === "write") && !event.isError && typeof path === "string") edited.add(path);
@@ -1038,7 +1194,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       continue: true,
     };
   });
-  const settle = async (event: { aborted: boolean }, ctx: ExtensionContext) => {
+  const settleRun = async (event: { aborted: boolean }, ctx: ExtensionContext) => {
     continued = false;
     // The paths this turn changed, unfiltered and grouped by the root that holds each: what the repository requires
     // is read before a remembered decline is applied, because a decline answers one question and cannot silence a
@@ -1222,14 +1378,21 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     const recorded = answer === OFFER_YES ? "yes" : answer === OFFER_NO ? "no" : "dismissed";
     pi.appendEntry(OFFER_TYPE, { debt: owed, answer: recorded });
     if (answer === OFFER_YES) {
+      pendingOffer = "accepted"; // the TSP run this starts is recorded as accepted
       declined.clear();
       persist();
       pi.sendUserMessage(TSP_PROMPT);
     } else if (answer === OFFER_NO) {
+      offer = "declined";
       paths.forEach((p) => declined.add(p));
       decision = undefined; // the human answered: nothing is owed until the next change
       persist();
+    } else {
+      offer = "aborted"; // a question nobody answered ends the run without a run to record
     }
+  };
+  const settle = async (event: { aborted: boolean }, ctx: ExtensionContext) => {
+    try { await settleRun(event, ctx); } finally { await flushHostRun(event.aborted, ctx); }
   };
   pi.on("agent_settled", async (event, ctx) => {
     try { await settle(event, ctx); } finally { if (ctx.hasUI) paint(ctx); }
