@@ -105,13 +105,20 @@ interesting line in the ledger.
 
 ## `host_run` events
 
-One per agent run. The Pi extension writes them:
+One per agent run. Two adapters write them:
 
 - **Pi** (`assets/hosts/pi/tsp.ts`): when the extension detects a TSP run it mints a `run_id`
   (`tsp-<epoch ms>-<hex>`), exports it as `TSP_RUN_ID` to every tsp it spawns, accumulates the
   usage of each assistant message, tool calls by name, tool errors and compactions, and sends one
   event through `tsp telemetry record` on settle. A declined or dismissed offer is sent with
   `offer` set and no `run_id`.
+- **Claude Code** (the `tsp gate` Stop hook): when the session transcript evidences a TSP run, the
+  gate reads the transcript usage (`input_tokens`, `output_tokens`, `cache_read_input_tokens`,
+  `cache_creation_input_tokens`, deduplicated by message id), tool calls by name, tool errors,
+  model and wall time, and notes one event with source `claude`. A per-session cursor, named by a
+  hash, makes a later Stop count only the turns added since. The gate's decision, stdout and exit
+  are unchanged. `compactions`, `subagents`, `first_tsp_ms`, `cost_usd` and `offer` stay absent.
+
 Other hosts send the same shape:
 
 ```sh

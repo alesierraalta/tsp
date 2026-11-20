@@ -201,6 +201,10 @@ func Run(stdin io.Reader, stdout io.Writer, logPath string, now time.Time) (code
 		return 0
 	}
 	in := *parsed
+	// The host's own usage is measured before the decision and independently of it: a Stop that
+	// audits nothing still belongs to a session that spent tokens, and the event rides the process's
+	// single Flush. A transcript that names no TSP run is not this run's usage.
+	recordHostTelemetry(in)
 	offerFeedback, err := feature.Enabled("feedback")
 	if err != nil {
 		offerFeedback = false
