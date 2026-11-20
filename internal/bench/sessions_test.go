@@ -57,6 +57,27 @@ func TestSessionsOnePassKeepsTheOriginalRunShape(t *testing.T) {
 	}
 }
 
+func TestSessionsClassifyAMissLikeASingleSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs git and go test")
+	}
+	dir := escalateCase(t)
+	agent := func(ctx context.Context, ws string, key Key, opts Options) (AgentResult, error) {
+		return AgentResult{CostUSD: 1, Turns: 3}, os.WriteFile(filepath.Join(ws, "model", "agent_test.go"), []byte(blindTest), 0o644)
+	}
+	classes := map[int][]Miss{}
+	for _, n := range []int{0, 2} {
+		agg, code := Run(Options{CasesGlob: dir, Sessions: n, Runs: 1, Timeout: time.Minute, SuiteTimeout: time.Minute, Out: filepath.Join(t.TempDir(), "results"), Agent: agent})
+		if len(agg.Cases) != 1 || agg.Caught != 0 {
+			t.Fatalf("sessions %d: code %d aggregate %+v", n, code, agg)
+		}
+		classes[n] = agg.Cases[0].Misses
+	}
+	if len(classes[0]) != 1 || classes[0][0].Class == MissNotCheckable || !reflect.DeepEqual(classes[0], classes[2]) {
+		t.Fatalf("single-session misses %+v, sessions misses %+v", classes[0], classes[2])
+	}
+}
+
 func TestSessionsFailureKeepsWorkButDoesNotEnterAggregate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs git and go test")
