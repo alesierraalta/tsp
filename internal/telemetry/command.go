@@ -40,7 +40,7 @@ var documentedSubcommands = map[string][]string{
 	"bench":     {"run", "score", "history", "compare", "rescore", "adjudicate", "gate", "verify-oracle"},
 	"plan":      {"init", "check", "gaps", "upgrade", "add-finding", "add-evidence", "admit", "count", "export"},
 	"findings":  {"record", "check", "next", "verdict"},
-	"telemetry": {"record"},
+	"telemetry": {"record", "stats", "export"},
 	"feature":   {"list", "enable", "disable"},
 }
 

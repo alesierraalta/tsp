@@ -196,3 +196,27 @@ Written by tsp itself from the results it already computed. Counts are absent wh
 
 `plan` (one per `tsp plan init`, `micro`, `add-finding`, `add-evidence`, `admit`, `check`): `action`,
 `findings`, `evidence`, `problems`.
+
+## Reading the ledger
+
+`tsp telemetry stats [--json]` groups the events by tsp version and skill identity and prints:
+events and distinct runs; per subcommand its count, nonzero exits and their rate, and p50/p95
+duration (nearest rank); the check decision distribution; the blocked rate (check `exit` 2 or
+`reason` `error`); host totals of input, output, cache read and cache write tokens and the cache hit
+`cache_read / (input + cache_read + cache_write)` over the host runs that measured all three; turns
+and tool calls per host run; the offer distribution; and tokens per pinned red test (host tokens of
+the runs whose check events have `red > 0`, over their summed `red`). A nonzero exit is not always
+an error: check and redcheck answer with exit 1. Malformed lines (not JSON, not an object, or a
+`schema` other than 1) are counted and reported, never dropped silently. Reading works while the
+feature is off.
+
+`tsp telemetry export --format jsonl|csv` writes the valid lines verbatim, or as CSV with one column
+per dotted field (sorted header; arrays and the `tools` map are JSON in their cell), for correlation
+in any external tool. An unknown format exits 2.
+
+The file itself is newline-delimited JSON, so any reader works:
+
+```sh
+jq -c 'select(.kind == "command") | {name, sub, exit, duration_ms}' \
+  "$(tsp status --json | jq -r .stateRoot)/telemetry/events.jsonl"
+```

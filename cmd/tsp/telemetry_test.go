@@ -316,34 +316,21 @@ func TestTelemetryBareInvocationRecordsUnknownName(t *testing.T) {
 	}
 }
 
-// M2: stats and export are not part of this slice, so they are neither accepted nor named as subs.
-func TestTelemetryUnimplementedSubcommandsAreNotRecorded(t *testing.T) {
+func TestTelemetryReadSubcommandsAreRecorded(t *testing.T) {
 	bin := buildCLI(t)
+	home := t.TempDir()
+	enableTelemetry(t, bin, home)
 	for _, sub := range []string{"stats", "export"} {
-		sub := sub
-		t.Run(sub, func(t *testing.T) {
-			home := t.TempDir()
-			enableTelemetry(t, bin, home)
-			_, errOut, code := telemetryRun(t, bin, home, "", nil, "telemetry", sub)
-			if code != 2 || errOut == "" {
-				t.Fatalf("telemetry %s = %d %q, want exit 2 and usage on stderr", sub, code, errOut)
-			}
-			commands := eventsOfKind(readEvents(t, home), "command")
-			if len(commands) != 1 {
-				t.Fatalf("got %d command events, want 1", len(commands))
-			}
-			command := commands[0]["command"].(map[string]any)
-			if command["name"] != "telemetry" {
-				t.Errorf("command name = %v, want telemetry", command["name"])
-			}
-			if got, ok := command["sub"]; ok {
-				t.Errorf("command sub = %v, want absent for unimplemented %s", got, sub)
-			}
-		})
+		if _, stderr, code := telemetryRun(t, bin, home, "", nil, "telemetry", sub); code != 0 || stderr != "" {
+			t.Fatalf("%s: exit=%d stderr=%q", sub, code, stderr)
+		}
+		events := eventsOfKind(readEvents(t, home), "command")
+		if len(events) == 0 || events[len(events)-1]["command"].(map[string]any)["sub"] != sub {
+			t.Fatalf("missing command event for %s: %v", sub, events)
+		}
 	}
 }
 
-// M3: help must describe the write-failure behavior the CLI actually keeps: exit 0 and one warning.
 func TestTelemetryHelpMatchesWriteFailureBehavior(t *testing.T) {
 	bin := buildCLI(t)
 	home := t.TempDir()
@@ -531,5 +518,30 @@ func TestTelemetryFlagsFromEveryHelpText(t *testing.T) {
 		if strings.Join(got, ",") != strings.Join(expected, ",") {
 			t.Errorf("command %d flags = %v, want %v", i, got, expected)
 		}
+	}
+}
+
+// D16: reading stats or exporting the ledger resolves a legacy state root without migrating it.
+func TestTelemetryReadsTheLedgerWithoutMigrating(t *testing.T) {
+	bin := buildCLI(t)
+	configDir := t.TempDir()
+	legacy := filepath.Join(configDir, "tpp")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"schemaVersion":1}`
+	if err := os.WriteFile(filepath.Join(legacy, "state.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"telemetry", "stats"}, {"telemetry", "export", "--format", "jsonl"}} {
+		if _, errOut, code := telemetryRunConfig(t, bin, configDir, args...); code != 0 {
+			t.Fatalf("%v = %d: %s", args, code, errOut)
+		}
+	}
+	if got, err := os.ReadFile(filepath.Join(legacy, "state.json")); err != nil || string(got) != body {
+		t.Fatalf("legacy state = %q, %v", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(configDir, "tsp")); !os.IsNotExist(err) {
+		t.Fatalf("reading the ledger created a tsp root: %v", err)
 	}
 }
