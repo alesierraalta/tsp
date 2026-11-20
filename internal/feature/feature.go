@@ -22,6 +22,7 @@ type Feature struct {
 // The ids a caller may name without duplicating a declaration's string.
 const (
 	HeadlessLoopID = "headless-loop"
+	TelemetryID    = "telemetry"
 )
 
 var declarations = []Feature{
@@ -31,6 +32,16 @@ var declarations = []Feature{
 		Prompt:  "¿Quieres activar el feedback para ayudar a mejorar la herramienta?",
 		Help:    "Records are anonymized and kept in two local files that are never publishable.",
 		Preview: "Feedback records are anonymized in two local files (run-feedback.jsonl and run-feedback.md); both files are never publishable.",
+		Default: false,
+	},
+	{
+		// Opt-in and local-only: off writes nothing and creates nothing, so an install that never asks
+		// for telemetry carries no directory, no salt and no ledger.
+		ID:      TelemetryID,
+		Title:   "Telemetry",
+		Prompt:  "¿Quieres activar la telemetría de uso local para medir qué hace TSP en cada ejecución?",
+		Help:    "Counts, durations and salted pseudonyms in one local file; no code, prompts or paths, and nothing is ever sent anywhere.",
+		Preview: "Usage telemetry appends one JSON line per tsp run and one per host run the agent reports to <state root>/telemetry/events.jsonl: subcommand, flag names, exit code, wall time, token counts, model, tool counts and salted repository, machine and session pseudonyms. No code, prompt, finding text, flag value, positional argument or path is ever recorded, and the file stays local.",
 		Default: false,
 	},
 	{
@@ -70,11 +81,21 @@ func Get(id string) (Feature, bool) {
 
 // Enabled answers the persisted toggle; a state with no entry answers the feature's Default.
 func Enabled(id string) (bool, error) {
+	return enabled(id, state.Load)
+}
+
+// EnabledReadOnly answers the persisted toggle without resolving the state root by migration. A
+// caller that must not move or create anything reads through here.
+func EnabledReadOnly(id string) (bool, error) {
+	return enabled(id, state.LoadReadOnly)
+}
+
+func enabled(id string, load func() (*state.State, error)) (bool, error) {
 	declaration, ok := Get(id)
 	if !ok {
 		return false, unknownFeature(id)
 	}
-	current, err := state.Load()
+	current, err := load()
 	if err != nil {
 		return false, err
 	}

@@ -64,6 +64,60 @@ func resolveRoot() (string, error) {
 	return Root()
 }
 
+// RootReadOnly resolves the directory holding state.json without moving a legacy root, creating a
+// directory or writing an alias. It exists for a gate that must answer "off" without side effects:
+// telemetry never migrates a machine that never opted in. It reads an existing tsp root first, then
+// an unambiguous legacy root, and otherwise answers the tsp path it would use.
+func RootReadOnly() (string, error) {
+	for _, name := range []string{"TSP_HOME", "TPP_HOME", "RDD_PLUS_HOME"} {
+		if root := os.Getenv(name); root != "" {
+			return root, nil
+		}
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve XDG config directory: %w", err)
+	}
+	return readOnlyConfigRoot(configDir)
+}
+
+// readOnlyConfigRoot answers the same root migration would choose, but never moves or creates it.
+func readOnlyConfigRoot(configDir string) (string, error) {
+	current := filepath.Join(configDir, "tsp")
+	if _, err := os.Lstat(current); err == nil {
+		return current, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect TSP state root %s: %w", current, err)
+	}
+	legacyRoots := []string{filepath.Join(configDir, "tpp"), filepath.Join(configDir, "rdd-plus")}
+	var found []string
+	for _, path := range legacyRoots {
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return "", fmt.Errorf("inspect legacy state root %s: %w", path, err)
+		}
+		found = append(found, path)
+	}
+	switch len(found) {
+	case 0:
+		return current, nil
+	case 1:
+		return found[0], nil
+	default:
+		return "", fmt.Errorf("ambiguous legacy state roots %s and %s; refusing to merge", found[0], found[1])
+	}
+}
+
+// PathReadOnly answers <RootReadOnly>/state.json; it creates nothing.
+func PathReadOnly() (string, error) {
+	root, err := RootReadOnly()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "state.json"), nil
+}
+
 // Root resolves the directory holding state.json.
 func Root() (string, error) {
 	for _, name := range []string{"TSP_HOME", "TPP_HOME", "RDD_PLUS_HOME"} {
@@ -185,6 +239,20 @@ func Load() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	return loadAt(path)
+}
+
+// LoadReadOnly is Load without the legacy migration: the gate reads the state that is there and
+// creates or moves nothing.
+func LoadReadOnly() (*State, error) {
+	path, err := PathReadOnly()
+	if err != nil {
+		return nil, err
+	}
+	return loadAt(path)
+}
+
+func loadAt(path string) (*State, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return &State{SchemaVersion: 1}, nil

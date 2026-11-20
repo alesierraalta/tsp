@@ -30,6 +30,7 @@ import (
 	"github.com/alesierraalta/tsp/internal/sanitize"
 	"github.com/alesierraalta/tsp/internal/state"
 	"github.com/alesierraalta/tsp/internal/sync"
+	"github.com/alesierraalta/tsp/internal/telemetry"
 	"github.com/alesierraalta/tsp/internal/tui"
 	"github.com/alesierraalta/tsp/internal/update"
 	"io"
@@ -114,6 +115,9 @@ commands:
   tui      interactive menu over status, feature toggles, and the sync dry-run plan
   feedback record an honest process report on the method itself, read all reports, or review pending reports
            (--template | --file <path> | --summary | --pending | --mark-reviewed <token>)
+  telemetry the local usage ledger: report one host run
+           (record | reads one host event as JSON on stdin, validated against a closed allow-list)
+
   version  print the version
 
   killmatrix  revert each production hunk the change added and report the hunks no test kills.
@@ -235,7 +239,7 @@ plan admit [--path <path>] [--execute] [--sandbox] [--sandbox-image <image>] [--
             --record writes the freshly observed digest back into the named rows and requires
             --execute, because a dry run makes no observation to pin; exit 1 when any row is
             refused or a digest cannot be written)
-check [--cwd .] [--path <path>] [--since <commit>] [--json]
+check [--cwd .] [--path <path>] [--since <commit>] [--paths <path>] [--json]
 status [--json]
 update [--check]  --check only checks and refreshes the cache; it never installs
 restore [--id <backup-id>] [--dry-run]   (default: the latest backup)
@@ -264,66 +268,104 @@ func main() {
 	if code, ok := bench.RunClaudeShim(); ok {
 		os.Exit(code)
 	}
-	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+	os.Exit(run(os.Args[1:]))
+}
+
+// telemetryBase names the build and the skill every ledger event is stamped with. It is read here
+// because internal/telemetry imports neither buildinfo nor feedback.
+func telemetryBase() telemetry.Base {
+	return telemetry.Base{
+		Version: buildinfo.Version,
+		Commit:  buildinfo.Revision(),
+		Skill:   feedback.EmbeddedSkillIdentity(),
 	}
-	switch os.Args[1] {
-	case "probe":
-		os.Exit(runProbe(os.Args[2:]))
-	case "gate":
-		os.Exit(runGate(os.Args[2:]))
-	case "bind":
-		os.Exit(runBind(os.Args[2:]))
-	case "setup":
-		os.Exit(runSetup(os.Args[2:]))
-	case "sync":
-		os.Exit(runSync(os.Args[2:]))
-	case "uninstall":
-		os.Exit(runUninstall(os.Args[2:]))
-	case "restore":
-		os.Exit(runRestore(os.Args[2:]))
-	case "repair":
-		os.Exit(runRepair(os.Args[2:]))
-	case "doctor":
-		os.Exit(runDoctor(os.Args[2:]))
-	case "bench":
-		os.Exit(runBench(os.Args[2:]))
-	case "pin":
-		os.Exit(runPin(os.Args[2:]))
-	case "plan":
-		os.Exit(runPlan(os.Args[2:]))
-	case "check":
-		os.Exit(runCheck(os.Args[2:]))
-	case "redcheck":
-		os.Exit(runRedcheck(os.Args[2:]))
-	case "verify":
-		os.Exit(runVerify(os.Args[2:]))
-	case "mutate":
-		os.Exit(runMutate(os.Args[2:]))
-	case "scan":
-		os.Exit(runScan(os.Args[2:]))
-	case "findings":
-		os.Exit(runFindings(os.Args[2:]))
-	case "status":
-		os.Exit(runStatus(os.Args[2:]))
-	case "killmatrix":
-		os.Exit(runKillmatrix(os.Args[2:]))
-	case "update":
-		os.Exit(runUpdate(os.Args[2:]))
-	case "feature":
-		os.Exit(runFeature(os.Args[2:]))
-	case "tui":
-		os.Exit(runTUI(os.Args[2:]))
-	case "feedback":
-		os.Exit(runFeedback(os.Args[2:]))
-	case "version":
+}
+
+// run is the one dispatch: it reads the telemetry gate, times the subcommand, lets it exit exactly
+// as it did before, and then makes the run's single telemetry write. The gate is read before the
+// command runs, so `tsp feature enable telemetry` is not itself recorded. A telemetry failure never
+// changes the exit code or stdout; it costs exactly one stderr line.
+func run(args []string) int {
+	gate := telemetry.Begin()
+	started := time.Now()
+	code := dispatch(args)
+	elapsed := time.Since(started)
+	name, rest := "", []string(nil)
+	if len(args) > 0 {
+		name, rest = args[0], args[1:]
+	}
+	// A bare invocation has no name to dispatch, but is still one run: the shared constructor gives
+	// it the stable "unknown" name so its usage error, time and envelope reach the ledger too.
+	command := telemetry.NewCommand(telemetryDocumentation, dispatchedCommandNames(), name, rest, code, elapsed)
+	if err := gate.Flush(telemetryBase(), command); err != nil {
+		fmt.Fprintln(os.Stderr, "tsp telemetry:", err)
+	}
+	return code
+}
+
+// dispatchedCommand is one entry of the one table dispatch and telemetry share: the name a run is
+// recorded under and the arm it runs. Keeping them together is what makes a dispatched command always
+// a known name, instead of a second hand list that can drift.
+type dispatchedCommand struct {
+	name string
+	run  func([]string) int
+}
+
+var dispatchedCommands = []dispatchedCommand{
+	{"probe", runProbe},
+	{"gate", runGate},
+	{"bind", runBind},
+	{"setup", runSetup},
+	{"sync", runSync},
+	{"uninstall", runUninstall},
+	{"restore", runRestore},
+	{"repair", runRepair},
+	{"doctor", runDoctor},
+	{"bench", runBench},
+	{"pin", runPin},
+	{"plan", runPlan},
+	{"check", runCheck},
+	{"redcheck", runRedcheck},
+	{"verify", runVerify},
+	{"mutate", runMutate},
+	{"scan", runScan},
+	{"findings", runFindings},
+	{"status", runStatus},
+	{"killmatrix", runKillmatrix},
+	{"update", runUpdate},
+	{"feature", runFeature},
+	{"tui", runTUI},
+	{"feedback", runFeedback},
+	{"telemetry", runTelemetry},
+	{"version", func([]string) int {
 		fmt.Println(buildinfo.String())
-		os.Exit(0)
-	default:
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+		return 0
+	}},
+}
+
+// dispatchedCommandNames answers the table's names in table order; command events use the same slice
+// dispatch matches against.
+func dispatchedCommandNames() []string {
+	names := make([]string, 0, len(dispatchedCommands))
+	for _, command := range dispatchedCommands {
+		names = append(names, command.name)
 	}
+	return names
+}
+
+// dispatch is the subcommand table: one arm per command, no behavior of its own.
+func dispatch(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprint(os.Stderr, usage)
+		return 2
+	}
+	for _, command := range dispatchedCommands {
+		if command.name == args[0] {
+			return command.run(args[1:])
+		}
+	}
+	fmt.Fprint(os.Stderr, usage)
+	return 2
 }
 
 func runProbe(args []string) int {
@@ -1293,10 +1335,12 @@ func firstLine(text string) string {
 }
 
 // runRedcheck tells a testing agent which of its new tests pin nothing: they pass on the code HEAD holds.
+// findingsHelp is the findings command's own usage: its subcommands and the flags each documents.
+const findingsHelp = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--since <rev>] [--class <familia>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings next [--cwd <dir>] [--timeout <duration>] [--json]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\nSupported suites: go test, pytest, node --test, jest, vitest run (also npx), cargo test.\nCargo witnesses must be in recognized test files (e.g. tests/), not inline unit tests.\n--class remembers the class of the witnesses this round pins for this repository; a record without it remembers nothing.\nnext answers what the TSP loop owes now: fix, tsp, done or stop (exit 1, 1, 0, 3; 2 cannot judge).\n"
+
 func runFindings(args []string) int {
-	const help = "Usage of findings:\n  tsp findings record [--cwd <dir>] [--suite <cmd>] [--since <rev>] [--class <familia>] [--timeout <duration>]\n  tsp findings check [--cwd <dir>] [--timeout <duration>]\n  tsp findings next [--cwd <dir>] [--timeout <duration>] [--json]\n  tsp findings verdict F<n> rejected|wontfix --reason <why> | verdict F<n> clear [--cwd <dir>]\nSupported suites: go test, pytest, node --test, jest, vitest run (also npx), cargo test.\nCargo witnesses must be in recognized test files (e.g. tests/), not inline unit tests.\n--class remembers the class of the witnesses this round pins for this repository; a record without it remembers nothing.\nnext answers what the TSP loop owes now: fix, tsp, done or stop (exit 1, 1, 0, 3; 2 cannot judge).\n"
 	if len(args) == 0 || (args[0] != "record" && args[0] != "check" && args[0] != "next" && args[0] != "verdict") {
-		fmt.Fprint(os.Stderr, help)
+		fmt.Fprint(os.Stderr, findingsHelp)
 		if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 			return 0
 		}
@@ -1339,7 +1383,7 @@ func runFindings(args []string) int {
 		return code
 	}
 	if fs.NArg() != 0 || *timeout <= 0 {
-		fmt.Fprint(os.Stderr, help)
+		fmt.Fprint(os.Stderr, findingsHelp)
 		return 2
 	}
 	var out string
@@ -3166,6 +3210,7 @@ func replayFindings(path string, timeout time.Duration) (problems, unproven []st
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- the command is the reproduction the plan row itself claims; it is read from the plan, never from a request
 		cmd := exec.CommandContext(ctx, "sh", "-c", command)
 		// A reproduction is written the way a row is: from the repository root, not from the plan's own
 		// directory, which is where a relative command would not find what it names.
