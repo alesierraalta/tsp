@@ -1275,11 +1275,34 @@ func runCheck(args []string) int {
 		}
 		return ran, err
 	}})
+	noteCheck(res)
 	if *asJSON {
 		return printCheckVerdict(res)
 	}
 	fmt.Println(strings.TrimRight(res.Text, "\n"))
 	return res.Exit
+}
+
+// noteCheck records the check's content-free shape: the decision, the reason category and the counts
+// it already computed. It never runs when the check never reached a verdict: a refused invocation
+// has no result to describe.
+func noteCheck(res check.Result) {
+	telemetry.Note(telemetry.Event{Kind: telemetry.KindCheck, Check: &telemetry.Check{
+		Decision:    res.Gate,
+		Exit:        res.Exit,
+		Reason:      res.ReasonCode,
+		Suite:       res.Suite,
+		Runners:     res.Runners,
+		Languages:   res.Languages,
+		Files:       res.Changed,
+		Lines:       res.ChangedLines,
+		TestFiles:   res.TestFiles,
+		Red:         res.Red,
+		PinsNothing: res.PinsNothing,
+		NewCode:     res.NewCode,
+		Waiver:      res.Waiver,
+		OptOut:      res.OptOut,
+	}})
 }
 
 // refuseCheck answers a run the flags made impossible. --json promised one object, so a caller that
@@ -1827,6 +1850,11 @@ func runPlan(args []string) int {
 			fmt.Fprintln(os.Stderr, "plan init:", err)
 			return 1
 		}
+		action := "init"
+		if *micro {
+			action = "micro"
+		}
+		notePlan(action, effectivePath, nil)
 		fmt.Printf("wrote %s\n", effectivePath)
 		return 0
 	case "export":
@@ -1889,6 +1917,8 @@ func runPlan(args []string) int {
 		if notice != "" {
 			fmt.Println(notice)
 		}
+		problemCount := len(problems)
+		notePlan("check", effectivePath, &problemCount)
 		if len(problems) != 0 {
 			return 1
 		}
@@ -1942,6 +1972,7 @@ func runPlan(args []string) int {
 			}
 			return 1
 		}
+		notePlan("add-finding", effectivePath, nil)
 		fmt.Printf("added %s to %s at line %d\n", rowID, effectivePath, line)
 		return 0
 	case "add-evidence":
@@ -1977,6 +2008,7 @@ func runPlan(args []string) int {
 			}
 			return 1
 		}
+		notePlan("add-evidence", effectivePath, nil)
 		fmt.Printf("added %s to %s at line %d\n", rowID, effectivePath, line)
 		return 0
 	default:
@@ -2038,7 +2070,24 @@ func runPlanAdmit(path string, execute bool, timeout time.Duration, only, record
 			_ = base.Save(root, rec)
 		}
 	}
+	notePlan("admit", path, nil)
 	return code
+}
+
+// notePlan records a plan command's content-free result: the action and the row/problem counts that
+// can be read from the document. A count from a document that could not be read stays absent.
+func notePlan(action, path string, problems *int) {
+	body := &telemetry.Plan{Action: action}
+	if problems != nil {
+		body.Problems = telemetry.Count(*problems)
+	}
+	if data, err := os.ReadFile(path); err == nil {
+		_, findingsRows := plan.Table(string(data), "Findings")
+		_, evidenceRows := plan.Table(string(data), "Evidence ledger")
+		body.Findings = telemetry.Count(len(findingsRows))
+		body.Evidence = telemetry.Count(len(evidenceRows))
+	}
+	telemetry.Note(telemetry.Event{Kind: telemetry.KindPlan, Plan: body})
 }
 
 // gitOutput runs git in dir: the CLI side of the same question the stop gate asks through

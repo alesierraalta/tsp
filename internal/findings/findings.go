@@ -18,6 +18,7 @@ import (
 	"github.com/alesierraalta/tsp/internal/filelock"
 	"github.com/alesierraalta/tsp/internal/hookcmd"
 	"github.com/alesierraalta/tsp/internal/state"
+	"github.com/alesierraalta/tsp/internal/telemetry"
 )
 
 type Finding struct {
@@ -162,6 +163,13 @@ func ignored(dir, rel string) bool {
 
 func failure(e error) (string, int) { return "tsp findings: " + e.Error() + "\n", 2 }
 
+// noteFinding records one findings command's content-free result: its action, the defect class or
+// verdict it carried, and how many findings it touched. A nil count stays absent.
+func noteFinding(f telemetry.Finding) {
+	body := f
+	telemetry.Note(telemetry.Event{Kind: telemetry.KindFinding, Finding: &body})
+}
+
 // judgedCommitHook is the seam a test uses to move HEAD while a round is judged.
 var judgedCommitHook func(top string)
 
@@ -211,10 +219,14 @@ func Record(dir, suite, since string, timeout time.Duration) (string, int) {
 // RecordClass is Record with the defect class the caller declares for the witnesses this round pins. The class is
 // remembered for the repository, never stored on a finding: it is knowledge about the repository, not evidence about
 // a branch. An empty class declares nothing and writes no memory.
-func RecordClass(dir, suite, since, class string, timeout time.Duration) (string, int) {
+func RecordClass(dir, suite, since, class string, timeout time.Duration) (text string, code int) {
+	// Only a known family is a closed value; a refused class is the caller's own text and stays out.
+	recorded := telemetry.Finding{Action: "record"}
+	defer func() { noteFinding(recorded) }()
 	if class != "" && !knownClass(class) {
 		return failure(unknownClass(class))
 	}
+	recorded.Class = class
 	r, path, top, e := load(dir)
 	if e != nil {
 		return failure(e)
@@ -260,6 +272,7 @@ func RecordClass(dir, suite, since, class string, timeout time.Duration) (string
 	if e != nil {
 		return failure(e)
 	}
+	recorded.Count = telemetry.Count(len(rep.Red))
 	if rep.Suite == "" {
 		rep.Suite = suite
 	}
@@ -409,6 +422,7 @@ func SetVerdict(dir, id, decision, reason string) (string, int) {
 		if err := save(r, path); err != nil {
 			return failure(err)
 		}
+		noteFinding(telemetry.Finding{Action: "verdict", Verdict: decision, Count: telemetry.Count(1)})
 		return out, 0
 	}
 	return failure(fmt.Errorf("unknown finding %s", id))
@@ -420,6 +434,7 @@ func Check(dir string, timeout time.Duration) (string, int) {
 	if e != nil {
 		return failure(e)
 	}
+	noteFinding(telemetry.Finding{Action: "check", Count: telemetry.Count(j.findings)})
 	if j.summary == "" {
 		return fmt.Sprintf("no findings recorded on %s\n", j.branch), 0
 	}
@@ -428,10 +443,11 @@ func Check(dir string, timeout time.Duration) (string, int) {
 
 // judged is one review of every recorded finding, as it was saved.
 type judged struct {
-	branch  string
-	summary string // the review line; empty when nothing is recorded
-	lines   string // one line per finding
-	code    int    // check's exit code
+	branch   string
+	summary  string // the review line; empty when nothing is recorded
+	lines    string // one line per finding
+	code     int    // check's exit code
+	findings int    // how many findings the review read
 }
 
 // suiteRun is one run of a suite: each test's outcome, and whether the run could be judged at all.
@@ -476,7 +492,7 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 			runExtra()
 			e = saveAmended(dir, path, func(latest *registry) error { return amend(latest, runs, judged{branch: r.Branch}) })
 		}
-		return judged{branch: r.Branch}, e
+		return judged{branch: r.Branch, findings: len(r.Findings)}, e
 	}
 	original := append([]Finding(nil), r.Findings...)
 	fixed, open, newCount, regressed, need := 0, 0, 0, 0, 0
@@ -636,7 +652,7 @@ func reviewAll(dir string, timeout time.Duration, extra []string, amend func(lat
 	if cannotJudge {
 		code = 2
 	}
-	j := judged{branch: r.Branch, summary: report, lines: lines.String(), code: code}
+	j := judged{branch: r.Branch, summary: report, lines: lines.String(), code: code, findings: len(r.Findings)}
 	if amend != nil {
 		if e = amend(r, runs, j); e != nil {
 			return judged{}, e

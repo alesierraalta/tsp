@@ -88,6 +88,9 @@ type Event struct {
 
 	Command *Command `json:"command,omitempty"`
 	Host    *Host    `json:"host,omitempty"`
+	Check   *Check   `json:"check,omitempty"`
+	Finding *Finding `json:"finding,omitempty"`
+	Plan    *Plan    `json:"plan,omitempty"`
 }
 
 // Command is one subcommand's event: its name, the documented sub it ran, the flag NAMES it was
