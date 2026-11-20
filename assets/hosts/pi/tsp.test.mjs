@@ -30,6 +30,8 @@ import tppExtension, {
   cwdPath,
   repoProbe as gitProbe,
   unrecordedRunNotice,
+  mintRunId,
+  RUN_ID_ENV,
 } from "./tsp.ts";
 
 // The literals internal/mode pins on the Go side: the shared protocol, spelled out on both shores.
@@ -213,15 +215,16 @@ const autoRunOff = { stdout: JSON.stringify({ features: [{ id: "feedback", enabl
 // chat when the repository left that to the human; "Sí" sends the identity prompt "haz el TSP" as if the user typed
 // it. Every collaborator is faked: no Pi, no files, no git.
 function offerHarness(opts = {}) {
-  const { hasUI = true, optedOut = false, env = {}, tools = [], findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), status, probe, entries = [], feedback, cwd = "/repo" } = opts;
+  const { hasUI = true, optedOut = false, env = {}, tools = [], findings = {}, head = () => "abc123", check = askVerdict("run m1: layers swept: 1 of 3"), status, probe, entries = [], feedback, cwd = "/repo", sessionId } = opts;
   const answer = "answer" in opts ? opts.answer : "Sí"; // undefined means the user dismissed the question
   // shown is what the status line read at the moment each dialog opened: the line exists to show the debt while
   // the question is open, and every later paint happens after the answer has already settled it.
-  const asked = [], sent = [], calls = [], notes = [], statuses = [], widgets = [], checkEnvs = [], shown = [];
+  const asked = [], sent = [], calls = [], notes = [], statuses = [], widgets = [], checkEnvs = [], shown = [], envs = [], recorded = [];
   // findings maps a findings subcommand to the child it answers with; a missing one answers exit 0, no output.
   // check is the pre-offer `tsp check --json` the offer derives its verdict from; the default names one run to plan.
   const exec = async (argv, o) => {
     calls.push({ argv: [...argv], cwd: o.cwd });
+    envs.push(o.env);
     if (argv[0] === "check") checkEnvs.push(o.env);
     // A feedback template nobody configured answers as tsp does with feedback switched off: no request, no notice.
     const fallback = argv[0] === "feedback" ? feedback ?? { stdout: "feedback is disabled, so there is nothing to record: skip the retrospective. Enable it with: tsp feature enable feedback\n", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 0 };
@@ -245,8 +248,10 @@ function offerHarness(opts = {}) {
     sendUserMessage: (text) => sent.push(text),
     appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }),
   };
-  tppExtension(pi, { optedOut: () => optedOut, env, exec, head, probe });
-  const ctx = { hasUI, cwd, sessionManager: { getBranch: () => entries }, ui: {
+  // The telemetry sink is faked beside every other collaborator: a harness never spawns a child on its own.
+  const record = opts.record ?? ((event, o) => { recorded.push({ event, opts: o }); });
+  tppExtension(pi, { optedOut: () => optedOut, env, exec, head, probe, record });
+  const ctx = { hasUI, cwd, sessionManager: { getBranch: () => entries, getSessionId: () => sessionId }, ui: {
     select: async (title, options) => { shown.push(statuses.at(-1)); asked.push({ title, options }); return answer; },
     notify: (message, type) => notes.push({ message, type }),
     setStatus: (_key, text) => statuses.push(text),
@@ -254,8 +259,10 @@ function offerHarness(opts = {}) {
   } };
   const start = async (reason = "startup") => { await handlers.session_start?.({ type: "session_start", reason }, ctx); };
   const beforeSettle = async () => handlers.agent_before_settle?.({ type: "agent_before_settle", entries: [] }, ctx);
-  const run = async (prompt, edits, { aborted = false } = {}) => {
+  const run = async (prompt, edits, { aborted = false, usage = [], compactions = 0 } = {}) => {
     await handlers.before_agent_start?.({ type: "before_agent_start", messageType: "user", prompt }, ctx);
+    for (const message of usage) await handlers.message_end?.({ type: "message_end", message }, ctx);
+    for (let i = 0; i < compactions; i++) await handlers.session_compact?.({ type: "session_compact", reason: "threshold" }, ctx);
     for (const [toolName, path, isError = false, output = ""] of edits) {
       const input = toolName === "bash" ? { command: path } : { path };
       const content = output === "" ? [] : [{ type: "text", text: output }];
@@ -266,7 +273,7 @@ function offerHarness(opts = {}) {
     await handlers.agent_settled({ type: "agent_settled", aborted }, ctx);
     return proposal;
   };
-  return { asked, sent, calls, checkEnvs, notes, statuses, shown, widgets, entries, run, start, beforeSettle };
+  return { asked, sent, calls, checkEnvs, notes, statuses, shown, widgets, entries, envs, recorded, run, start, beforeSettle };
 }
 
 // The check's argv: one object of output, the turn's own base commit, and one --paths per path.
@@ -2032,4 +2039,116 @@ test("the git probe names a path's worktree root, the clone it shares, and the c
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
+});
+
+// --- Usage telemetry (#491) -------------------------------------------------------------------
+// One content-free host_run per TSP run: the run id the extension mints rides every tsp child, and the
+// record it sends on settle is the exact closed shape internal/telemetry/record.go accepts.
+const HOST_KEYS = ["model", "turns", "tool_calls", "tool_errors", "compactions", "wall_ms", "first_tsp_ms", "tokens", "cost_usd", "per_turn", "tools", "offer"];
+const assistantTurn = (input, output, cacheRead, cacheWrite, cost = 0, model = "anthropic/claude-haiku-5-5") => ({
+  role: "assistant", model,
+  usage: { input, output, cacheRead, cacheWrite, totalTokens: input + output + cacheRead + cacheWrite, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } },
+});
+
+test("a run id matches the identity pattern the ledger accepts", () => {
+  const first = mintRunId(1700000000000, () => Buffer.from("a1b2c3d4", "hex"));
+  assert.equal(first, "tsp-1700000000000-a1b2c3d4");
+  assert.match(first, /^[A-Za-z0-9._:-]{1,128}$/);
+  assert.notEqual(mintRunId(), mintRunId(), "two runs never share an id");
+});
+
+test("a TSP run mints a run id, passes it to every tsp child, and sends one content-free record on settle", async () => {
+  const h = offerHarness({ sessionId: "session-abc" });
+  await h.run("haz el TSP", [["edit", "internal/a.go"]], {
+    usage: [assistantTurn(10, 5, 300, 40, 0.25), assistantTurn(20, 7, 100, 0, 0.5)],
+    compactions: 1,
+  });
+  assert.equal(h.recorded.length, 1, "exactly one host_run for the run");
+  const { event, opts } = h.recorded[0];
+  assert.deepEqual(Object.keys(event).sort(), ["host", "run_id", "session", "source"]);
+  assert.equal(event.source, "pi");
+  assert.match(event.run_id, /^tsp-\d+-[0-9a-f]+$/);
+  assert.equal(event.session, "session-abc", "a session id that matches the pattern is sent raw and salted by tsp");
+  const host = event.host;
+  assert.deepEqual(Object.keys(host).sort(), [...HOST_KEYS].sort(), "the host body carries exactly the allow-listed keys");
+  assert.equal(host.model, "anthropic/claude-haiku-5-5");
+  assert.equal(host.turns, 2);
+  assert.equal(host.tool_calls, 1);
+  assert.equal(host.tool_errors, 0);
+  assert.equal(host.compactions, 1);
+  assert.equal(host.offer, "none", "a run started without the offer names none");
+  assert.deepEqual(host.tokens, { input: 30, output: 12, cache_read: 400, cache_write: 40 });
+  assert.equal(host.cost_usd, 0.75);
+  assert.deepEqual(host.per_turn, [
+    { input: 10, output: 5, cache_read: 300, cache_write: 40 },
+    { input: 20, output: 7, cache_read: 100, cache_write: 0 },
+  ]);
+  assert.deepEqual(host.tools, { edit: 1 });
+  assert.ok(host.wall_ms >= 0 && host.first_tsp_ms >= 0, "the timings are measured");
+  assert.equal(opts.cwd, "/repo");
+  assert.ok(h.calls.length > 0, "the run spawned tsp children");
+  for (const env of h.envs) assert.equal(env[RUN_ID_ENV], event.run_id, "every tsp child of the run carries the run id");
+  const raw = JSON.stringify(event);
+  assert.ok(!raw.includes("internal/a.go") && !raw.includes("haz el TSP"), `the record carries no content: ${raw}`);
+});
+
+test("tool errors are counted, and a session id outside the pattern is never sent", async () => {
+  const h = offerHarness({ sessionId: "not a session id" });
+  await h.run("haz el TSP", [["edit", "a.go"], ["bash", "go test ./...", true]], { usage: [assistantTurn(1, 2, 0, 0)] });
+  assert.equal(h.recorded.length, 1);
+  const { event } = h.recorded[0];
+  assert.equal("session" in event, false, "a session id the ledger would refuse is omitted, not sent");
+  assert.equal(event.host.tool_calls, 2);
+  assert.equal(event.host.tool_errors, 1);
+  assert.deepEqual(event.host.tools, { bash: 1, edit: 1 });
+});
+
+test("a run that is not a TSP run sends nothing", async () => {
+  const h = offerHarness({ answer: undefined });
+  await h.run("add a retry limit", [], { usage: [assistantTurn(1, 1, 0, 0)] });
+  assert.deepEqual(h.recorded, []);
+});
+
+test("a declined offer is recorded as declined, without a run id", async () => {
+  const h = offerHarness({ answer: "No" });
+  await h.run("change a", [["edit", "a.go"]], { usage: [assistantTurn(3, 4, 5, 6)] });
+  assert.equal(h.recorded.length, 1);
+  const { event } = h.recorded[0];
+  assert.equal(event.host.offer, "declined");
+  assert.equal("run_id" in event, false);
+  assert.equal(h.envs.some((env) => env[RUN_ID_ENV] !== undefined), false, "a declined offer spawns no TSP run, so no run id rides a child");
+});
+
+test("run state resets per run: a second TSP run gets its own id and only its own usage", async () => {
+  const h = offerHarness();
+  await h.run("haz el TSP", [["edit", "a.go"]], { usage: [assistantTurn(10, 5, 0, 0)] });
+  await h.run("haz el TSP", [["edit", "a.go"]], { usage: [assistantTurn(1, 2, 3, 4)] });
+  assert.equal(h.recorded.length, 2);
+  const [one, two] = h.recorded.map(({ event }) => event);
+  assert.notEqual(one.run_id, two.run_id);
+  assert.deepEqual(two.host.tokens, { input: 1, output: 2, cache_read: 3, cache_write: 4 });
+  assert.equal(two.host.turns, 1);
+  assert.equal(two.host.compactions, 0, "the extension counts compaction events, so none is a measured zero");
+});
+
+test("an aborted TSP run is recorded as aborted, and a failing sink never disturbs the session", async () => {
+  const h = offerHarness();
+  await h.run("haz el TSP", [["edit", "a.go"]], { aborted: true, usage: [assistantTurn(1, 2, 0, 0)] });
+  assert.equal(h.recorded.length, 1);
+  assert.equal(h.recorded[0].event.host.offer, "aborted");
+  for (const record of [() => { throw new Error("tsp is missing"); }, async () => { throw new Error("exit 2"); }]) {
+    const failing = offerHarness({ record });
+    await assert.doesNotReject(failing.run("haz el TSP", [["edit", "a.go"]], { usage: [assistantTurn(1, 1, 0, 0)] }));
+    assert.equal(failing.sent.length, 0, "the session carries on unchanged");
+  }
+});
+
+test("a TSP run an accepted offer started is recorded as accepted, and the offer turn itself is not a run", async () => {
+  const h = offerHarness();
+  await h.run("change a", [["edit", "a.go"]], { usage: [assistantTurn(7, 8, 0, 0)] });
+  assert.equal(h.asked.length, 1, "the offer was asked");
+  assert.deepEqual(h.recorded, [], "the offer turn waits for the run its answer starts");
+  await h.run("haz el TSP", [["edit", "a.go"]], { usage: [assistantTurn(1, 2, 0, 0)] });
+  assert.equal(h.recorded.length, 1);
+  assert.equal(h.recorded[0].event.host.offer, "accepted");
 });
