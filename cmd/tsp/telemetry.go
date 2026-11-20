@@ -32,8 +32,8 @@ const telemetryHelp = `Usage of telemetry:
       Writes the ledger back: jsonl is every valid line verbatim, csv is one column per flattened
       dotted field with a sorted header (arrays and dynamic maps JSON-encoded in the cell).
       Malformed lines are skipped and their count is reported on stderr. Default format: jsonl.
-Exit 0: read or accepted; 1: the ledger could not be read; 2: usage error or a refused event that
-wrote nothing.
+Exit 0: accepted or read; 1: the ledger could not be read; 2: usage error or refused host event.
+A record write failure adds one stderr warning without changing the exit code.
 `
 
 // telemetryDocumentation is every help text the CLI prints: the main usage plus the commands with
