@@ -297,6 +297,71 @@ func TestTelemetryUnknownCommandName(t *testing.T) {
 	}
 }
 
+// M1: a bare invocation is still one command event, under a stable unknown name.
+func TestTelemetryBareInvocationRecordsUnknownName(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	enableTelemetry(t, bin, home)
+	_, _, code := telemetryRun(t, bin, home, "", nil)
+	if code != 2 {
+		t.Fatalf("bare tsp exit = %d, want 2", code)
+	}
+	commands := eventsOfKind(readEvents(t, home), "command")
+	if len(commands) != 1 {
+		t.Fatalf("got %d command events, want 1", len(commands))
+	}
+	command := commands[0]["command"].(map[string]any)
+	if command["name"] != "unknown" || command["exit"] != float64(code) {
+		t.Errorf("bare command = %v, want name unknown and exit %d", command, code)
+	}
+}
+
+func TestTelemetryReadSubcommandsAreRecorded(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	enableTelemetry(t, bin, home)
+	for _, sub := range []string{"stats", "export"} {
+		if _, stderr, code := telemetryRun(t, bin, home, "", nil, "telemetry", sub); code != 0 || stderr != "" {
+			t.Fatalf("%s: exit=%d stderr=%q", sub, code, stderr)
+		}
+		events := eventsOfKind(readEvents(t, home), "command")
+		if len(events) == 0 || events[len(events)-1]["command"].(map[string]any)["sub"] != sub {
+			t.Fatalf("missing command event for %s: %v", sub, events)
+		}
+	}
+}
+
+func TestTelemetryHelpMatchesWriteFailureBehavior(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	enableTelemetry(t, bin, home)
+	if err := os.WriteFile(filepath.Join(home, "telemetry"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := telemetryRun(t, bin, home, "", nil, "telemetry", "--help")
+	if code != 0 || out != "" {
+		t.Fatalf("help with a broken ledger = %d %q, want exit 0 and no stdout", code, out)
+	}
+	if !strings.Contains(errOut, "Usage of telemetry:") {
+		t.Fatalf("help is missing from stderr: %q", errOut)
+	}
+	if strings.Contains(errOut, "1: the ledger could not be written") {
+		t.Errorf("help still promises exit 1 on a write failure: %q", errOut)
+	}
+	if !strings.Contains(errOut, "Exit 0: accepted") || !strings.Contains(errOut, "one stderr warning") {
+		t.Errorf("help does not state exit 0 plus one warning: %q", errOut)
+	}
+	var warnings []string
+	for _, line := range strings.Split(strings.TrimRight(errOut, "\n"), "\n") {
+		if strings.HasPrefix(line, "tsp telemetry:") {
+			warnings = append(warnings, line)
+		}
+	}
+	if len(warnings) != 1 {
+		t.Errorf("got %d telemetry warnings, want 1: %q", len(warnings), errOut)
+	}
+}
+
 // D8: a usage prose word is not a nested subcommand.
 func TestTelemetrySubcommandIsNotAUsageWord(t *testing.T) {
 	bin := buildCLI(t)
