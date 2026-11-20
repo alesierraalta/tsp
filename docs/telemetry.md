@@ -44,7 +44,8 @@ untouched and the failure costs exactly one stderr line:
 tsp telemetry: <what failed>
 ```
 
-A ledger that cannot be written therefore costs a line, not a run.
+The help text states this explicitly: a write failure keeps exit 0 and adds one stderr warning; it
+is not an exit 1. A ledger that cannot be written therefore costs a line, not a run.
 
 ## The no-content rule
 
@@ -98,6 +99,11 @@ One per tsp invocation, written by `tsp` itself.
 | `flags` | array of string, absent | The flag **names** given that the command's own usage and help texts document, in order, deduplicated. `--path=secret/x.md` contributes `path`; the value and any positional argument never appear, and a dash-prefixed value such as `--file -private` contributes `file` only. Scanning stops at `--`. A value that is itself a documented flag word can be recorded as a flag name; no user text can. |
 | `exit` | int | The process exit code the command returned. |
 | `duration_ms` | int | Wall-clock milliseconds for the subcommand. |
+
+A bare `tsp` has no dispatched name, but is still one usage error: it is recorded as `unknown` with
+exit 2. The reader subcommands `stats` and `export` are not part of this slice; `tsp telemetry stats`
+and `tsp telemetry export` are usage errors with no `sub`. The child slices that introduce those
+readers must add them to the subcommand allow-list at the same time.
 
 A refused or failed command is recorded exactly like a successful one, with its own exit code: the
 failure rate is `exit != 0` over all `command` events, and a command that failed is often the most
@@ -171,6 +177,9 @@ a different denominator can compute it.
 |---|---|
 | 0 | Accepted. Silent on stdout and stderr. With telemetry off, accepted and nothing kept. |
 | 2 | Refused: a usage error, or an event outside the closed shape. No `host_run` was written; the invocation's own `command` event remains. |
+
+A ledger write failure is not a refusal: `telemetry record` still exits 0 and prints exactly one
+`tsp telemetry:` warning on stderr, as `tsp telemetry --help` documents.
 
 A refusal names the field, never the value that was sent:
 

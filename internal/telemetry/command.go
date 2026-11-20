@@ -31,8 +31,10 @@ var flagNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 // flagTokenRe matches a flag the usage text documents, long or short, anywhere in a command's entry.
 var flagTokenRe = regexp.MustCompile(`(?:^|[\s(\[,])--?([a-z][a-z0-9-]{0,39})(?:\s|$|=|[,)\]])`)
 
-// documentedSubcommands is the explicit allow-list of nested subcommands. A word the usage prose
-// merely mentions is not here, so `tsp telemetry reads` can never record `reads`.
+// documentedSubcommands is the explicit allow-list of nested subcommands the current slice really
+// dispatches. A word the usage prose merely mentions is not here, so `tsp telemetry reads` can never
+// record `reads`; future readers such as `telemetry stats` and `telemetry export` are added here only
+// when the slices that accept them exist.
 var documentedSubcommands = map[string][]string{
 	"probe":     {"env", "arch", "quality"},
 	"bench":     {"run", "score", "history", "compare", "rescore", "adjudicate", "gate", "verify-oracle"},
