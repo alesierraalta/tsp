@@ -23,6 +23,9 @@ type SessionResult struct {
 func runSessions(caseDir, ws string, key Key, runOpts, opts Options, res Result) Result {
 	started := time.Now()
 	caught := map[string]bool{}
+	// observed keeps every defect some session's catch check judged, caught or not, so Diagnose reads the same
+	// shape as a single session and tells a missed defect from one never checked.
+	observed := map[string]bool{}
 	attempts := 0
 	var ar AgentResult
 	var catch CatchResult
@@ -36,6 +39,9 @@ func runSessions(caseDir, ws string, key Key, runOpts, opts Options, res Result)
 			catch = Discriminate(caseDir, ws, key, opts.SuiteTimeout)
 			r.BrokenTests = catch.BrokenTests
 			for _, d := range key.Defects {
+				if _, ok := catch.Caught[d.ID]; ok {
+					observed[d.ID] = true
+				}
 				if catch.Caught[d.ID] && !caught[d.ID] {
 					caught[d.ID] = true
 					r.Caught = append(r.Caught, d.ID)
@@ -73,7 +79,10 @@ func runSessions(caseDir, ws string, key Key, runOpts, opts Options, res Result)
 	}
 	res.FinalMessage = clipFinalMessage(ar.Result)
 	res = merge(res, ScoreWorkspace(ws, key))
-	catch.Caught = caught
+	catch.Caught = map[string]bool{}
+	for id := range observed {
+		catch.Caught[id] = caught[id]
+	}
 	res.Catch = catch
 	res.Caught = len(caught)
 	res.Misses = Diagnose(res, key)
