@@ -19,8 +19,9 @@ const telemetryHelp = `Usage of telemetry:
       bounds or trailing data is refused with exit 2 and NOTHING is written.
       Validation runs even when telemetry is off; with it off a valid event is accepted and the
       ledger is not created.
-Exit 0: accepted; 1: the ledger could not be written; 2: usage error or a refused event that
-wrote nothing.
+Exit 0: accepted, also when the ledger cannot be written — that failure adds one stderr warning
+      ("tsp telemetry: <what failed>") and never changes the exit code; 2: usage error or a refused
+      event that wrote nothing.
 `
 
 // telemetryDocumentation is every help text the CLI prints: the main usage plus the commands with

@@ -290,13 +290,13 @@ func run(args []string) int {
 	started := time.Now()
 	code := dispatch(args)
 	elapsed := time.Since(started)
-	var command telemetry.Command
+	name, rest := "", []string(nil)
 	if len(args) > 0 {
-		command = telemetry.NewCommand(telemetryDocumentation, dispatchedCommandNames(), args[0], args[1:], code, elapsed)
-	} else {
-		// No subcommand was named, so no name is recorded; the run's own time still gets stamped.
-		command = telemetry.Command{Exit: code, DurationMS: elapsed.Milliseconds()}
+		name, rest = args[0], args[1:]
 	}
+	// A bare invocation has no name to dispatch, but is still one run: the shared constructor gives
+	// it the stable "unknown" name so its usage error, time and envelope reach the ledger too.
+	command := telemetry.NewCommand(telemetryDocumentation, dispatchedCommandNames(), name, rest, code, elapsed)
 	if err := gate.Flush(telemetryBase(), command); err != nil {
 		fmt.Fprintln(os.Stderr, "tsp telemetry:", err)
 	}
