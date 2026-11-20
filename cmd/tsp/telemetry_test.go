@@ -455,3 +455,28 @@ func TestTelemetryFlagsFromEveryHelpText(t *testing.T) {
 		}
 	}
 }
+
+// D16: reading stats or exporting the ledger resolves a legacy state root without migrating it.
+func TestTelemetryReadsTheLedgerWithoutMigrating(t *testing.T) {
+	bin := buildCLI(t)
+	configDir := t.TempDir()
+	legacy := filepath.Join(configDir, "tpp")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"schemaVersion":1}`
+	if err := os.WriteFile(filepath.Join(legacy, "state.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"telemetry", "stats"}, {"telemetry", "export", "--format", "jsonl"}} {
+		if _, errOut, code := telemetryRunConfig(t, bin, configDir, args...); code != 0 {
+			t.Fatalf("%v = %d: %s", args, code, errOut)
+		}
+	}
+	if got, err := os.ReadFile(filepath.Join(legacy, "state.json")); err != nil || string(got) != body {
+		t.Fatalf("legacy state = %q, %v", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(configDir, "tsp")); !os.IsNotExist(err) {
+		t.Fatalf("reading the ledger created a tsp root: %v", err)
+	}
+}

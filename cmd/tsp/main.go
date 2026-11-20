@@ -115,9 +115,10 @@ commands:
   tui      interactive menu over status, feature toggles, and the sync dry-run plan
   feedback record an honest process report on the method itself, read all reports, or review pending reports
            (--template | --file <path> | --summary | --pending | --mark-reviewed <token>)
-  telemetry the local usage ledger: report one host run
-           (record | reads one host event as JSON on stdin, validated against a closed allow-list)
-
+  telemetry the local usage ledger: report one host run, read back what tsp measured
+           (record | reads one host event as JSON on stdin, validated against a closed allow-list;
+            stats [--json] | reads the ledger back: counts, nonzero-exit rates, p50/p95, cache hit;
+            export [--format jsonl|csv] | writes the ledger back verbatim or as flattened CSV)
   version  print the version
 
   killmatrix  revert each production hunk the change added and report the hunks no test kills.
