@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,7 +94,39 @@ type Result struct {
 	Gate string
 	// Reason says where that level came from, for a host that reports it instead of parsing the text.
 	Reason string
+
+	// The fields below are the check's own content-free measurement, filled from what it already
+	// computed. A count that was not measured stays nil so a telemetry reader reads it as absent, not
+	// as zero. They change no behavior: Run's text and exit are decided without them.
+	ReasonCode   string
+	Suite        string
+	Runners      []string
+	Languages    []string
+	Changed      *int64
+	ChangedLines *int64
+	TestFiles    *int64
+	Red          *int64
+	PinsNothing  *int64
+	NewCode      *int64
+	Waiver       bool
+	OptOut       bool
 }
+
+// The closed reason categories a check event reports. They classify why the verdict is what it is;
+// they never carry free text from the repository.
+const (
+	ReasonWitness     = "witness"
+	ReasonPinsNothing = "pins_nothing"
+	ReasonNoWitness   = "no_witness"
+	ReasonNoRun       = "no_run"
+	ReasonWaived      = "waived"
+	ReasonOptOut      = "opt_out"
+	ReasonNoSource    = "no_source"
+	ReasonPlanOpen    = "plan_open"
+	ReasonPlanDone    = "plan_done"
+	ReasonPlanMicro   = "plan_micro"
+	ReasonError       = "error"
+)
 
 // The gate levels a verdict can carry. None means this repository does not gate this change, ask
 // means a human is consulted once before TSP runs, and required means TSP runs without asking.
@@ -190,11 +223,17 @@ func Run(cwd string, d Deps) (res Result) {
 	// this function reports to the level the repository and the runtime agree on. A declaration that
 	// cannot be read fails closed with an error of its own, before any debt is computed.
 	decision := Decision{}
-	defer func() { res = applyGate(res, decision) }()
+	root := ""
+	// The measurement rides the same deferred read as the gate: the verdict is final first, then its
+	// content-free shape is derived from what Run already computed. It never changes Exit or Text.
+	defer func() {
+		res = applyGate(res, decision)
+		res = measure(root, d, res)
+	}()
 	rootOut, err := d.Git(cwd, "rev-parse", "--show-toplevel")
-	root := strings.TrimSpace(rootOut)
+	root = strings.TrimSpace(rootOut)
 	if err != nil || root == "" {
-		return Result{Text: "not a git repository: nothing to check"}
+		return Result{ReasonCode: ReasonError, Text: "not a git repository: nothing to check"}
 	}
 	planRelPath := d.PlanPath
 	// declaredRun scopes the verdict to the run the declaration selected; it stays empty when the
@@ -202,7 +241,7 @@ func Run(cwd string, d Deps) (res Result) {
 	declaredRun := ""
 	if planRelPath != "" {
 		if err := plan.ValidatePlanPath("--path", planRelPath); err != nil {
-			return Result{Exit: 1, Text: err.Error()}
+			return Result{Exit: 1, ReasonCode: ReasonError, Text: err.Error()}
 		}
 		planRelPath = filepath.Clean(planRelPath)
 	} else {
@@ -211,13 +250,13 @@ func Run(cwd string, d Deps) (res Result) {
 		if cfgErr != nil {
 			// A declaration that cannot be read is not a debt: it is the check unable to say what this
 			// repository requires, so it fails closed and never invites a run it cannot justify.
-			return Result{Exit: 2, Text: "the plan declaration could not be read: " + cfgErr.Error()}
+			return Result{Exit: 2, ReasonCode: ReasonError, Text: "the plan declaration could not be read: " + cfgErr.Error()}
 		}
 	}
 	planFilePath := filepath.Join(root, planRelPath)
 	declared, gateErr := plan.DeclaredGate(root, d.ReadFile)
 	if gateErr != nil {
-		return Result{Exit: 2, Text: "the plan declaration could not be read: " + gateErr.Error()}
+		return Result{Exit: 2, ReasonCode: ReasonError, Text: "the plan declaration could not be read: " + gateErr.Error()}
 	}
 	decision = decideGate(declared, d.Gentle())
 	// A declared gate always and an opt-out answer the same question differently. Settling that by
@@ -225,7 +264,7 @@ func Run(cwd string, d Deps) (res Result) {
 	// check exists to prevent; two answers have no answer, so it fails closed before any verdict.
 	if decision.Level == DecisionRequired {
 		if _, err := d.ReadFile(filepath.Join(root, optOutName)); err == nil {
-			return Result{Exit: 2, Text: "the repository declares gate " + plan.GateAlways + " in " + plan.ConfigName + " and carries " + optOutName + ": the two answers contradict, so the check cannot say whether to gate. Remove " + optOutName + " or declare gate " + plan.GateAsk + " or " + plan.GateNever}
+			return Result{Exit: 2, ReasonCode: ReasonError, Text: "the repository declares gate " + plan.GateAlways + " in " + plan.ConfigName + " and carries " + optOutName + ": the two answers contradict, so the check cannot say whether to gate. Remove " + optOutName + " or declare gate " + plan.GateAsk + " or " + plan.GateNever}
 		}
 	}
 	// The plan is read before the diff so the versioning caveat rides with every verdict, including
@@ -236,11 +275,11 @@ func Run(cwd string, d Deps) (res Result) {
 		warn = ignoredPlanWarning(root, planRelPath, d)
 	}
 	if d.Base != "" && (len(d.Paths) > 0 || d.PlanPath != "") {
-		return Result{Exit: 2, Text: warn + "--base checks a commit range: --paths and a plan file answer for the working tree, so neither combines with it. --no-test-needed does, because a range can warrant no test too: it records the waiver the commit carries"}
+		return Result{Exit: 2, ReasonCode: ReasonError, Text: warn + "--base checks a commit range: --paths and a plan file answer for the working tree, so neither combines with it. --no-test-needed does, because a range can warrant no test too: it records the waiver the commit carries"}
 	}
 	statusOut, all, err := d.changedPaths(root)
 	if err != nil {
-		return Result{Text: warn + err.Error()}
+		return Result{ReasonCode: ReasonError, Text: warn + err.Error()}
 	}
 	scope := ""
 	if d.Base != "" {
@@ -255,13 +294,13 @@ func Run(cwd string, d Deps) (res Result) {
 		sha, err := d.Git(root, "rev-parse", "--verify", "--quiet", d.Since+"^{commit}")
 		sha = strings.TrimSpace(sha)
 		if err != nil || sha == "" {
-			return Result{Exit: 2, Text: warn + "--since " + d.Since + " is not a commit in this repository: name a ref that resolves"}
+			return Result{Exit: 2, ReasonCode: ReasonError, Text: warn + "--since " + d.Since + " is not a commit in this repository: name a ref that resolves"}
 		}
 		// The range is read with its statuses: a work unit that deletes a test did not bring one, and
 		// counting the path alone would answer "a test was added or changed" for the opposite change.
 		out, err := d.Git(root, "diff", "--name-status", "-z", sha, "--")
 		if err != nil {
-			return Result{Exit: 2, Text: warn + "--since " + d.Since + " could not be read: " + err.Error()}
+			return Result{Exit: 2, ReasonCode: ReasonError, Text: warn + "--since " + d.Since + " could not be read: " + err.Error()}
 		}
 		fields := strings.Split(out, "\x00")
 		for i := 0; i+1 < len(fields); i += 2 {
@@ -280,10 +319,10 @@ func Run(cwd string, d Deps) (res Result) {
 		}
 	}
 	if len(files) == 0 {
-		return Result{Text: warn + scope + "no production source is changed: nothing to check"}
+		return Result{ReasonCode: ReasonNoSource, Text: warn + scope + "no production source is changed: nothing to check"}
 	}
 	if d.Waive != "" && planErr == nil && d.Base == "" {
-		return Result{Exit: 2, Files: files, Text: warn + "--no-test-needed applies only without a plan: " + planRelPath + " is this change's record"}
+		return Result{Exit: 2, Files: files, ReasonCode: ReasonError, Text: warn + "--no-test-needed applies only without a plan: " + planRelPath + " is this change's record"}
 	}
 	if len(d.Paths) > 0 {
 		res := scopedVerdict(cwd, root, files, all, deletedPaths(statusOut), d)
@@ -291,8 +330,14 @@ func Run(cwd string, d Deps) (res Result) {
 		return res
 	}
 	if planErr != nil && d.Waive != "" {
-		res := recordWaiver(root, files, d)
+		res, recorded := recordWaiver(root, files, d)
 		res.Files = files
+		if recorded {
+			res.ReasonCode = ReasonWaived
+			res.Waiver = true
+		} else {
+			res.ReasonCode = ReasonError
+		}
 		res.Text = warn + scope + changedLine(files) + "\n" + res.Text
 		return res
 	}
@@ -301,12 +346,18 @@ func Run(cwd string, d Deps) (res Result) {
 	// unrelated pull request. The witness question is the range's answer.
 	if d.Base != "" {
 		if reason, ok := rangeWaived(root, files, d); ok {
-			res := Result{Files: files, Text: warn + scope + changedLine(files) + "\nno test is required for this range: " + WaiverName + " records why — " + reason}
+			res := Result{Files: files, ReasonCode: ReasonWaived, Waiver: true, Text: warn + scope + changedLine(files) + "\nno test is required for this range: " + WaiverName + " records why — " + reason}
 			return res
 		}
 		if d.Waive != "" {
-			res := recordWaiver(root, files, d)
+			res, recorded := recordWaiver(root, files, d)
 			res.Files = files
+			if recorded {
+				res.ReasonCode = ReasonWaived
+				res.Waiver = true
+			} else {
+				res.ReasonCode = ReasonError
+			}
 			res.Text = warn + scope + changedLine(files) + "\n" + res.Text
 			return res
 		}
@@ -343,19 +394,19 @@ func Run(cwd string, d Deps) (res Result) {
 	// and every row counts, the legacy whole-plan reading the manual command has always had.
 	gaps, err := plan.GapsForRun(body, declaredRun)
 	if err != nil {
-		return Result{Exit: 1, Files: files, Text: warn + scope + changedLine(files) + "\nthe plan could not be read: " + err.Error()}
+		return Result{Exit: 1, Files: files, ReasonCode: ReasonError, Text: warn + scope + changedLine(files) + "\nthe plan could not be read: " + err.Error()}
 	}
 	if !gaps.Any() && gaps.Micro != "" {
-		return Result{Files: files, Text: warn + scope + changedLine(files) + "\n" + planRelPath + " owes nothing: it is a micro plan for one small function, which owes no layer sweep"}
+		return Result{Files: files, ReasonCode: ReasonPlanMicro, Text: warn + scope + changedLine(files) + "\n" + planRelPath + " owes nothing: it is a micro plan for one small function, which owes no layer sweep"}
 	}
 	if !gaps.Any() {
 		owes := planRelPath + " owes nothing"
 		if declaredRun != "" {
 			owes += " for run " + declaredRun
 		}
-		return Result{Files: files, Text: warn + scope + changedLine(files) + "\n" + owes + ": every assigned layer was swept and every ranked target is done"}
+		return Result{Files: files, ReasonCode: ReasonPlanDone, Text: warn + scope + changedLine(files) + "\n" + owes + ": every assigned layer was swept and every ranked target is done"}
 	}
-	return Result{Exit: 1, Files: files, Text: warn + scope + changedLine(files) + "\n" + gaps.Report()}
+	return Result{Exit: 1, Files: files, ReasonCode: ReasonPlanOpen, Text: warn + scope + changedLine(files) + "\n" + gaps.Report()}
 }
 
 // changedPaths reads the candidate: the commit range when Base names one, the working tree otherwise.
@@ -444,15 +495,15 @@ func scopedVerdict(cwd, root string, changed, all, deleted []string, d Deps) Res
 		}
 	}
 	if len(in) == 0 {
-		return Result{Text: "no production source in the named paths is changed: nothing to check"}
+		return Result{ReasonCode: ReasonNoSource, Text: "no production source in the named paths is changed: nothing to check"}
 	}
 	sort.Strings(in)
 	line := changedLine(in)
 	if _, err := d.ReadFile(filepath.Join(root, optOutName)); err == nil {
-		return Result{Files: in, Text: line + "\n" + optOutName + " is present: this repository opted out of the testing check"}
+		return Result{Files: in, ReasonCode: ReasonOptOut, OptOut: true, Text: line + "\n" + optOutName + " is present: this repository opted out of the testing check"}
 	}
 	if reason, ok := waived(root, in, d); ok {
-		return Result{Files: in, Text: line + "\nthis change needs no new test (waived: " + reason + ")"}
+		return Result{Files: in, ReasonCode: ReasonWaived, Waiver: true, Text: line + "\nthis change needs no new test (waived: " + reason + ")"}
 	}
 	var tests []string
 	for _, p := range all {
@@ -463,19 +514,19 @@ func scopedVerdict(cwd, root string, changed, all, deleted []string, d Deps) Res
 		}
 	}
 	if len(tests) == 0 {
-		return Result{Exit: 1, Files: in, Text: line + "\n" + noWitnessDebt}
+		return Result{Exit: 1, Files: in, ReasonCode: ReasonNoWitness, Text: line + "\n" + noWitnessDebt}
 	}
 	sort.Strings(tests)
 	if d.TSPRun != nil {
 		ran, err := d.TSPRun(root)
 		if err != nil && !errors.Is(err, ErrNoRecord) {
-			return Result{Exit: 2, Text: line + "\nthe branch's findings record could not be read: " + err.Error()}
+			return Result{Exit: 2, ReasonCode: ReasonError, Text: line + "\nthe branch's findings record could not be read: " + err.Error()}
 		}
 		if err == nil && !ran {
-			return Result{Exit: 1, Files: in, Text: line + "\n" + "a test came with it (" + capNames(tests) + "), but " + noRunDebt}
+			return Result{Exit: 1, Files: in, TestFiles: witnessCount(len(tests)), ReasonCode: ReasonNoRun, Text: line + "\n" + "a test came with it (" + capNames(tests) + "), but " + noRunDebt}
 		}
 	}
-	return Result{Files: in, Text: line + "\n" + "a test was added or changed with it: " + capNames(tests)}
+	return Result{Files: in, TestFiles: witnessCount(len(tests)), ReasonCode: ReasonWitness, Text: line + "\n" + "a test was added or changed with it: " + capNames(tests)}
 }
 
 // outside reports a repository-relative path that leaves the repository.
@@ -584,17 +635,18 @@ func deletedPaths(raw string) []string {
 // repository opted out with .no-testing-gate. A suite that cannot be judged fails closed.
 func witnessVerdict(root string, files []string, d Deps) Result {
 	if _, err := d.ReadFile(filepath.Join(root, optOutName)); err == nil {
-		return Result{Text: optOutName + " is present: this repository opted out of the testing check"}
+		return Result{ReasonCode: ReasonOptOut, OptOut: true, Text: optOutName + " is present: this repository opted out of the testing check"}
 	}
 	if reason, ok := waived(root, files, d); ok {
-		return Result{Text: "this change needs no new test (waived: " + reason + ")"}
+		return Result{ReasonCode: ReasonWaived, Waiver: true, Text: "this change needs no new test (waived: " + reason + ")"}
 	}
 	w, err := d.RedCheck(root)
 	if err != nil {
-		return Result{Exit: 1, Text: "the new tests could not be judged: " + err.Error()}
+		return Result{Exit: 1, ReasonCode: ReasonError, Text: "the new tests could not be judged: " + err.Error()}
 	}
+	witness := WitnessCounts(w)
 	if len(w.TestFiles) == 0 {
-		return Result{Exit: 1, Text: noWitnessDebt}
+		return Result{Exit: 1, ReasonCode: ReasonNoWitness, TestFiles: witness.TestFiles, Red: witness.Red, PinsNothing: witness.PinsNothing, NewCode: witness.NewCode, Text: noWitnessDebt}
 	}
 	// The code a change starts from is named, because in a range check it is not HEAD and saying so would send
 	// the reader looking at the wrong tree.
@@ -603,12 +655,28 @@ func witnessVerdict(root string, files []string, d Deps) Result {
 		where = "the code at " + w.Base
 	}
 	if len(w.NewCode) > 0 {
-		return Result{Text: fmt.Sprintf("%d name(s) this change adds and the base commit does not define, so these tests witness it by not compiling without it: %s", len(w.NewCode), strings.Join(w.NewCode, ", "))}
+		return Result{ReasonCode: ReasonWitness, TestFiles: witness.TestFiles, Red: witness.Red, PinsNothing: witness.PinsNothing, NewCode: witness.NewCode, Text: fmt.Sprintf("%d name(s) this change adds and the base commit does not define, so these tests witness it by not compiling without it: %s", len(w.NewCode), strings.Join(w.NewCode, ", "))}
 	}
 	if len(w.Red) == 0 {
-		return Result{Exit: 1, Text: "no new test fails on " + where + ", so none of them pins a defect: change the input or setup until a test fails for the reason the contract names, or run tsp redcheck to see each test"}
+		return Result{Exit: 1, ReasonCode: ReasonPinsNothing, TestFiles: witness.TestFiles, Red: witness.Red, PinsNothing: witness.PinsNothing, NewCode: witness.NewCode, Text: "no new test fails on " + where + ", so none of them pins a defect: change the input or setup until a test fails for the reason the contract names, or run tsp redcheck to see each test"}
 	}
-	return Result{Text: fmt.Sprintf("%d new test(s) fail on %s: %s", len(w.Red), where, strings.Join(w.Red, ", "))}
+	return Result{ReasonCode: ReasonWitness, TestFiles: witness.TestFiles, Red: witness.Red, PinsNothing: witness.PinsNothing, NewCode: witness.NewCode, Text: fmt.Sprintf("%d new test(s) fail on %s: %s", len(w.Red), where, strings.Join(w.Red, ", "))}
+}
+
+// WitnessCounts is the content-free shape of what the red check saw: how many test files, how many
+// pinned a defect on the base code, how many pinned nothing, and how many new names a test needed.
+func WitnessCounts(w Witness) Result {
+	return Result{
+		TestFiles:   witnessCount(len(w.TestFiles)),
+		Red:         witnessCount(len(w.Red)),
+		PinsNothing: witnessCount(len(w.PinsNothing)),
+		NewCode:     witnessCount(len(w.NewCode)),
+	}
+}
+
+func witnessCount(n int) *int64 {
+	value := int64(n)
+	return &value
 }
 
 // waiver is what --no-test-needed records: a person's reason, bound to the content of the changed
@@ -636,16 +704,18 @@ func changeFingerprint(root string, files []string, d Deps) string {
 	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
-func recordWaiver(root string, files []string, d Deps) Result {
+// recordWaiver writes the waiver and reports whether it was actually recorded: a failed write is
+// not a waiver, so the caller must report an error instead of a decided change.
+func recordWaiver(root string, files []string, d Deps) (Result, bool) {
 	w := waiver{Fingerprint: changeFingerprint(root, files, d), Files: files, Reason: d.Waive, Recorded: time.Now().UTC().Format(time.RFC3339)}
 	body, err := json.MarshalIndent(w, "", "  ")
 	if err == nil {
 		err = os.WriteFile(filepath.Join(root, WaiverName), append(body, '\n'), 0o644)
 	}
 	if err != nil {
-		return Result{Exit: 1, Text: "the waiver could not be recorded: " + err.Error()}
+		return Result{Exit: 1, Text: "the waiver could not be recorded: " + err.Error()}, false
 	}
-	return Result{Text: "recorded in " + WaiverName + ": " + d.Waive + "\ncommit it with the change so the reviewer sees why there is no test; editing the code again voids it"}
+	return Result{Text: "recorded in " + WaiverName + ": " + d.Waive + "\ncommit it with the change so the reviewer sees why there is no test; editing the code again voids it"}, true
 }
 
 // waived reports whether the recorded waiver covers exactly the change in the tree now.
@@ -708,6 +778,168 @@ func ignoredPlanWarning(root, path string, d Deps) string {
 
 func changedLine(files []string) string {
 	return fmt.Sprintf("%d production source file(s) changed: %s", len(files), capNames(files))
+}
+
+// measure fills the content-free shape of a verdict from what Run already computed. It reads no
+// repository content into the result: only counts, extensions and runner names. An unreadable line
+// count stays absent rather than becoming zero.
+func measure(root string, d Deps, res Result) Result {
+	if len(res.Files) > 0 {
+		res.Languages = languagesOf(res.Files)
+		res.Runners = runnersFor(res.Languages)
+		res.Changed = witnessCount(len(res.Files))
+		if root != "" {
+			if lines, ok := changedLineCount(root, res.Files, d); ok {
+				res.ChangedLines = witnessCount(lines)
+			}
+		}
+		res.Suite = suiteName(d.Suite)
+		if res.Suite == "" && len(res.Runners) > 0 {
+			res.Suite = res.Runners[0]
+		}
+	}
+	if res.ReasonCode == "" {
+		switch {
+		case res.Waiver:
+			res.ReasonCode = ReasonWaived
+		case res.OptOut:
+			res.ReasonCode = ReasonOptOut
+		case res.Exit == 0:
+			res.ReasonCode = ReasonWitness
+		case res.Exit == 1:
+			res.ReasonCode = ReasonNoWitness
+		default:
+			res.ReasonCode = ReasonError
+		}
+	}
+	return res
+}
+
+// languagesOf names the changed languages by file extension, lowercase, deduplicated and sorted, so
+// the same change always reports the same list.
+func languagesOf(files []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, file := range files {
+		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(file)), ".")
+		if ext == "" || seen[ext] {
+			continue
+		}
+		seen[ext] = true
+		out = append(out, ext)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// runnersFor maps a changed language to the runner command that language's tests use. A language the
+// check has no runner for contributes none, so runners and languages stay derivable from each other.
+func runnersFor(languages []string) []string {
+	byLanguage := map[string]string{
+		"go": "go test", "js": "node --test", "jsx": "node --test", "mjs": "node --test",
+		"cjs": "node --test", "ts": "node --test", "tsx": "node --test",
+		"py": "pytest", "rs": "cargo test",
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, language := range languages {
+		runner := byLanguage[language]
+		if runner == "" || seen[runner] {
+			continue
+		}
+		seen[runner] = true
+		out = append(out, runner)
+	}
+	return out
+}
+
+// knownSuiteRunners is the closed list of runner command names a suite may report. A telemetry
+// reader compares these across repositories, so the caller's own command and any path stay out.
+var knownSuiteRunners = []string{
+	"go test",
+	"pytest",
+	"node --test",
+	"jest",
+	"vitest run",
+	"cargo test",
+	"npx jest",
+	"npx vitest run",
+}
+
+// suiteName reduces the suite command to a known runner name, or "other". A suite the list does not
+// know is still a measurement, but its text may be a path or a private command, so only "other" is
+// kept.
+func suiteName(suite string) string {
+	normalized := strings.Join(strings.Fields(suite), " ")
+	if normalized == "" {
+		return ""
+	}
+	for _, runner := range knownSuiteRunners {
+		if normalized == runner || strings.HasPrefix(normalized, runner+" ") {
+			return runner
+		}
+	}
+	return "other"
+}
+
+// changedLineCount adds the added and removed lines of the changed production files. A tracked file
+// comes from git's numstat; an untracked one contributes its own lines, because git status names it
+// as changed while no diff against HEAD carries it yet.
+func changedLineCount(root string, files []string, d Deps) (int, bool) {
+	args := []string{"diff", "--numstat"}
+	if d.Base != "" {
+		args = append(args, d.Base+"...HEAD")
+	} else {
+		args = append(args, "HEAD")
+	}
+	args = append(args, "--")
+	args = append(args, files...)
+	out, err := d.Git(root, args...)
+	if err != nil {
+		return 0, false
+	}
+	total := 0
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) < 3 {
+			continue
+		}
+		added, addErr := strconv.Atoi(fields[0])
+		removed, removeErr := strconv.Atoi(fields[1])
+		if addErr != nil || removeErr != nil {
+			continue
+		}
+		total += added + removed
+		seen[fields[2]] = true
+	}
+	if d.Base == "" {
+		args := append([]string{"ls-files", "--others", "--exclude-standard", "-z", "--"}, files...)
+		if others, err := d.Git(root, args...); err == nil {
+			for _, file := range splitNUL(others) {
+				if seen[file] {
+					continue
+				}
+				body, err := d.ReadFile(filepath.Join(root, file))
+				if err != nil {
+					continue
+				}
+				total += lineCount(body)
+			}
+		}
+	}
+	return total, true
+}
+
+func lineCount(body string) int {
+	if body == "" {
+		return 0
+	}
+	n := strings.Count(body, "\n")
+	if !strings.HasSuffix(body, "\n") {
+		n++
+	}
+	return n
 }
 
 // capNames lists at most MaxNamed paths and counts the rest: a host reads the answer through a bounded pipe.

@@ -396,6 +396,30 @@ func TestTelemetrySubcommandIsNotAUsageWord(t *testing.T) {
 	}
 }
 
+// D9: a waiver that could not be written is an error, not a recorded waiver.
+func TestTelemetryFailedWaiverIsAnError(t *testing.T) {
+	bin := buildCLI(t)
+	home := t.TempDir()
+	enableTelemetry(t, bin, home)
+	repo := pathsRepo(t, "main.go")
+	writeIn(t, repo, "main.go", "package sample\n\nfunc F() int { return 2 }\n")
+	if err := os.Mkdir(filepath.Join(repo, ".tsp-waiver.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	telemetryRunIn(t, repo, bin, home, "", nil, "check", "--cwd", ".", "--no-test-needed", "no test warranted")
+	checks := eventsOfKind(readEvents(t, home), "check")
+	if len(checks) != 1 {
+		t.Fatalf("got %d check events, want 1", len(checks))
+	}
+	body := checks[0]["check"].(map[string]any)
+	if body["reason"] != "error" {
+		t.Errorf("reason = %v, want error after a failed waiver write", body["reason"])
+	}
+	if waiver, ok := body["waiver"]; ok && waiver != false {
+		t.Errorf("waiver = %v, want absent or false after a failed write", waiver)
+	}
+}
+
 // D10: with telemetry never enabled, reading the gate must not migrate a legacy root or create one.
 func TestTelemetryOffNeverMigratesTheStateRoot(t *testing.T) {
 	bin := buildCLI(t)

@@ -72,7 +72,7 @@ Every line carries the same envelope.
 | `ts` | string | RFC 3339 UTC timestamp with nanoseconds. |
 | `schema` | int | Line-format version; currently `1`. A reader refuses a version it does not know. |
 | `source` | string | Who produced the event: `tsp`, `pi`, `claude` or `opencode`. |
-| `kind` | string | `command` or `host_run`. |
+| `kind` | string | `command`, `host_run`, and the domain kinds (`check`, `finding`, `plan`). |
 | `run_id` | string, absent | The run this event belongs to, minted by the host and passed in `TSP_RUN_ID`. Kept only when it matches `^[A-Za-z0-9._:-]{1,128}$`; absent when unset or outside that pattern — never an empty string. |
 | `version` | string | The tsp release that wrote the line. |
 | `commit` | string | The revision behind that build (`<sha>` or `<sha>+dirty`, `unknown` when the build carries none). |
@@ -172,3 +172,27 @@ A refusal names the field, never the value that was sent:
 ```
 tsp telemetry record: model must match ^[A-Za-z0-9._:/@-]{1,128}$
 ```
+
+## Domain events
+
+Written by tsp itself from the results it already computed. Counts are absent when not measured.
+
+`check` (one per `tsp check`):
+
+| Field | Meaning |
+|---|---|
+| `decision` | The gate level check settled on. |
+| `exit` | Check's exit code. |
+| `reason` | Closed category: `witness`, `pins_nothing`, `no_witness`, `no_run`, `waived`, `opt_out`, `no_source`, `plan_open`, `plan_done`, `plan_micro`, `error`. |
+| `suite` | The closed runner name that ran (`go test`, `pytest`, `node --test`, `jest`, `vitest run`, `cargo test`, `npx jest`, `npx vitest run`), or `other`; never the caller's command or a path. |
+| `runners` | The runners the changed languages call for. A runner here that `suite` is not names a suite that did not run. |
+| `languages` | Extensions (without the dot) of the changed production files. |
+| `files`, `lines` | Changed production files, and their added plus removed lines. |
+| `test_files`, `red`, `pins_nothing`, `new_code` | Changed test files; new tests failing on the unmodified code; new tests passing on it; witnesses only the change's new code can run. |
+| `waiver`, `opt_out` | Present and `true` when the verdict came from a waiver or an opt-out. |
+
+`finding` (one per `tsp findings record`, `verdict`, `check`): `action` (`record`, `verdict`, `check`),
+`class` (a known defect family only; a refused class is never kept), `verdict`, `count`.
+
+`plan` (one per `tsp plan init`, `micro`, `add-finding`, `add-evidence`, `admit`, `check`): `action`,
+`findings`, `evidence`, `problems`.
