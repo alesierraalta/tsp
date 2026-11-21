@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -40,5 +44,61 @@ func TestProbeQualityReportsOnARealChange(t *testing.T) {
 	verifyGit(t, dir, "checkout", "--", "app.go")
 	if code := runProbeQuality([]string{"--cwd", dir}); code != 2 {
 		t.Fatalf("exit = %d, want 2 when the only changed source is a language without an adapter", code)
+	}
+}
+
+// The usage has to name the boundary: an enclosing repository must not be silently substituted for
+// the directory the caller gave.
+func TestProbeQualityHelpNamesTheCwdBoundary(t *testing.T) {
+	var help bytes.Buffer
+	parseQualityFlags([]string{"--help"}, &help)
+	for _, phrase := range []string{"--cwd", "repository root", "outside"} {
+		if !strings.Contains(help.String(), phrase) {
+			t.Fatalf("help does not say %q:\n%s", phrase, help.String())
+		}
+	}
+}
+
+// A directory below a repository is not that repository: the probe must say so instead of taking the
+// enclosing repository's change as the one the caller asked about.
+func TestProbeQualityRefusesARepositoryAboveCwd(t *testing.T) {
+	top := t.TempDir()
+	verifyGit(t, top, "init", "-q")
+	if err := os.WriteFile(filepath.Join(top, "app.go"), []byte("package app\n\nfunc F() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inner := filepath.Join(top, "nested")
+	if err := os.Mkdir(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadDir(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bin := buildCLI(t)
+	cmd := cliCmd(t, bin, "probe", "quality", "--cwd", inner)
+	// Let git see the enclosing repository here; the refusal is the production contract, not the
+	// test helper's ceiling. The helper's extra env entry wins over its default ceiling.
+	cmd.Env = cliEnv(t, "GIT_CEILING_DIRECTORIES="+filepath.Dir(top))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	code := 0
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) {
+			t.Fatalf("run probe quality: %v", err)
+		}
+		code = ee.ExitCode()
+	}
+	if code != 2 || !strings.Contains(stderr.String(), "outside") {
+		t.Fatalf("probe quality --cwd %s = %d, stderr %q\nwant exit 2 naming a repository outside the directory", inner, code, stderr.String())
+	}
+	after, err := os.ReadDir(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) {
+		t.Fatalf("the refused probe touched the enclosing repository: before %d entries, after %d", len(before), len(after))
 	}
 }

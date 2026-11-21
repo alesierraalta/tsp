@@ -15,7 +15,7 @@ func TestFindingsRecordClassIsWired(t *testing.T) {
 	bin := buildCLI(t)
 	dir := pathsRepo(t, "a.go")
 	run := func(args ...string) (int, string, string) {
-		cmd := exec.Command(bin, args...)
+		cmd := cliCmd(t, bin, args...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		err := cmd.Run()

@@ -14,9 +14,9 @@ import (
 // observed against a real repository without changing the process's own directory.
 func telemetryRunIn(t *testing.T, dir, bin, home, stdin string, env []string, args ...string) (string, string, int) {
 	t.Helper()
-	cmd := exec.Command(bin, args...)
+	cmd := cliCmd(t, bin, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), append([]string{"TSP_HOME=" + home, "TPP_HOME=", "RDD_PLUS_HOME=", "TSP_RUN_ID="}, env...)...)
+	cmd.Env = cliEnv(t, append([]string{"TSP_HOME=" + home, "TPP_HOME=", "RDD_PLUS_HOME=", "TSP_RUN_ID="}, env...)...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

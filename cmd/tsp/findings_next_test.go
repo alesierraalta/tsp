@@ -16,12 +16,12 @@ func TestFindingsNextPrintsOneAnswer(t *testing.T) {
 	t.Setenv("TSP_HOME", t.TempDir())
 	bin := buildCLI(t)
 	dir := pathsRepo(t, "a.go")
-	branch, err := exec.Command("git", "-C", dir, "symbolic-ref", "--short", "HEAD").Output()
+	branch, err := boundedCmd(t, "git", "-C", dir, "symbolic-ref", "--short", "HEAD").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
 	run := func(args ...string) (int, string, string) {
-		cmd := exec.Command(bin, args...)
+		cmd := cliCmd(t, bin, args...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		err := cmd.Run()

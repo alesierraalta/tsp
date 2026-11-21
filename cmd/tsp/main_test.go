@@ -38,7 +38,7 @@ func buildCLI(t *testing.T, names ...string) string {
 		name = names[0]
 	}
 	bin := filepath.Join(t.TempDir(), name)
-	out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
+	out, err := boundedCmd(t, "go", "build", "-o", bin, ".").CombinedOutput()
 	if err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
@@ -90,7 +90,7 @@ func TestBenchSessionsRefuseInvalidCombinationsBeforeWriting(t *testing.T) {
 		t.Run(strings.Join(flags, " "), func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "unwritten")
 			args := append([]string{"bench", "run", "--runner", "claude", "--agent-config", t.TempDir(), "--cases", filepath.Join(t.TempDir(), "absent"), "--out", out}, flags...)
-			data, err := exec.Command(bin, args...).CombinedOutput()
+			data, err := cliCmd(t, bin, args...).CombinedOutput()
 			var exit *exec.ExitError
 			if !errors.As(err, &exit) || exit.ExitCode() != 2 {
 				t.Fatalf("exit %v: %s", err, data)
@@ -129,7 +129,7 @@ func verdictCLI(t *testing.T) (func(int, string, string, ...string), string, str
 	dir, bin := t.TempDir(), buildCLI(t)
 	git := func(args ...string) {
 		t.Helper()
-		c := exec.Command("git", args...)
+		c := boundedCmd(t, "git", args...)
 		c.Dir = dir
 		if b, e := c.CombinedOutput(); e != nil {
 			t.Fatalf("git: %v %s", e, b)
@@ -152,7 +152,7 @@ func verdictCLI(t *testing.T) (func(int, string, string, ...string), string, str
 	git("commit", "-qm", "round one")
 	run := func(code int, stdout, stderr string, args ...string) {
 		t.Helper()
-		c := exec.Command(bin, append([]string{"findings"}, args...)...)
+		c := cliCmd(t, bin, append([]string{"findings"}, args...)...)
 		c.Dir = dir
 		var out, err bytes.Buffer
 		c.Stdout = &out
@@ -206,7 +206,7 @@ func TestFindingsVerdictLifecycle(t *testing.T) {
 			t.Fatalf("stored verdict: %s %v", data, e)
 		}
 		v := r.Findings[0].Verdict
-		head, e := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+		head, e := boundedCmd(t, "git", "-C", dir, "rev-parse", "HEAD").Output()
 		if e != nil || v.Decision != decision || v.Reason != "deliberate" || len(v.Fingerprint) != 64 || v.Fingerprint == r.Findings[0].Fingerprint || v.Commit != strings.TrimSpace(string(head)) {
 			t.Fatalf("verdict metadata: %+v %v", v, e)
 		}
@@ -266,11 +266,11 @@ func TestFindingsVerdictRefusals(t *testing.T) {
 		unchanged()
 	}
 	outside := t.TempDir()
-	c := exec.Command("git", "-C", outside, "rev-parse", "--show-toplevel")
+	c := boundedCmd(t, "git", "-C", outside, "rev-parse", "--show-toplevel")
 	b, _ := c.CombinedOutput()
 	run(2, "", "tsp findings: git rev-parse --show-toplevel: "+strings.TrimSpace(string(b))+"\n", "verdict", "F1", "clear", "--cwd", outside)
 	unchanged()
-	if b, e := exec.Command("git", "-C", dir, "switch", "--detach").CombinedOutput(); e != nil {
+	if b, e := boundedCmd(t, "git", "-C", dir, "switch", "--detach").CombinedOutput(); e != nil {
 		t.Fatalf("detach: %v %s", e, b)
 	}
 	run(2, "", "tsp findings: detached HEAD: findings require a branch\n", "verdict", "F1", "clear")
@@ -322,9 +322,9 @@ func TestCLIContract(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command(bin, tc.args...)
+			cmd := cliCmd(t, bin, tc.args...)
 			cmd.Stdin = strings.NewReader(tc.stdin)
-			cmd.Env = append(os.Environ(), "TESTING_GATE_LOG="+filepath.Join(t.TempDir(), "gate.jsonl"))
+			cmd.Env = cliEnv(t, "TESTING_GATE_LOG="+filepath.Join(t.TempDir(), "gate.jsonl"))
 			out, err := cmd.CombinedOutput()
 			code := 0
 			if ee := (&exec.ExitError{}); err != nil {
@@ -348,7 +348,7 @@ func TestCLIContract(t *testing.T) {
 func TestPlanInitMicroWritesTheMicroTemplate(t *testing.T) {
 	bin := buildCLI(t)
 	p := filepath.Join(t.TempDir(), "plan.md")
-	if out, err := exec.Command(bin, "plan", "init", "--micro", "--path", p).CombinedOutput(); err != nil {
+	if out, err := cliCmd(t, bin, "plan", "init", "--micro", "--path", p).CombinedOutput(); err != nil {
 		t.Fatalf("plan init --micro: %v\n%s", err, out)
 	}
 	got, err := os.ReadFile(p)
@@ -365,7 +365,7 @@ func TestPlanInitMicroWritesTheMicroTemplate(t *testing.T) {
 func TestPlanInitHeaderNamesThePathItWroteTo(t *testing.T) {
 	bin := buildCLI(t)
 	repo := t.TempDir()
-	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "init", "-q", repo).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 	outside := filepath.Join(t.TempDir(), "reviews", "pr-7.md")
@@ -380,7 +380,7 @@ func TestPlanInitHeaderNamesThePathItWroteTo(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command(bin, append([]string{"plan", "init"}, tc.args...)...)
+			cmd := cliCmd(t, bin, append([]string{"plan", "init"}, tc.args...)...)
 			cmd.Dir = repo
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("plan init: %v\n%s", err, out)
@@ -401,7 +401,7 @@ func TestPlanInitHeaderNamesThePathItWroteTo(t *testing.T) {
 func TestTUIRefusesWithoutATerminal(t *testing.T) {
 	t.Setenv("TPP_HOME", t.TempDir())
 	bin := buildCLI(t)
-	cmd := exec.Command(bin, "tui")
+	cmd := cliCmd(t, bin, "tui")
 	cmd.Stdin = strings.NewReader("")
 	out, err := cmd.CombinedOutput()
 	code := 0
@@ -432,7 +432,7 @@ func TestTUIRefusesNullDeviceStdinWithoutDrawing(t *testing.T) {
 		t.Skipf("cannot open /dev/null: %v", err)
 	}
 	defer null.Close()
-	cmd := exec.Command(bin, "tui")
+	cmd := cliCmd(t, bin, "tui")
 	cmd.Stdin = null
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -649,7 +649,7 @@ func upstreamRepo(t *testing.T) (string, string) {
 	dir := t.TempDir()
 	run := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd := boundedCmd(t, "git", append([]string{"-C", dir}, args...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
@@ -657,7 +657,7 @@ func upstreamRepo(t *testing.T) (string, string) {
 	run("init", "-q")
 	run("symbolic-ref", "HEAD", "refs/heads/main")
 	run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "--quiet", "-m", "seed")
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	out, err := boundedCmd(t, "git", "-C", dir, "rev-parse", "HEAD").Output()
 	if err != nil {
 		t.Fatalf("rev-parse HEAD: %v", err)
 	}
@@ -725,7 +725,7 @@ func TestPlanAdmitWithoutAnUpstreamRecordsNoBase(t *testing.T) {
 	bin := buildCLI(t)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	dir := t.TempDir()
-	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "init", "-q", dir).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 	path := writeLedger(t, dir, "echo ok")
@@ -1379,8 +1379,8 @@ func runCLIWithHomeEnv(t *testing.T, home, bin string, args ...string) (string, 
 // test can override PATH or point the update check at a local proxy.
 func runCLIEnv(t *testing.T, bin string, env []string, args ...string) (string, int) {
 	t.Helper()
-	cmd := exec.Command(bin, args...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd := cliCmd(t, bin, args...)
+	cmd.Env = cliEnv(t, env...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return string(out), 0
@@ -1395,7 +1395,7 @@ func runCLIEnv(t *testing.T, bin string, env []string, args ...string) (string, 
 
 func runCLI(t *testing.T, bin string, args ...string) (string, int) {
 	t.Helper()
-	cmd := exec.Command(bin, args...)
+	cmd := cliCmd(t, bin, args...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return string(out), 0
@@ -1418,7 +1418,7 @@ func runCLIWithoutStdout(t *testing.T, bin string, args ...string) (string, int)
 		t.Skipf("no device here that refuses writes: %v", err)
 	}
 	defer refuses.Close()
-	cmd := exec.Command(bin, args...)
+	cmd := cliCmd(t, bin, args...)
 	cmd.Stdout = refuses
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -1477,7 +1477,7 @@ func TestUsageListsEveryBenchSubcommand(t *testing.T) {
 // the expectation together, so the suite documents the shape without pinning a number to bump.
 func TestVersionNamesTheBuild(t *testing.T) {
 	bin := buildCLI(t)
-	out, err := exec.Command(bin, "version").CombinedOutput()
+	out, err := cliCmd(t, bin, "version").CombinedOutput()
 	if err != nil {
 		t.Fatalf("version: %v\n%s", err, out)
 	}
@@ -1605,7 +1605,7 @@ func TestPlanAddFindingHelp(t *testing.T) {
 func TestPlanWritesRefuseAPathGitIgnores(t *testing.T) {
 	bin := buildCLI(t)
 	repo := t.TempDir()
-	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "init", "-q", repo).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 	ignore := filepath.Join(repo, ".gitignore")
@@ -1613,7 +1613,7 @@ func TestPlanWritesRefuseAPathGitIgnores(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := func(args ...string) (int, string) {
-		cmd := exec.Command(bin, args...)
+		cmd := cliCmd(t, bin, args...)
 		cmd.Dir = repo
 		out, err := cmd.CombinedOutput()
 		code := 0
@@ -1679,7 +1679,7 @@ func TestPlanWritesRefuseAPathGitIgnores(t *testing.T) {
 	}
 
 	// Staged with git add -f — the workaround the field had to find by hand — the writes pass.
-	if out, err := exec.Command("git", "-C", repo, "add", "-f", "docs/testing/test-plan.md").CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "-C", repo, "add", "-f", "docs/testing/test-plan.md").CombinedOutput(); err != nil {
 		t.Fatalf("git add -f: %v\n%s", err, out)
 	}
 	if code, out := run("plan", "add-evidence", "--path", "docs/testing/test-plan.md", "--id", "E1",
@@ -1870,7 +1870,7 @@ func TestPlanExportCLI(t *testing.T) {
 		t.Errorf("the export must not name the directory the plan lives in:\n%s", out)
 	}
 
-	head, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	head, err := boundedCmd(t, "git", "rev-parse", "--short", "HEAD").Output()
 	if err != nil {
 		t.Skipf("no git HEAD to compare with: %v", err)
 	}
@@ -1891,7 +1891,7 @@ func TestPlanExportCLI(t *testing.T) {
 
 func runCLIAt(t *testing.T, dir, bin string, args ...string) (string, int) {
 	t.Helper()
-	cmd := exec.Command(bin, args...)
+	cmd := cliCmd(t, bin, args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -1908,7 +1908,7 @@ func runCLIAt(t *testing.T, dir, bin string, args ...string) (string, int) {
 func TestPlanScopedCLIRealRun(t *testing.T) {
 	bin := buildCLI(t)
 	dir := t.TempDir()
-	git := exec.Command("git", "init", dir)
+	git := boundedCmd(t, "git", "init", dir)
 	if out, err := git.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
@@ -1968,7 +1968,7 @@ func TestPlanScopedCLIRealRun(t *testing.T) {
 func TestPlanGapsReportIncompleteSecurityCoverage(t *testing.T) {
 	bin := buildCLI(t)
 	dir := t.TempDir()
-	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "init", dir).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 	planText := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
@@ -2023,7 +2023,7 @@ func TestPlanGapsReportIncompleteSecurityCoverage(t *testing.T) {
 func TestPlanGapsUsesTheDeclaredRun(t *testing.T) {
 	bin := buildCLI(t)
 	dir := t.TempDir()
-	git := exec.Command("git", "init", dir)
+	git := boundedCmd(t, "git", "init", dir)
 	if out, err := git.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
@@ -2115,8 +2115,8 @@ func syncTestHome(t *testing.T) string {
 
 func runCLIWithHome(t *testing.T, home, bin string, args ...string) (string, int) {
 	t.Helper()
-	cmd := exec.Command(bin, args...)
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd := cliCmd(t, bin, args...)
+	cmd.Env = cliEnv(t, "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return string(out), 0
@@ -2688,7 +2688,7 @@ func TestBenchRunRoundsFlag(t *testing.T) {
 	bin := buildCLI(t)
 	none := filepath.Join(t.TempDir(), "none-*")
 	run := func(args ...string) (int, string, string) {
-		cmd := exec.Command(bin, append([]string{"bench", "run", "--runner", "pi", "--model", "cheap", "--dry-run", "--cases", none}, args...)...)
+		cmd := cliCmd(t, bin, append([]string{"bench", "run", "--runner", "pi", "--model", "cheap", "--dry-run", "--cases", none}, args...)...)
 		var stdout, stderr strings.Builder
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		_ = cmd.Run()
@@ -2713,7 +2713,7 @@ func TestBenchRunRoundsFlag(t *testing.T) {
 			t.Errorf("%v: a refused run wrote %d entries", tc.args, len(entries))
 		}
 	}
-	help, _ := exec.Command(bin, "help").CombinedOutput()
+	help, _ := cliCmd(t, bin, "help").CombinedOutput()
 	if !strings.Contains(string(help), "[--rounds N]") {
 		t.Errorf("the help does not name --rounds:\n%s", help)
 	}
@@ -2725,7 +2725,7 @@ func TestBenchRunFixLoopFlag(t *testing.T) {
 	bin := buildCLI(t)
 	none := filepath.Join(t.TempDir(), "none-*")
 	run := func(args ...string) (int, string, string) {
-		cmd := exec.Command(bin, append([]string{"bench", "run", "--runner", "pi", "--model", "cheap", "--dry-run", "--cases", none}, args...)...)
+		cmd := cliCmd(t, bin, append([]string{"bench", "run", "--runner", "pi", "--model", "cheap", "--dry-run", "--cases", none}, args...)...)
 		var stdout, stderr strings.Builder
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		_ = cmd.Run()
@@ -2751,7 +2751,7 @@ func TestBenchRunFixLoopFlag(t *testing.T) {
 			t.Errorf("%v: a refused run wrote %d entries", tc.args, len(entries))
 		}
 	}
-	help, _ := exec.Command(bin, "help").CombinedOutput()
+	help, _ := cliCmd(t, bin, "help").CombinedOutput()
 	if !strings.Contains(string(help), "[--fix-loop]") {
 		t.Errorf("the help does not name --fix-loop:\n%s", help)
 	}
@@ -3134,7 +3134,7 @@ func TestBenchHistoryMasksPlanlessStoredRows(t *testing.T) {
 func TestBindCLIStoresAndUnsetsPerSessionBindings(t *testing.T) {
 	testutil.CeilingGitAt(t, os.TempDir())
 	repo := t.TempDir()
-	if out, err := exec.Command("git", "init", repo).CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "init", repo).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
 	}
 	nonRepo := t.TempDir()
@@ -3238,7 +3238,7 @@ func TestBindCLIStoresAndUnsetsPerSessionBindings(t *testing.T) {
 func TestPlanAddEvidenceWritesARowAdmitCanRun(t *testing.T) {
 	bin := buildCLI(t)
 	repo := t.TempDir()
-	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "init", "-q", repo).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 	p := filepath.Join(repo, "plan.md")
@@ -3254,7 +3254,7 @@ func TestPlanAddEvidenceWritesARowAdmitCanRun(t *testing.T) {
 	if out, code := runCLI(t, bin, "plan", "check", "--path", p); code != 0 {
 		t.Fatalf("plan check after add-evidence = %d\n%s", code, out)
 	}
-	cmd := exec.Command(bin, "plan", "admit", "--path", p)
+	cmd := cliCmd(t, bin, "plan", "admit", "--path", p)
 	cmd.Dir = repo
 	admitted, _ := cmd.CombinedOutput()
 	if !strings.Contains(string(admitted), "E1  WOULD RUN  echo pinned") {
@@ -3362,7 +3362,7 @@ func TestCheckAcceptsTheSuiteItAsksFor(t *testing.T) {
 	dir := t.TempDir()
 	git := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		cmd := boundedCmd(t, "git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
 		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -3541,7 +3541,7 @@ func TestPlanAddRowsAssignTheNextFreeID(t *testing.T) {
 func TestPlanCheckValidatesIndependentCandidateReviews(t *testing.T) {
 	bin := buildCLI(t)
 	dir := t.TempDir()
-	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "init", dir).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 	planText := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +

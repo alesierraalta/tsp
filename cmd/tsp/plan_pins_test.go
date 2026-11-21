@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,7 +46,7 @@ func TestAddPassesForZero(t *testing.T) {
 		}
 	}
 	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"}} {
-		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+		if out, err := boundedCmd(t, "git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}
 	}
@@ -131,16 +130,16 @@ func TestPlanCountReportsTheRowsARunRecorded(t *testing.T) {
 func TestPlanCheckBaseRefusesAnIntroducedFindingOnAnUntouchedFile(t *testing.T) {
 	bin := buildCLI(t)
 	dir := pinRepo(t)
-	if out, err := exec.Command("git", "-C", dir, "branch", "-m", "main").CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "-C", dir, "branch", "-m", "main").CombinedOutput(); err != nil {
 		t.Fatalf("branch main: %v %s", err, out)
 	}
-	if out, err := exec.Command("git", "-C", dir, "checkout", "-q", "-b", "change").CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "-C", dir, "checkout", "-q", "-b", "change").CombinedOutput(); err != nil {
 		t.Fatalf("branch: %v %s", err, out)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "calc/calc.go"), []byte("package calc\n\nfunc Add(a, b int) int { return a + b }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("git", "-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "fix").CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "fix").CombinedOutput(); err != nil {
 		t.Fatalf("commit: %v %s", err, out)
 	}
 	plan := filepath.Join(dir, "plan.md")

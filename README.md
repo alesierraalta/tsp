@@ -135,7 +135,10 @@ errors (stderr only).
 `tsp probe quality [--cwd <dir>] [--base <ref>]` asks the same kind of question about the change
 itself: it scores every Go function the change touches with the E63 rule, and reports blocks copied
 inside the change. `--base` compares that ref with the working tree, so the probe runs before you
-commit.
+commit. `--cwd` (default `.`) must name the repository root itself. The probe does not walk up to a
+repository above that directory: if the only repository is an ancestor, it exits **2** with
+`repository root is outside the directory given` instead of measuring the ancestor's change. Run from
+the repository root or point `--cwd` at it.
 
 ```
 $ tsp probe quality --base main
@@ -576,7 +579,7 @@ Additional commands:
 | `tsp scan [--base <ref>] [--sarif <report>] [--level <l>]` | Brings a scanner's real findings into the change: runs gitleaks when installed and semgrep beside it when it is too, or reads any SARIF report, keeps only the files the change touched, and gates at `--level` (default `warning`). Exit 0 nothing at that level, 1 findings, 2 nothing scanned. |
 | `tsp findings record\|check\|next\|verdict` | Records defect witnesses, checks their state at the next review, answers what the TSP loop owes next, or records a verdict. |
 | `tsp probe env [dir] [--json]` | Reports undelivered environment settings (read-only). |
-| `tsp probe quality [--cwd <dir>] [--base <ref>]` | Reports complexity and copied blocks inside the lines a change touches, and names the languages it cannot measure. Exit 0 clean, 1 findings, 2 nothing measurable. |
+| `tsp probe quality [--cwd <dir>] [--base <ref>]` | Reports complexity and copied blocks inside the lines a change touches, and names the languages it cannot measure. `--cwd` must be the repository root; an ancestor repository is refused with exit 2, never silently measured. Exit 0 clean, 1 findings, 2 nothing measurable or refused. |
 | `tsp probe arch [--cwd <dir>] [--base <ref>] [--rules <file>]` | Reports the import edges a change added that `.tsp-arch.json` refuses. Exit 0 clean, 1 findings, 2 nothing measurable. |
 | `tsp plan upgrade [--run <slug>] [--path <path>]` | Upgrades a plan to the current contract. |
 | `tsp bench adjudicate` | Records or shows decisions for finding rows; undecided rows stay pending. |

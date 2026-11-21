@@ -27,7 +27,7 @@ func redcheckRepo(t *testing.T, agentTest string) string {
 		{"init", "-q"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"},
 		{"add", "-A"}, {"commit", "-qm", "base"},
 	} {
-		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+		if out, err := boundedCmd(t, "git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
@@ -39,7 +39,7 @@ func redcheckRepo(t *testing.T, agentTest string) string {
 
 func runRedcheckCLI(t *testing.T, bin, dir string) (int, string) {
 	t.Helper()
-	cmd := exec.Command(bin, "redcheck", "--cwd", dir)
+	cmd := cliCmd(t, bin, "redcheck", "--cwd", dir)
 	out, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
@@ -110,7 +110,7 @@ func TestRedcheckNamesAFilePytestCouldNotCollect(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the CLI and runs pytest")
 	}
-	if err := exec.Command("python3", "-m", "pytest", "--version").Run(); err != nil {
+	if err := boundedCmd(t, "python3", "-m", "pytest", "--version").Run(); err != nil {
 		t.Skip("pytest not installed")
 	}
 	bin := buildCLI(t)
@@ -128,7 +128,7 @@ func TestRedcheckNamesAFilePytestCouldNotCollect(t *testing.T) {
 		{"init", "-q"}, {"config", "user.email", "t@example.com"}, {"config", "user.name", "t"},
 		{"add", "-A"}, {"commit", "-qm", "base"},
 	} {
-		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+		if out, err := boundedCmd(t, "git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
@@ -161,7 +161,7 @@ func TestRedcheckFalsifyNamesWitnessesAndRestoresTheSource(t *testing.T) {
 	dir := redcheckRepo(t, "package rc\n\nimport \"testing\"\n\n"+
 		"func TestOrderIsSorted(t *testing.T) {\n\tif Order() != \"abc\" {\n\t\tt.Fatal(Order())\n\t}\n}\n\n"+
 		"func TestWrongReason(t *testing.T) {\n\tt.Fatal(\"unrelated\")\n}\n")
-	head, err := exec.Command("git", "-C", dir, "show", "HEAD:order.go").Output()
+	head, err := boundedCmd(t, "git", "-C", dir, "show", "HEAD:order.go").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestRedcheckFalsifyDoesNotClaimASaveThatFailed(t *testing.T) {
 
 func runRedcheckArgs(t *testing.T, bin, dir string, extra ...string) (int, string) {
 	t.Helper()
-	cmd := exec.Command(bin, append([]string{"redcheck", "--cwd", dir}, extra...)...)
+	cmd := cliCmd(t, bin, append([]string{"redcheck", "--cwd", dir}, extra...)...)
 	out, err := cmd.CombinedOutput()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {

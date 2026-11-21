@@ -16,8 +16,8 @@ import (
 // because the contract is that telemetry never touches stdout.
 func telemetryRun(t *testing.T, bin, home, stdin string, env []string, args ...string) (string, string, int) {
 	t.Helper()
-	cmd := exec.Command(bin, args...)
-	cmd.Env = append(os.Environ(), append([]string{"TSP_HOME=" + home, "TPP_HOME=", "RDD_PLUS_HOME=", "TSP_RUN_ID="}, env...)...)
+	cmd := cliCmd(t, bin, args...)
+	cmd.Env = cliEnv(t, append([]string{"TSP_HOME=" + home, "TPP_HOME=", "RDD_PLUS_HOME=", "TSP_RUN_ID="}, env...)...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -234,8 +234,8 @@ func TestTelemetryConcurrentWritersKeepWholeLines(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cmd := exec.Command(bin, "version")
-			cmd.Env = append(os.Environ(), "TSP_HOME="+home, "TPP_HOME=", "RDD_PLUS_HOME=")
+			cmd := cliCmd(t, bin, "version")
+			cmd.Env = cliEnv(t, "TSP_HOME="+home, "TPP_HOME=", "RDD_PLUS_HOME=")
 			_ = cmd.Run()
 		}()
 	}
@@ -249,17 +249,10 @@ func TestTelemetryConcurrentWritersKeepWholeLines(t *testing.T) {
 // resolution answers and the legacy-migration path is the one under test.
 func telemetryRunConfig(t *testing.T, bin, configDir string, args ...string) (string, string, int) {
 	t.Helper()
-	cmd := exec.Command(bin, args...)
-	env := make([]string, 0, len(os.Environ())+4)
-	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "TSP_HOME=") || strings.HasPrefix(entry, "TPP_HOME=") ||
-			strings.HasPrefix(entry, "RDD_PLUS_HOME=") || strings.HasPrefix(entry, "XDG_CONFIG_HOME=") ||
-			strings.HasPrefix(entry, "TSP_RUN_ID=") {
-			continue
-		}
-		env = append(env, entry)
-	}
-	cmd.Env = append(env, "XDG_CONFIG_HOME="+configDir, "TSP_HOME=", "TPP_HOME=", "RDD_PLUS_HOME=", "TSP_RUN_ID=")
+	cmd := cliCmd(t, bin, args...)
+	// cliCmd clones the inherited environment; appending the overrides leaves the last value in
+	// effect, so the defaults this test changes still win over anything the host exported.
+	cmd.Env = cliEnv(t, "XDG_CONFIG_HOME="+configDir, "TSP_HOME=", "TPP_HOME=", "RDD_PLUS_HOME=", "TSP_RUN_ID=")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
