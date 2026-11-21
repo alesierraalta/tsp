@@ -388,7 +388,7 @@ func runProbe(args []string) int {
 }
 
 // probeHelp names every probe and what its exit codes mean.
-const probeHelp = "Usage of probe:\n  tsp probe env [dir] [--json]\n  tsp probe quality [--cwd <dir>] [--base <ref>] [--max-complexity <n>] [--dup-window <n>] [--json]\n  tsp probe arch [--cwd <dir>] [--base <ref>] [--rules <file>] [--json]\nReports literal environment reads absent from deploy artifacts with deployed siblings, the hygiene of the\nlines a change touches (complex functions, blocks copied inside the change) for the languages that have an adapter,\nor the import edges a change added that <repo>/.tsp-arch.json refuses.\nExit 1: findings; 0: clean (no text output); 2: usage error or nothing measurable. Never writes to the scanned tree.\n"
+const probeHelp = "Usage of probe:\n  tsp probe env [dir] [--json]\n  tsp probe quality [--cwd <dir>] [--base <ref>] [--max-complexity <n>] [--dup-window <n>] [--json]\n  tsp probe arch [--cwd <dir>] [--base <ref>] [--rules <file>] [--json]\nReports literal environment reads absent from deploy artifacts with deployed siblings, the hygiene of the\nlines a change touches (complex functions, blocks copied inside the change) for the languages that have an adapter,\nor the import edges a change added that <repo>/.tsp-arch.json refuses. Quality's --cwd must name the\nrepository root: a repository above that directory is refused, never silently measured.\nExit 1: findings; 0: clean (no text output); 2: usage error or nothing measurable. Never writes to the scanned tree.\n"
 
 // envFlags are the environment probe's inputs after parsing.
 type envFlags struct {

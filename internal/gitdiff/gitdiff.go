@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -17,6 +18,10 @@ type Runner func(dir string, args ...string) (string, error)
 // ErrNotRepository marks a directory git does not know: there is no change to scope.
 var ErrNotRepository = errors.New("not a git repository")
 
+// ErrRootOutsideDir marks a repository whose top is above the directory the caller named. Using it
+// would silently answer about a change the caller never asked for (#502).
+var ErrRootOutsideDir = errors.New("repository root is outside the directory given")
+
 // Root resolves the repository root, so every later path is relative to the same place.
 func Root(dir string, git Runner) (string, error) {
 	if git == nil {
@@ -26,6 +31,36 @@ func Root(dir string, git Runner) (string, error) {
 	root := strings.TrimSpace(out)
 	if err != nil || root == "" {
 		return "", ErrNotRepository
+	}
+	return root, nil
+}
+
+// RootWithin resolves the root of dir, but only when dir is that root itself. Git happily walks
+// upwards to a repository that contains the directory; a caller that scoped its question to dir must
+// be told instead of having the enclosing repository's change substituted for its own (#502).
+func RootWithin(dir string, git Runner) (string, error) {
+	root, err := Root(dir, git)
+	if err != nil {
+		return root, err
+	}
+	want, err := filepath.Abs(dir)
+	if err != nil {
+		return root, err
+	}
+	got, err := filepath.Abs(root)
+	if err != nil {
+		return root, err
+	}
+	// A symlinked argument and git's physical top name the same directory; comparing the paths
+	// without resolving would refuse a repository the caller did name.
+	if resolved, err := filepath.EvalSymlinks(want); err == nil {
+		want = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(got); err == nil {
+		got = resolved
+	}
+	if filepath.Clean(got) != filepath.Clean(want) {
+		return root, ErrRootOutsideDir
 	}
 	return root, nil
 }

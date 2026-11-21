@@ -42,7 +42,7 @@ type qualityFlags struct {
 }
 
 // parseQualityFlags reads the probe's arguments; a non-zero code is the exit the caller returns.
-const qualityHelp = "Usage of probe quality:\n  tsp probe quality [dir] [--cwd <dir>] [--base <ref>] [--max-complexity N] [--dup-window N] [--json]\nReports duplication and complexity inside the lines a change touches, and names the languages it cannot\nmeasure. --base compares that ref with the working tree.\nExit 1: findings; 0: clean (no text output); 2: nothing measurable or usage error. Never writes.\n"
+const qualityHelp = "Usage of probe quality:\n  tsp probe quality [dir] [--cwd <dir>] [--base <ref>] [--max-complexity N] [--dup-window N] [--json]\nReports duplication and complexity inside the lines a change touches, and names the languages it cannot\nmeasure. --base compares that ref with the working tree. --cwd (default .) must name the repository root:\nthe probe never walks to a repository above the directory it was given; a root outside that directory\nis refused with exit 2 instead of being measured.\nExit 1: findings; 0: clean (no text output); 2: nothing measurable or usage error. Never writes.\n"
 
 func parseQualityFlags(args []string, stderr io.Writer) (qualityFlags, int) {
 	fs := flag.NewFlagSet("probe quality", flag.ContinueOnError)

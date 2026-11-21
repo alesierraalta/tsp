@@ -2,6 +2,8 @@ package gitdiff
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -46,5 +48,34 @@ func TestChangedReadsTheWorkingTreeByDefault(t *testing.T) {
 func TestRootOutsideARepositoryIsNotARepository(t *testing.T) {
 	if _, err := Root("/tmp", fake("", errors.New("fatal"))); !errors.Is(err, ErrNotRepository) {
 		t.Fatalf("err = %v, want ErrNotRepository", err)
+	}
+}
+
+// A caller that names a repository root gets that root back, even through a symlink.
+func TestRootWithinAcceptsTheNamedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	alias := filepath.Join(filepath.Dir(dir), filepath.Base(dir)+"-link")
+	if err := os.Symlink(dir, alias); err != nil {
+		t.Skipf("cannot make a symlink here: %v", err)
+	}
+	root, err := RootWithin(alias, fake(dir+"\n", nil))
+	if err != nil || root != dir {
+		t.Fatalf("root = %q, err = %v, want %q", root, err, dir)
+	}
+}
+
+// The directory the caller gave is the boundary: an ancestor repository is not its repository.
+func TestRootWithinRefusesAnAncestor(t *testing.T) {
+	top := t.TempDir()
+	inner := filepath.Join(top, "nested")
+	if err := os.Mkdir(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root, err := RootWithin(inner, fake(top+"\n", nil))
+	if !errors.Is(err, ErrRootOutsideDir) {
+		t.Fatalf("err = %v, want ErrRootOutsideDir", err)
+	}
+	if root != top {
+		t.Fatalf("root = %q, want the resolved ancestor %q for the error message", root, top)
 	}
 }

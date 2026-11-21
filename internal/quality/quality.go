@@ -68,8 +68,13 @@ type Options struct {
 func Run(ctx context.Context, opts Options) (Report, error) {
 	d, limits := withDefaults(opts)
 	report := newReport()
-	root, err := gitdiff.Root(opts.Cwd, d.Git)
+	// --cwd is a boundary, not a hint: git would walk to a repository above it and report that
+	// repository's change as the one the caller asked about. RootWithin refuses that substitution (#502).
+	root, err := gitdiff.RootWithin(opts.Cwd, d.Git)
 	if err != nil {
+		if errors.Is(err, gitdiff.ErrRootOutsideDir) {
+			return report, fmt.Errorf("%w: repository root %q is outside the directory given (%q); run from the repository root or point --cwd at it", ErrUnusable, root, opts.Cwd)
+		}
 		return report, fmt.Errorf("%w: not a git repository: nothing to probe", ErrUnusable)
 	}
 	ranges, err := changedLines(root, opts.Base, d)

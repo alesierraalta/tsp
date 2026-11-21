@@ -47,6 +47,18 @@ func TestProbeQualityReportsOnARealChange(t *testing.T) {
 	}
 }
 
+// The usage has to name the boundary: an enclosing repository must not be silently substituted for
+// the directory the caller gave.
+func TestProbeQualityHelpNamesTheCwdBoundary(t *testing.T) {
+	var help bytes.Buffer
+	parseQualityFlags([]string{"--help"}, &help)
+	for _, phrase := range []string{"--cwd", "repository root", "outside"} {
+		if !strings.Contains(help.String(), phrase) {
+			t.Fatalf("help does not say %q:\n%s", phrase, help.String())
+		}
+	}
+}
+
 // A directory below a repository is not that repository: the probe must say so instead of taking the
 // enclosing repository's change as the one the caller asked about.
 func TestProbeQualityRefusesARepositoryAboveCwd(t *testing.T) {
