@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -23,16 +24,56 @@ func cliCmd(t *testing.T, bin string, args ...string) *exec.Cmd {
 }
 
 // cliCmdDeadline is cliCmd with an explicit bound, for a test that forces the deadline itself.
+// The test's own context is the parent, so finishing or cancelling the test ends the child first.
 func cliCmdDeadline(t *testing.T, deadline time.Duration, bin string, args ...string) *exec.Cmd {
 	t.Helper()
-	_ = deadline
-	return exec.Command(bin, args...)
+	ctx, cancel := context.WithTimeout(t.Context(), deadline)
+	cmd := exec.CommandContext(ctx, bin, args...)
+	processGroup(cmd)
+	cmd.WaitDelay = waitDelayAfterKill
+	cmd.Env = cliEnv(t)
+	// Run already waited on a completed child; a child that was started but never waited for is
+	// still ours to reap. The group kill runs either way, because the parent can exit before a
+	// descendant that inherited its pipes.
+	t.Cleanup(func() {
+		cancel()
+		killGroup(cmd)
+		if cmd.Process != nil && cmd.ProcessState == nil {
+			_ = cmd.Wait()
+		}
+	})
+	return cmd
 }
 
 // cliEnv builds a child environment with extra entries winning, the way os/exec resolves duplicates.
+// The temp root is the ceiling: a temp directory can still be inside a repository owned by the
+// operator's home, and that repository is not the change any CLI test asked about (#483, #502).
 func cliEnv(t *testing.T, extra ...string) []string {
 	t.Helper()
-	return append(os.Environ(), extra...)
+	root, err := filepath.Abs(os.TempDir())
+	if err != nil {
+		t.Fatalf("temp root %q: %v", os.TempDir(), err)
+	}
+	env := make([]string, 0, len(os.Environ())+len(extra)+1)
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if inheritedGitScopeVar(name) {
+			continue
+		}
+		env = append(env, entry)
+	}
+	env = append(env, "GIT_CEILING_DIRECTORIES="+root)
+	return append(env, extra...)
+}
+
+func inheritedGitScopeVar(name string) bool {
+	switch name {
+	case "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+		"GIT_COMMON_DIR", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE",
+		"GIT_CEILING_DIRECTORIES":
+		return true
+	}
+	return name == "GIT_CONFIG" || strings.HasPrefix(name, "GIT_CONFIG_")
 }
 
 // An enclosing repository and an inherited GIT_DIR must not decide what a probe run from a temp
