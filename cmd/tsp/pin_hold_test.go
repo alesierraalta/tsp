@@ -29,7 +29,7 @@ func pinWorkdir(t *testing.T) (dir, plan, findings string) {
 		}
 	}
 	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"}} {
-		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+		if out, err := boundedCmd(t, "git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}
 	}
@@ -47,7 +47,7 @@ func pinWorkdir(t *testing.T) (dir, plan, findings string) {
 
 func pinCLI(t *testing.T, dir string, args ...string) (string, int) {
 	t.Helper()
-	cmd := exec.Command(buildCLI(t), args...)
+	cmd := cliCmd(t, buildCLI(t), args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err == nil {

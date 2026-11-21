@@ -31,18 +31,18 @@ func TestInstallScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := t.TempDir()
-	cmd := exec.Command("go", "build", "-o", filepath.Join(payload, "tsp"), "./cmd/tsp")
+	cmd := boundedCmd(t, "go", "build", "-o", filepath.Join(payload, "tsp"), "./cmd/tsp")
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, out)
 	}
 	arch := runtime.GOARCH
 	archive := "tsp_" + buildinfo.Version + "_linux_" + arch + ".tar.gz"
-	cmd = exec.Command("tar", "-czf", filepath.Join(release, archive), "-C", payload, "tsp")
+	cmd = boundedCmd(t, "tar", "-czf", filepath.Join(release, archive), "-C", payload, "tsp")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("tar: %v %s", err, out)
 	}
-	cmd = exec.Command("sha256sum", archive)
+	cmd = boundedCmd(t, "sha256sum", archive)
 	cmd.Dir = release
 	sums, err := cmd.Output()
 	if err != nil {
@@ -61,7 +61,7 @@ func TestInstallScript(t *testing.T) {
 				t.Fatal(err)
 			}
 			dest := filepath.Join(t.TempDir(), "bin")
-			cmd := exec.Command("sh", filepath.Join(root, "install.sh"))
+			cmd := boundedCmd(t, "sh", filepath.Join(root, "install.sh"))
 			cmd.Env = append(os.Environ(), "TSP_RELEASE_BASE_URL=file://"+base, "TSP_VERSION="+version, "TSP_INSTALL_DIR="+dest, "TSP_NO_SETUP=1")
 			if tc == "unpublished" {
 				cmd.Env = append(cmd.Env, "TSP_VERSION=v9.9.9")
@@ -93,7 +93,7 @@ func TestInstallScript(t *testing.T) {
 			if err != nil {
 				t.Fatalf("install: %v %s", err, out)
 			}
-			got, err := exec.Command(filepath.Join(dest, "tsp"), "version").CombinedOutput()
+			got, err := boundedCmd(t, filepath.Join(dest, "tsp"), "version").CombinedOutput()
 			if err != nil || !strings.Contains(string(got), buildinfo.Version) {
 				t.Fatalf("version: %v %s", err, got)
 			}

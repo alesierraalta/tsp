@@ -15,7 +15,7 @@ func TestHelpFlagExitsZeroAndAnUnknownFlagStaysAUsageError(t *testing.T) {
 	bin := buildCLI(t)
 	dir := t.TempDir()
 	run := func(args ...string) (int, string) {
-		cmd := exec.Command(bin, args...)
+		cmd := cliCmd(t, bin, args...)
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()
 		var ee *exec.ExitError

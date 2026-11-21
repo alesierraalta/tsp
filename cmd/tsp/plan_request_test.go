@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,7 +37,7 @@ func TestPlanRequestCLI(t *testing.T) {
 		t.Fatalf("check %d: %s", code, out)
 	}
 	stdinPath := filepath.Join(dir, "stdin.md")
-	cmd := exec.Command(bin, "plan", "init", "--spec", "-", "--path", stdinPath)
+	cmd := cliCmd(t, bin, "plan", "init", "--spec", "-", "--path", stdinPath)
 	cmd.Stdin = strings.NewReader(text)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("stdin init: %v %s", err, out)
@@ -53,7 +52,7 @@ func TestPlanRequestCLI(t *testing.T) {
 func TestRequestCriteriaAcceptsACoveredCriterionWithARealSource(t *testing.T) {
 	bin := buildCLI(t)
 	dir := t.TempDir()
-	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
 	}
 	spec := filepath.Join(dir, "spec.md")

@@ -27,7 +27,7 @@ func probeFixture(t *testing.T, files map[string]string) string {
 }
 func probeRun(t *testing.T, bin string, args ...string) (int, string, string) {
 	t.Helper()
-	c := exec.Command(bin, append([]string{"probe", "env"}, args...)...)
+	c := cliCmd(t, bin, append([]string{"probe", "env"}, args...)...)
 	var out, stderr bytes.Buffer
 	c.Stdout = &out
 	c.Stderr = &stderr

@@ -27,11 +27,25 @@ func cliCmd(t *testing.T, bin string, args ...string) *exec.Cmd {
 // The test's own context is the parent, so finishing or cancelling the test ends the child first.
 func cliCmdDeadline(t *testing.T, deadline time.Duration, bin string, args ...string) *exec.Cmd {
 	t.Helper()
+	cmd := boundedCmdDeadline(t, deadline, bin, args...)
+	cmd.Env = cliEnv(t)
+	return cmd
+}
+
+// boundedCmd is the same deadline and group seam for the other children a CLI test starts: git
+// fixtures, builds, scripts. They do not need the CLI's sanitized environment, but they must not
+// outlive the test that started them either.
+func boundedCmd(t *testing.T, name string, args ...string) *exec.Cmd {
+	t.Helper()
+	return boundedCmdDeadline(t, cliTestDeadline, name, args...)
+}
+
+func boundedCmdDeadline(t *testing.T, deadline time.Duration, name string, args ...string) *exec.Cmd {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), deadline)
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := exec.CommandContext(ctx, name, args...)
 	processGroup(cmd)
 	cmd.WaitDelay = waitDelayAfterKill
-	cmd.Env = cliEnv(t)
 	// Run already waited on a completed child; a child that was started but never waited for is
 	// still ours to reap. The group kill runs either way, because the parent can exit before a
 	// descendant that inherited its pipes.

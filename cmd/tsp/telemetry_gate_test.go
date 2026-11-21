@@ -139,8 +139,8 @@ func TestTelemetryGateConcurrentStopsCountTurnsOnce(t *testing.T) {
 		err         error
 	}
 	run := func(logName string) result {
-		cmd := exec.Command(bin, "gate")
-		cmd.Env = append(os.Environ(), "TSP_HOME="+home, "TPP_HOME=", "RDD_PLUS_HOME=", "TSP_RUN_ID=",
+		cmd := cliCmd(t, bin, "gate")
+		cmd.Env = cliEnv(t, "TSP_HOME="+home, "TPP_HOME=", "RDD_PLUS_HOME=", "TSP_RUN_ID=",
 			"TESTING_GATE_LOG="+filepath.Join(dir, logName))
 		cmd.Stdin = strings.NewReader(payload)
 		var stdout, stderr strings.Builder
@@ -216,7 +216,7 @@ func runAuditedGate(t *testing.T, bin, home string) (string, int) {
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("git", "init", repo).CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "init", repo).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
 	}
 	rel := filepath.Join("docs", "testing", "test-plan.md")

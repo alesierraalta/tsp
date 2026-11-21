@@ -181,7 +181,7 @@ func newSandboxPreflightFixture(t *testing.T) *sandboxPreflightFixture {
 func runSandboxPreflight(t *testing.T, script string) (string, int) {
 	t.Helper()
 	// ulimit is a shell builtin; lowering the soft limit always succeeds and leaves the check inside the bound.
-	cmd := exec.Command("sh", "-c", "ulimit -n 1024\n"+script+"\nprintf 'ROW RAN\\n'\n")
+	cmd := boundedCmd(t, "sh", "-c", "ulimit -n 1024\n"+script+"\nprintf 'ROW RAN\\n'\n")
 	out, err := cmd.CombinedOutput()
 	code := 0
 	var exit *exec.ExitError
@@ -337,7 +337,7 @@ func TestSandboxPreflightRefusesBoundsThatAreNotEstablished(t *testing.T) {
 // The open-file bound is the hard limit: a soft limit inside the bound means nothing when the hard limit above it
 // lets the row raise its own. Only the soft limit is lowered here, so the hard limit stays this machine's.
 func TestSandboxPreflightRefusesAHardOpenFileLimitAboveTheBound(t *testing.T) {
-	hard, err := exec.Command("sh", "-c", "ulimit -Hn").Output()
+	hard, err := boundedCmd(t, "sh", "-c", "ulimit -Hn").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +346,7 @@ func TestSandboxPreflightRefusesAHardOpenFileLimitAboveTheBound(t *testing.T) {
 	}
 	f := newSandboxPreflightFixture(t)
 	script := sandboxPreflightScript(sandboxDefaults, f.paths, false)
-	out, _ := exec.Command("sh", "-c", "ulimit -Sn 1024\n"+script+"\nprintf 'ROW RAN\\n'\n").CombinedOutput()
+	out, _ := boundedCmd(t, "sh", "-c", "ulimit -Sn 1024\n"+script+"\nprintf 'ROW RAN\\n'\n").CombinedOutput()
 	if strings.Contains(string(out), "ROW RAN") || !strings.Contains(string(out), "open-file") {
 		t.Fatalf("preflight let the row run with a hard open-file limit of %s above the bound:\n%s", strings.TrimSpace(string(hard)), out)
 	}
@@ -355,7 +355,7 @@ func TestSandboxPreflightRefusesAHardOpenFileLimitAboveTheBound(t *testing.T) {
 func TestSandboxWrapperScriptsAreValidPOSIXShell(t *testing.T) {
 	for _, writable := range []bool{false, true} {
 		script := sandboxScript("printf one", sandboxDefaults, sandboxContainerPaths, writable)
-		cmd := exec.Command("sh", "-n")
+		cmd := boundedCmd(t, "sh", "-n")
 		cmd.Stdin = strings.NewReader(script)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("writable=%v script is not valid sh: %v\n%s", writable, err, out)

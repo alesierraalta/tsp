@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,7 +13,7 @@ const reportNamingADefect = "Lo pinné con un test que falla hoy.\n\n**Defecto:*
 func reportPlanDir(t *testing.T, bin string) (dir, plan string) {
 	t.Helper()
 	dir = t.TempDir()
-	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+	if out, err := boundedCmd(t, "git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
 	}
 	plan = filepath.Join(dir, "plan.md")
@@ -68,14 +67,14 @@ func TestPlanCheckReportReadsStdinAndIgnoresTestsAndDocs(t *testing.T) {
 	_, plan := reportPlanDir(t, bin)
 	plain, plainCode := runCLI(t, bin, "plan", "check", "--path", plan)
 
-	cmd := exec.Command(bin, "plan", "check", "--path", plan, "--report", "-")
+	cmd := cliCmd(t, bin, "plan", "check", "--path", plan, "--report", "-")
 	cmd.Stdin = strings.NewReader("Tests in `middleware/decompress_test.go:40`; docs in `README.md:3`.\n")
 	got, err := cmd.CombinedOutput()
 	if err != nil || string(got) != plain || plainCode != 0 {
 		t.Fatalf("stdin report citing tests and docs = %v %q, want today's %d %q", err, got, plainCode, plain)
 	}
 
-	cmd = exec.Command(bin, "plan", "check", "--path", plan, "--report", "-")
+	cmd = cliCmd(t, bin, "plan", "check", "--path", plan, "--report", "-")
 	cmd.Stdin = strings.NewReader(reportNamingADefect)
 	got, err = cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(got), "middleware/decompress.go:85") {
