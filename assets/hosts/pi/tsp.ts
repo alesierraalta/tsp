@@ -277,7 +277,7 @@ export const DIRTY_TREE_REFUSAL = /the working tree has uncommitted changes: (co
 const HEADLESS_CAP_FACTOR = 2; // two continuations per round of the loop's own bound
 const HEADLESS_FALLBACK_CAP = 10; // used until an answer carries the loop's own bound
 export const COMMIT_LEAD = "The TSP loop cannot judge an uncommitted working tree.";
-/** What a session without a UI sends when the loop cannot judge the tree: commit what the run wrote, then it records. */
+/** What the extension sends when the loop cannot judge the tree: commit what the run wrote, then it records. */
 export function commitRequest(refused: string, paths: readonly string[]): string {
   // A model may simply obey this, so it names only what the loop is allowed to commit: naming every changed path
   // would put an untracked secret beside the work into the instruction, and a blanket add into the commit.
@@ -740,11 +740,14 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
       const recorded = await run("record");
       if (recorded.code !== 0 && recorded.code !== 1) {
         const said = shown(recorded);
-        notify(said, "error");
-        // An uncommitted tree is not a judgment that failed: it is a step somebody has to take. With a UI the human
-        // reads this and commits; without one the caller asks the agent to (#471).
-        if (DIRTY_TREE_REFUSAL.test(said)) return { message: "", fix: "", refused: said };
+        // An uncommitted tree is not a judgment that failed: it is a step somebody has to take, so it never reads
+        // as an error; the caller turns it into the one commit request that unblocks the loop (#471, #505).
+        if (DIRTY_TREE_REFUSAL.test(said)) {
+          notify(said, "warning");
+          return { message: "", fix: "", refused: said };
+        }
         // Anything else is a judgment that failed, and a session without a UI has nowhere to show it (#471).
+        notify(said, "error");
         log?.(loopFailure("findings record", recorded.code, printed(recorded) || said));
         return NO_STEP;
       }
@@ -1272,10 +1275,11 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       if (!ctx.hasUI && loopCap === 0 && loop !== undefined && loop.maxRounds > 0) loopCap = loop.maxRounds * HEADLESS_CAP_FACTOR;
       if (tspRun) { ran = true; decision = undefined; persist(); }
       if (step.answer !== undefined) commitPending = false; // a record that judged the tree means the commit landed
-      if (step.refused !== undefined && !ctx.hasUI) {
-        // The loop judges commits. With a UI the refusal is a notification and the human commits; without one the
-        // agent is asked once per settle, and a second request it did not answer ends the loop, because asking again
-        // would never end (#471). The turn this asks for is a loop turn, so it records the round and asks next again.
+      if (step.refused !== undefined) {
+        // The loop judges commits, and whoever moves first unblocks it: the refusal is one warning to the human and
+        // one commit request to the agent, never an error notice and never repeated — a second request nobody
+        // answered ends the loop, because asking again would never end (#471, #505). The turn this asks for is a
+        // loop turn, so it records the round and asks next again.
         if (commitPending) {
           endLoop("commit-request-unanswered", `the agent did not commit after the commit request, so the loop stopped: ${step.refused}`);
           return;
