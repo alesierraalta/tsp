@@ -1373,7 +1373,7 @@ test("headless: an uncommitted tree is asked to commit, and the loop records and
   assert.ok(h.sent[0].startsWith(COMMIT_LEAD), h.sent[0]);
   assert.match(h.sent[0], /^The TSP loop cannot judge an uncommitted working tree\./);
   assert.ok(h.sent[0].includes(UNCOMMITTED_RECORD), "the agent is told exactly what tsp answered");
-  assert.match(h.sent[0], /records the round and asks next/, "and what the loop does once it is committed");
+  assert.match(h.sent[0], /runs `tsp findings record` and asks next/, "and what the loop does once it is committed");
   assert.match(h.sent[0], /Never `git add -A` or `git commit -a`/, "and it constrains the commit instead of inviting a blanket add");
   assert.deepEqual(h.calls.filter((c) => c.argv[0] === "findings").map((c) => c.argv[1]), ["record"], "no next is asked while the tree cannot be recorded");
   rendersNothing(h);
@@ -1422,17 +1422,52 @@ test("headless: a dirty-tree answer from next is not kept as the loop's answer",
 });
 
 test("with a UI the uncommitted tree is one warning and one commit request, never an error notice", async () => {
-  const h = offerHarness({ findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 2 } } });
+  const h = offerHarness({ findings: { record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 3 } } });
   await h.run("haz el TSP", []);
   assert.deepEqual(h.notes, [{ message: UNCOMMITTED_RECORD, type: "warning" }], "the refusal is a step somebody has to take, not a judgment that failed");
   assert.equal(h.sent.length, 1, "the agent is told once what unblocks the loop");
   assert.ok(h.sent[0].startsWith(COMMIT_LEAD), h.sent[0]);
   assert.ok(h.sent[0].includes(UNCOMMITTED_RECORD), "and exactly what tsp answered");
+  assert.match(h.sent[0], /^[^\r\n]+$/, "one line");
+  assert.ok(h.sent[0].includes("`tsp findings record`"), "names the unblock command");
   assert.deepEqual(h.asked, []);
   await h.run(h.sent[0], []);
   assert.equal(h.sent.length, 1, "the request is not repeated per turn");
+  assert.deepEqual(h.notes, [{ message: UNCOMMITTED_RECORD, type: "warning" }], "the warning is not repeated either");
   const [end] = h.entries.filter((e) => e.customType === "tsp-loop-error").map((e) => e.data);
   assert.ok(end && end.command === "commit-request-unanswered", "an unanswered request ends the loop instead of asking forever");
+});
+
+test("a dirty TSP run asks for feedback once before the commit continuation", async () => {
+  for (const hasUI of [true, false]) {
+    const h = offerHarness({ hasUI, findings: {
+      record: { stdout: UNCOMMITTED_RECORD + "\n", stderr: "", code: 3 },
+      "--template": { stdout: TEMPLATE, stderr: "", code: 0 },
+    } });
+    await h.run("haz el TSP", []);
+    assert.equal(h.sent.length, 1);
+    assert.ok(h.sent[0].startsWith(FEEDBACK_LEAD), "dirty refusal does not swallow feedback");
+    await h.run(h.sent[0], []);
+    assert.equal(h.sent.length, 2);
+    assert.ok(h.sent[1].startsWith(COMMIT_LEAD), "feedback hands off the exact commit continuation");
+    await h.run(h.sent[1], []);
+    assert.equal(h.sent.length, 2, "an unanswered request does not repeat feedback or the commit request");
+    assert.equal(h.calls.filter(c => c.argv[0] === "feedback" && c.argv[1] === "--template").length, 1);
+    assert.equal(loopErrors(h).at(-1)?.data.command, "commit-request-unanswered");
+  }
+});
+
+test("an unanswered next refusal does not clear the pending commit request", async () => {
+  for (const hasUI of [true, false]) {
+    const next = { stdout: JSON.stringify({ next: "error", message: UNCOMMITTED_NEXT }), stderr: "", code: 2 };
+    const h = offerHarness({ hasUI, findings: { next } });
+    await h.run("haz el TSP", []);
+    assert.equal(h.sent.length, 1);
+    await h.run(h.sent[0], []);
+    assert.equal(h.sent.length, 1, "do not ask again if the same tree cannot be judged");
+    assert.deepEqual(h.notes, hasUI ? [{ message: UNCOMMITTED_NEXT, type: "warning" }] : []);
+    assert.equal(loopErrors(h).at(-1)?.data.command, "commit-request-unanswered");
+  }
 });
 
 // A headless session has nobody to read a failed review, so a record or next that fails is appended to the session

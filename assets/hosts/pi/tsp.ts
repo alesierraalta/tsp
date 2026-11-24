@@ -285,7 +285,7 @@ export function commitRequest(refused: string, paths: readonly string[]): string
     ? "Commit the tests this run wrote together with the source changes they pin, and nothing else."
     : `Commit exactly these paths, and nothing else: ${paths.join(", ")}. Run \`git add -- ${paths.map(shellQuote).join(" ")}\` and then \`git commit -m "<why>"\`.`;
   return `${COMMIT_LEAD} ${named} Never \`git add -A\` or \`git commit -a\`, and leave every other file untouched. ` +
-    `The loop judges commits, so once they are committed the loop records the round and asks next.\n\n${refused}`;
+    `The loop judges commits: once committed, it runs \`tsp findings record\` and asks next. (${refused.replace(/\s+/g, " ").trim()})`;
 }
 
 // A path a commit request may never name, whatever its extension: a key, or a directory that holds secrets.
@@ -355,7 +355,10 @@ const isTspRequest = (prompt: string | undefined): boolean =>
   SKILL_BLOCK.test(prompt ?? "") || (prompt ?? "").trim().toLowerCase() === TSP_PROMPT.toLowerCase();
 /** Which of its own messages the extension last sent: only that exact text is a feedback run, a fix run or a round. */
 type OwnMessage = { prompt: string; kind: "feedback" | "fix" | "round" | "record" | "commit" };
-const loopKind = (message: string): OwnMessage["kind"] => (message.startsWith(FIX_LEAD) ? "fix" : "round");
+const loopKind = (message: string): OwnMessage["kind"] => {
+  if (message.startsWith(COMMIT_LEAD)) return "commit";
+  return message.startsWith(FIX_LEAD) ? "fix" : "round";
+};
 function isLoadedSkill(path: string, cwd: string): boolean {
   if (!SKILL_FILE.test(path)) return false;
   const p = path.replace(/\\/g, "/");
@@ -742,10 +745,7 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
         const said = shown(recorded);
         // An uncommitted tree is not a judgment that failed: it is a step somebody has to take, so it never reads
         // as an error; the caller turns it into the one commit request that unblocks the loop (#471, #505).
-        if (DIRTY_TREE_REFUSAL.test(said)) {
-          notify(said, "warning");
-          return { message: "", fix: "", refused: said };
-        }
+        if (DIRTY_TREE_REFUSAL.test(said)) return { message: "", fix: "", refused: said };
         // Anything else is a judgment that failed, and a session without a UI has nowhere to show it (#471).
         notify(said, "error");
         log?.(loopFailure("findings record", recorded.code, printed(recorded) || said));
@@ -779,6 +779,11 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
     // An end sends the agent nothing more, so its whole message (the rejected findings, the items the user has to
     // decide on) is shown; a fix or a round shows its reason and notes, and its message goes to the agent.
     const terminal = reply.next === "done" || reply.next === "stop" || reply.next === "error";
+    // The settle handler owns the single notice and continuation for either dirty-tree refusal.
+    if (reply.next === "error" && DIRTY_TREE_REFUSAL.test(message)) {
+      show?.(undefined);
+      return { message: "", fix: "", refused: message };
+    }
     const shownLines = [reply.review, ...list(reply.lines), ...(terminal ? [message] : [reply.reason, ...list(reply.notes)])];
     const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0);
     const loop: LoopStatus = { next: reply.next, round: count(reply.round), maxRounds: count(reply.max_rounds), open: list(reply.items).length };
@@ -789,10 +794,7 @@ export async function reviewFindings(cwd: string, env: Readonly<Record<string, s
     }
     // The loop ended: nothing is running any more, so the panel that held its review is cleared.
     if (terminal) show?.(undefined);
-    // `next` refuses an uncommitted tree as an `error` answer rather than a failed judgment, so its own words decide.
-    const refused = terminal && DIRTY_TREE_REFUSAL.test(message) ? message : undefined;
-    const answer = reply.next as LoopAnswer;
-    return { message: reply.next === "tsp" ? `${ROUND_LEAD}${message}` : "", fix: "", loop: terminal ? undefined : loop, refused, answer };
+    return { message: reply.next === "tsp" ? `${ROUND_LEAD}${message}` : "", fix: "", loop: terminal ? undefined : loop, answer: reply.next as LoopAnswer };
   } catch (error) {
     const why = `tsp: ${error instanceof Error ? error.message : String(error)}`;
     notify(notice(why), "error");
@@ -1009,6 +1011,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
     }
   };
   const send = (prompt: string, kind: OwnMessage["kind"]) => {
+    if (kind === "commit") commitPending = true;
     own = { prompt, kind };
     pi.sendUserMessage(prompt);
     persist();
@@ -1254,6 +1257,15 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
       send(prompt, kind);
       return true;
     };
+    const queueFeedback = async (next: string) => {
+      if (!tspRun || commitRun || feedbackGiven) return false;
+      const request = await feedbackRequest(loopCwd, env, exec, notify);
+      if (request === "") return false;
+      pending = next;
+      persist();
+      continueLoop(request, "feedback");
+      return true;
+    };
     if (pendingRecord !== "" && !tspRun && !fixRun) {
       // The notice waits for a turn of its own: sent beside the loop's message, it would read as one instruction.
       const text = pendingRecord;
@@ -1284,12 +1296,12 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
           endLoop("commit-request-unanswered", `the agent did not commit after the commit request, so the loop stopped: ${step.refused}`);
           return;
         }
-        commitPending = true;
-        persist();
+        notify(notice(step.refused), "warning");
         // Only the change's tests and its tracked source may be named; an untracked secret beside them is not.
         const stillChanged = probe.state(loopCwd);
         const named = commitTargets(stillChanged === undefined ? [] : [...stillChanged.files.keys()]);
-        continueLoop(commitRequest(step.refused, named), "commit");
+        const request = commitRequest(step.refused, named);
+        if (!(await queueFeedback(request))) continueLoop(request, "commit");
         return;
       }
       if (fixRun && step.fix !== "" && step.fix === lastFix) {
@@ -1310,8 +1322,7 @@ function registerOffer(pi: ExtensionAPI, opts: OfferOptions): () => void {
         const noticeText = count === undefined ? "" : unrecordedRunNotice(count, freshTests);
         if (noticeText !== "") { recordNudged = true; pendingRecord = noticeText; persist(); }
       }
-      const request = tspRun && !commitRun && !feedbackGiven ? await feedbackRequest(loopCwd, env, exec, notify) : "";
-      if (request !== "") { pending = step.message; persist(); continueLoop(request, "feedback"); return; }
+      if (await queueFeedback(step.message)) return;
       if (step.message !== "") { continueLoop(step.message, loopKind(step.message)); return; }
       // Nothing else is owed this turn, so the recording notice goes now rather than waiting for a turn that may
       // never come; when the loop did send its message, it went out on the next settle instead.

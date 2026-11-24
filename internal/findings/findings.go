@@ -237,7 +237,7 @@ func RecordClass(dir, suite, since, class string, timeout time.Duration) (text s
 	if dirty, e := dirtyTree(top); e != nil {
 		return failure(e)
 	} else if dirty {
-		return failure(errDirtyRecord)
+		return "tsp findings: " + errDirtyRecord.Error() + "\n", 3
 	}
 	// The commit is pinned before judging: a round whose base moved mid-run would compare a fix against code it
 	// never saw, and the gates over the loop's whole change would then read the change as already reviewed.

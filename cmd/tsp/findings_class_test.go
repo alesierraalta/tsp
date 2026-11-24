@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -37,5 +39,17 @@ func TestFindingsRecordClassIsWired(t *testing.T) {
 	}
 	if code, out, errOut := run("findings"); code != 2 || out != "" || !strings.Contains(errOut, "--class <familia>") {
 		t.Fatalf("usage: exit=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+
+	beforeCode, before, beforeErr := run("findings", "check", "--cwd", dir)
+	if err := os.WriteFile(filepath.Join(dir, "wip.txt"), []byte("uncommitted\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	want := "tsp findings: the working tree has uncommitted changes: commit them, then record, so the loop judges a commit\n"
+	if code, out, errOut := run("findings", "record", "--cwd", dir); code != 3 || out != want || errOut != "" {
+		t.Fatalf("dirty refusal: exit=%d stdout=%q stderr=%q", code, out, errOut)
+	}
+	if code, out, errOut := run("findings", "check", "--cwd", dir); code != beforeCode || out != before || errOut != beforeErr {
+		t.Fatalf("dirty refusal changed findings: exit=%d stdout=%q stderr=%q", code, out, errOut)
 	}
 }

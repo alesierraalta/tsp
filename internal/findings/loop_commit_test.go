@@ -30,8 +30,8 @@ func TestRecordNeedsACommit(t *testing.T) {
 	put(t, d, "value_test.go", redTest)
 	out, code := findings.Record(d, "", "", wait)
 	want := "tsp findings: the working tree has uncommitted changes: commit them, then record, so the loop judges a commit\n"
-	if code != 2 || out != want {
-		t.Fatalf("record exit=%d: %q want %q", code, out, want)
+	if code != 3 || out != want {
+		t.Fatalf("record exit=%d want 3: %q want %q", code, out, want)
 	}
 }
 

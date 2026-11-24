@@ -770,8 +770,8 @@ The other skills are specialized and invoked by name.
 
 ### Track findings between reviews
 
-After a TSP run, run `tsp findings record` before committing the witness tests. At the next
-review, run `tsp findings check`. Both accept `--cwd` and `--timeout`; record also accepts
+After a TSP run, commit the witness tests and the changes they cover, then run `tsp findings record`.
+At the next review, run `tsp findings check`. Both accept `--cwd` and `--timeout`; record also accepts
 `--suite` (`go test`, pytest, `node --test`, `jest`, `npx jest`, `vitest run`,
 `npx vitest run`, or `cargo test`). Cargo witnesses must be in recognized test files
 (such as integration tests under `tests/`), not inline unit tests in production files
@@ -862,8 +862,10 @@ on the model's judgement. Run it after `tsp findings record`:
 one) for a host; the Pi extension
 drives the loop from it, and `lines` carries the review's line for every finding. The loop's state
 lives in the branch's registry. The loop judges commits, never a working tree: `tsp findings record`
-refuses a dirty tree, so the round it books is the commit it judged, and `next` refuses to judge a
-tree that changed or a commit that moved while it ran. Round one records `HEAD` against its parent;
+refuses a dirty tree with exit `3` (`commit required`, no round recorded), distinct from exit `2`
+(error). In Pi, that refusal produces one warning in the UI and one commit request to the agent;
+an unanswered request stops the loop. `next` refuses to judge a tree that changed or a commit that
+moved while it ran. Round one records `HEAD` against its parent;
 `tsp findings record --since <rev>` names another base when a round starts elsewhere: that commit
 itself, stored as its id. Every later round is judged against the commit it was asked to attack, so a
 fix that was committed is the round, and a source change committed after that round owes another
