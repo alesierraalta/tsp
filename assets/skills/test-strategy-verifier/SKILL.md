@@ -102,6 +102,10 @@ answers `done` or `stop`:
   test. A `suite` item is fixed first, and a `check`, `quality`
   or `arch` item is fixed in the code or the tests it names. When an item cannot be settled under
   these rules, stop and report it as one decision for the human. Then run `tsp findings next` again.
+  A plan row and a registry item are two records of one repair: when the run's defects live in the plan's
+  Findings table, settle those rows too — `tsp plan settle --id <id> --status fixed` per repaired defect, then
+  `tsp plan check --pins` — because a plan still reading `confirmed` reports the repair as pending to every
+  later reader, whatever the registry says.
 - **`tsp`** — run the test-strategy flow again, aimed at the change it names
   (use the exact `git --literal-pathspecs diff <since> <base> -- <paths>` command in the answer) and everything that
   change affects. Do not re-attack code

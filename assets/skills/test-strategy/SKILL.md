@@ -17,8 +17,10 @@ behind is the suite it committed, not a regression net: a witness that stays loc
 untracked file, a probe that only exists as a command someone ran) is not in the repository's suite,
 so the run names the ones that stayed local instead of implying a wider net than it cast. Do not
 change source code except the candidate fix you write for `tsp redcheck --falsify`, which the
-command restores. Spend turns on probes and tests, not on prose: the one document a run writes is
-the plan, because it is the record a later reader audits.
+command restores. A repair round (step 8) is the one other ask that edits source, and it ends with
+the plan's rows settled rather than the code repaired and the ledger still pending. Spend turns on
+probes and tests, not on prose: the one document a run writes is the plan, because it is the record a
+later reader audits.
 
 ## Core Invariants
 
@@ -168,3 +170,15 @@ promise × class is, and step 6 says when it is complete.
    On a change, say whether each defect came with it: `--causality introduced` for a line this work
    changed, `pre-existing` for one already there, and `tsp plan check --base <ref>` refuses an
    `introduced` finding whose file the change does not touch.
+
+8. **A repair round is a different ask, and it settles the rows it fixes.** When the operator asks to
+   fix the defects this run recorded, the work is the repair, not another pass: change the source so
+   each defect is gone, run the witness that pinned it (it has to pass now, and a witness that still
+   fails says the repair did not hold), then rewrite each row in place with
+   `tsp plan settle --id <id> --status fixed` — the row keeps the witness it already names unless
+   `--test` names a different one — or `tsp plan settle --id <id> --status wontfix --reason '<why>'`
+   when the defect will not be repaired. Close with `tsp plan check --pins`: a `confirmed` row whose
+   witness now passes is refused there, which is the check saying a repair landed without settling its
+   row. The no-source-change rule in step 4 covers the run that finds and pins defects; a repair round
+   is the one other ask that edits source, and it ends with the rows settled, never with the code fixed
+   and the plan still reporting the defects as pending.
