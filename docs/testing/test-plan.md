@@ -207,6 +207,9 @@ of its cited files changed; when a run skips it, it cites the row.
 | F115 | assets/hosts/pi/tsp.ts:1288 | medium | yes | E125 | assets/hosts/pi/tsp.test.mjs :: with a UI the uncommitted tree is one warning and one commit request, never an error notice | fixed | TSP PR 506 | Only the first refusal renders and the agent gets one line | - |
 | F116 | internal/findings/findings.go:240 | medium | yes | E126 | cmd/tsp/findings_class_test.go :: TestFindingsRecordClassIsWired | fixed | TSP PR 506 | Commit required has a separate documented exit code | - |
 | F117 | assets/hosts/pi/tsp.ts:1304 | medium | yes | E127 | assets/hosts/pi/tsp.test.mjs :: a dirty TSP run asks for feedback once before the commit continuation | fixed | TSP PR 506 | The refusal uses the existing feedback queue and restores the commit continuation by kind | - |
+| F118 | internal/plan/settle.go:58 | rejects a plan the checker accepts | yes | E128 | internal/plan/settle_test.go :: TestSettleRewritesAPlanThatPredatesAColumn | fixed | alesierraalta / 2026-11-26 | the rewrite went through the row-creation path, which demands every column | - |
+| F119 | internal/plan/settle.go:84 | silently wrong answer (a supplied value is dropped) | yes | E128 | internal/plan/settle_test.go :: TestSettleRefusesAValueTheHeaderCannotCarry | fixed | alesierraalta / 2026-11-26 | a value with no column was accepted and not written | - |
+| F120 | internal/plan/settle.go:154 | command refuses a legal plan | yes | E128 | internal/plan/settle_test.go :: TestSettleFindsARowWhoseIdIsBackticked | fixed | alesierraalta / 2026-11-26 | rowsWithID compared the cell raw while --pins and --replay strip backticks | - |
 
 ## Evidence ledger
 
@@ -342,6 +345,7 @@ One row per `observado` conclusion (`references/evidence.md`). `razonado` items 
 | E125 | Pi stops after one dirty-tree request and renders a single warning and a single-line instruction | node --test assets/hosts/pi/tsp.test.mjs |  |  | 151 passed; dedicated record and next refusal regressions exercised |  |  |  |  | 8493ace: four requests in four next-refusal turns, two refusal warnings, and a three-line instruction |  | observado |
 | E126 | Dirty record is a handled outcome without changing sibling commands | Built both binaries and ran findings record, check, and next in an isolated Git repository |  |  | Record exits 3 rather than 2; outputs are identical; check and next exit codes are unchanged |  |  |  |  | 8493ace returns exit 2 with the same record diagnostic |  | observado |
 | E127 | A dirty TSP run asks for feedback once and then sends the pending commit request | node --test assets/hosts/pi/tsp.test.mjs |  |  | 152 pass in the host suite; UI and headless send the sequence once |  |  |  |  | Before the fix the new test failed because the first continuation skipped feedback |  | observado |
+| E128 | A repaired finding is settled in place, and a plan the checker accepts stays settlable | go test ./internal/plan -run TestSettle -count=1; go test ./cmd/tsp -run TestPlanSettle -count=1; 15 executed CLI probes (reported line, escaping, idempotence, write refusal, concurrency) | go test ./internal/plan -run TestSettle -count=1 | #509 worktree, plan docs/testing/test-plan.md | three defects found and fixed: --data-safe demanded on a legal plan, a supplied value dropped when the header had no column, a backticked id not found; each witness RED before the fix and green after |  |  |  |  |  |  | observado |
 
 ### Hypotheses (razonado)
 

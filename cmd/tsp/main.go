@@ -228,6 +228,11 @@ plan add-finding --id <id> --location <path:line> --severity <class> --data-safe
            (writes one Findings row; refuses a row plan check would reject, and never writes an
             evidence row. A bad value exits 2; a plan that refuses the row exits 1)
            (swept = status done, fixed or closed; n/a, na, none and skipped leave the denominator)
+plan settle --id <id> --status <open|confirmed|fixed|gap-closed|rejected|wontfix> [--test <suite :: name>]
+           [--reason <why>] [--verdict-by <who / date>] [--path <path>]
+           (rewrites one Findings row in place after its verdict changed, keeping the row's witness and reason
+            unless given; a settled status owes a witness, rejected and wontfix owe the reason the defect stays;
+            refuses an id the plan does not hold, an ambiguous id, and a row plan check would reject)
 plan add-evidence --id <id> --claim <text> --executed <text> --observed <text> [--admit <command>] [--inputs <text>]
            [--normalize <regexp>] [--mutate '<old> => <new> @ <path>:<line>'] [--expect pass|fail]
            [--control <text>] [--reproduction <text>] [--label observado] [--path <path>]
@@ -1698,15 +1703,15 @@ func runPlan(args []string) int {
 	force := fs.Bool("force", false, "replace an existing plan (init only)")
 	micro := fs.Bool("micro", false, "write the micro plan skeleton for one small function (init only)")
 	spec := fs.String("spec", "", "request file or - for stdin (init only); issue URLs are not fetched: gh issue view 123 | tsp plan init --spec -")
-	id := fs.String("id", "", "row id for add-finding and add-evidence; omitted, the next free F or E number is taken")
+	id := fs.String("id", "", "row id for add-finding, add-evidence and settle; omitted, the next free F or E number is taken")
 	location := fs.String("location", "", "the `path:line` the finding cites (add-finding)")
 	severity := fs.String("severity", "", "consequence class (add-finding)")
 	dataSafe := fs.String("data-safe", "", "whether data is safe (add-finding)")
 	evidence := fs.String("evidence", "", "Evidence ledger ids the finding cites (add-finding)")
-	test := fs.String("test", "", "pinning test, required when the status is confirmed or fixed (add-finding)")
-	status := fs.String("status", "", "one of "+plan.FindingsStatusList+" (add-finding)")
-	verdictBy := fs.String("verdict-by", "", "who settled it and when (add-finding)")
-	reason := fs.String("reason", "", "why the verdict stands (add-finding)")
+	test := fs.String("test", "", "pinning test, required when the status is confirmed or fixed (add-finding, settle)")
+	status := fs.String("status", "", "one of "+plan.FindingsStatusList+" (add-finding, settle)")
+	verdictBy := fs.String("verdict-by", "", "who settled it and when (add-finding, settle)")
+	reason := fs.String("reason", "", "why the verdict stands (add-finding, settle)")
 	fingerprint := fs.String("fingerprint", "", "cited-files fingerprint at verdict, default - (add-finding)")
 	causality := fs.String("causality", "", "whether the defect came with the change: introduced, pre-existing, or unknown, the default (add-finding)")
 	claim := fs.String("claim", "", "what the observation establishes (add-evidence)")
@@ -1975,6 +1980,33 @@ func runPlan(args []string) int {
 		}
 		notePlan("add-finding", effectivePath, nil)
 		fmt.Printf("added %s to %s at line %d\n", rowID, effectivePath, line)
+		return 0
+	case "settle":
+		// The row is named, not discovered. A value the vocabulary does not carry is a malformed invocation
+		// (2); an id the plan does not hold is the plan's refusal (1), and the plan is left byte-identical.
+		if strings.TrimSpace(*id) == "" {
+			fmt.Fprintln(os.Stderr, "plan settle: --id is required")
+			return 2
+		}
+		if strings.TrimSpace(*status) == "" {
+			fmt.Fprintln(os.Stderr, "plan settle: --status is required")
+			return 2
+		}
+		if refuseIgnoredPlanWrite(root, "settle", effectivePath) {
+			return 1
+		}
+		line, err := plan.Settle(effectivePath, plan.SettleEdit{
+			ID: *id, Status: *status, Test: *test, Reason: *reason, VerdictBy: *verdictBy,
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "plan settle:", err)
+			if errors.Is(err, plan.ErrUsage) {
+				return 2
+			}
+			return 1
+		}
+		notePlan("settle", effectivePath, nil)
+		fmt.Printf("settled %s in %s at line %d\n", *id, effectivePath, line)
 		return 0
 	case "add-evidence":
 		for _, req := range []struct{ flag, value string }{
@@ -3174,7 +3206,10 @@ func pinProblems(planPath string) []string {
 			problems = append(problems, fmt.Sprintf("finding %s names the witness %s, which cannot be run: %s", id, cell, firstLine(string(out))))
 		case status == "confirmed" && err == nil:
 			// A confirmed defect is still on this code, so its witness has to fail: one that passes pins nothing.
-			problems = append(problems, fmt.Sprintf("finding %s claims %s as its witness, but it passes on this code, so it pins nothing: make it fail for the reason the finding names, or report the defect as unconfirmed", id, cell))
+			// The row stays refused either way, and the remedy is the one writer that may move its verdict: a
+			// repaired defect is settled to fixed, a status the vocabulary carries, unlike the "unconfirmed"
+			// this message used to name (#509).
+			problems = append(problems, fmt.Sprintf("finding %s claims %s as its witness, but it passes on this code, so it pins nothing: if the defect was repaired, settle the row with `tsp plan settle --id %s --status fixed`; otherwise make the test fail for the reason the finding names", id, cell, id))
 		case status == "fixed" && err != nil:
 			// A fixed defect is gone, so its witness has to pass: one that fails says the repair did not hold.
 			problems = append(problems, fmt.Sprintf("finding %s is fixed, but its witness %s fails on this code: the repair did not hold, or the row names the wrong test", id, cell))

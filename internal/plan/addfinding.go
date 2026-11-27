@@ -141,7 +141,7 @@ func findingsTable(lines []string) (tableScan, error) {
 // owes, the placeholder an absent fingerprint has a spelling for, the fingerprint the checker accepts, and the
 // row itself.
 func rowFor(f Finding, header []string) (string, error) {
-	if err := f.checkValues(); err != nil {
+	if err := f.checkValues(true); err != nil {
 		return "", err
 	}
 	status, err := f.checkStatus()
@@ -221,9 +221,11 @@ func insertRow(path string, lines []string, table tableScan, row string) (int, e
 	return after + 1, nil
 }
 
-// field is one value the row carries: the flag that names it and whether the row needs it.
+// field is one value the row carries: the flag that names it, the column that holds it, and whether the row
+// needs it. The column is what tells a writer whether the table can carry the value at all.
 type field struct {
 	flag     string
+	column   string
 	value    string
 	required bool
 }
@@ -231,19 +233,26 @@ type field struct {
 // values lists the row's values in flag order; --status, --test and --fingerprint are conditional.
 func (f Finding) values() []field {
 	return []field{
-		{"id", f.ID, true}, {"location", f.Location, true}, {"severity", f.Severity, true},
-		{"data-safe", f.DataSafe, true}, {"evidence", f.Evidence, true}, {"test", f.Test, false},
-		{"status", f.Status, false}, {"verdict-by", f.VerdictBy, true}, {"reason", f.Reason, true},
-		{"fingerprint", f.Fingerprint, false}, {"causality", f.Causality, false}, {"reproduction", f.Reproduction, false},
+		{"id", "id", f.ID, true}, {"location", "finding", f.Location, true}, {"severity", "severity", f.Severity, true},
+		{"data-safe", "data safe", f.DataSafe, true}, {"evidence", "evidence", f.Evidence, true},
+		{"test", "pinning test", f.Test, false}, {"status", "status", f.Status, false},
+		{"verdict-by", "verdict by", f.VerdictBy, true}, {"reason", "reason", f.Reason, true},
+		{"fingerprint", "fingerprint", f.Fingerprint, false}, {"causality", "causality", f.Causality, false},
+		{"reproduction", "reproduction", f.Reproduction, false},
 	}
 }
 
-// checkValues refuses a pasted newline (one row into two) or an empty required value. Newlines first.
-func (f Finding) checkValues() error {
+// checkValues refuses a pasted newline (one row into two) and, when strict, an empty required value. A settle
+// rewrites a row that already lives in its table: a value the row does not carry is not the command's to invent,
+// so only the newline rule applies to it.
+func (f Finding) checkValues(strict bool) error {
 	for _, v := range f.values() {
 		if strings.ContainsAny(v.value, "\n\r") {
 			return usagef("--%s carries a newline: a Findings row is one line", v.flag)
 		}
+	}
+	if !strict {
+		return nil
 	}
 	for _, v := range f.values() {
 		if v.required && strings.TrimSpace(v.value) == "" {
@@ -273,6 +282,12 @@ func (f Finding) checkTest(status string) error {
 
 // row renders the row in header order and reads it back through the checker's own split for pipe safety.
 func (f Finding) row(header []string, status string) (string, error) {
+	return f.renderRow(header, status, true)
+}
+
+// renderRow is row with the writer's policy: a row being created (strict) owes every column a value, while a row
+// being rewritten keeps the shape of the table it already lives in and skips a column the table does not have.
+func (f Finding) renderRow(header []string, status string, strict bool) (string, error) {
 	cells := make([]string, len(header))
 
 	id := idColumn(header)
@@ -310,7 +325,7 @@ func (f Finding) row(header []string, status string) (string, error) {
 		switch {
 		case at >= 0:
 			cells[at] = cellValue(c.value)
-		case c.needed:
+		case c.needed && strict:
 			return "", fmt.Errorf("the Findings header has no %s column, so the row cannot carry it", c.name)
 		}
 	}

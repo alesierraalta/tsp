@@ -87,7 +87,8 @@ is recorded, or `pending` while the value is owed; `plan check` refuses anything
 
 Statuses: open · confirmed · fixed · gap-closed · rejected · wontfix.
 `gap-closed` is a behaviour that was correct but untested, now held by the promoted test it names; like
-`confirmed` and `fixed` it owes that test.
+`confirmed` and `fixed` it owes that test. A repaired finding is settled with
+`tsp plan settle --id <id> --status fixed` when its witness passes, and `fixed` is never typed by hand.
 
 ## Security candidates
 
