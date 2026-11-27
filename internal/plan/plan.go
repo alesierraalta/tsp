@@ -442,7 +442,9 @@ func admissionProblems(a ledgerAdmission, line int, finding, evidence string) []
 	}{
 		{"Admit", a.admit, !placeholder.MatchString(a.admit), "nothing says what command was run"},
 		{"Digest", a.digest, digestRe.MatchString(a.digest), "nothing records what that command produced"},
-		{"Mode", a.mode, modeRe.MatchString(a.mode), "nothing says where the observation was taken"},
+		// An empty Mode cell means `host`: the ledger says so, and every pin recorded before the column existed was
+		// taken here. Refusing it would contradict the format in the same document that defines it.
+		{"Mode", a.mode, modeRe.MatchString(a.mode) || placeholder.MatchString(a.mode), "nothing says where the observation was taken; write `host` or `sandbox`"},
 	} {
 		if c.valid {
 			continue

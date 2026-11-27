@@ -39,7 +39,10 @@ func TestCheckRefusesASettledFindingBackedByUnadmittedEvidence(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			problems := CheckDocument(admittedPlan(status, "", "", ""))
 			joined := strings.Join(problems, "\n")
-			for _, want := range []string{"finding F1", "E1", "Admit", "Digest", "Mode", "tsp plan admit --execute --record E1"} {
+			// Mode is not owed on an empty row: the ledger defines an empty Mode cell as `host`, so only the
+			// command and its digest are missing here. A Mode that names no place is refused by the
+			// unreadable-cell test instead.
+			for _, want := range []string{"finding F1", "E1", "Admit", "Digest", "tsp plan admit --execute --record E1"} {
 				if !strings.Contains(joined, want) {
 					t.Fatalf("%s finding over unadmitted evidence: problems = %v, want one naming %q", status, problems, want)
 				}
@@ -58,6 +61,11 @@ func TestCheckAcceptsASettledFindingOverAdmittedEvidence(t *testing.T) {
 			}
 			if problems := CheckDocument(admittedPlan(status, "node --test t.js", fixtureDigest, "sandbox")); len(problems) != 0 {
 				t.Fatalf("an evidence row admitted in sandbox mode was refused: %v", problems)
+			}
+			// The ledger documents an empty Mode as `host`, which is where every pin recorded before the
+			// column existed was taken; the rule must not contradict the format it is part of.
+			if problems := CheckDocument(admittedPlan(status, "node --test t.js", fixtureDigest, "")); len(problems) != 0 {
+				t.Fatalf("an empty Mode cell was refused, but the ledger defines it as host: %v", problems)
 			}
 		})
 	}
@@ -91,7 +99,6 @@ func TestCheckRefusesHalfAdmittedEvidence(t *testing.T) {
 	cases := []struct{ name, admit, digest, mode string }{
 		{"a digest with no command", "", fixtureDigest, "host"},
 		{"a command with no digest", "node --test t.js", "", "host"},
-		{"an admission with no mode", "node --test t.js", fixtureDigest, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -111,6 +118,7 @@ func TestCheckRefusesADigestOrModeItCannotRead(t *testing.T) {
 		{"a hand-written digest", "node --test t.js", "the tests passed", "host"},
 		{"a truncated digest", "node --test t.js", "sha256:7eada7", "host"},
 		{"a mode that names no place", "node --test t.js", fixtureDigest, "container"},
+		{"a mode in the wrong case", "node --test t.js", fixtureDigest, "Host"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

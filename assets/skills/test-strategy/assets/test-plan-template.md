@@ -160,9 +160,10 @@ pattern broad enough to swallow the output turns the pin into decoration. `plan 
 `Admit` is absent, whose `Digest` is unpinned, or whose output does not hold still.
 
 `plan check` reads the row a settled finding cites: a `confirmed`, `fixed` or `gap-closed` row must name an
-Evidence id whose row carries a non-empty `Admit`, a `sha256:` `Digest` and a `Mode`, because a verdict is
-worth no more than the observation behind it, while an `open` finding — an unverified claim — owes none of
-them. A plan written before this rule is migrated one cited row at a time with
+Evidence id whose row carries a non-empty `Admit`, a `sha256:` `Digest` and a readable `Mode` (an empty cell is
+`host`, as the ledger defines it), because a verdict is worth no more than the observation behind it, while an
+`open` finding — an unverified claim — owes none of them. It reads their shape, not their origin: a digest typed
+by hand has the shape of one that ran, so only re-running the command proves it did. A plan written before this rule is migrated one cited row at a time with
 `tsp plan admit --execute --record <id>`, which writes `Digest` and `Mode` together; a claim whose command
 cannot run is demoted to a Hypothesis (or to Status `open`) rather than left claiming verification.
 
