@@ -155,7 +155,10 @@ promise × class is, and step 6 says when it is complete.
    repository has none (`--micro` for a single function), one `tsp plan add-finding` row per
    defect — `--id`, `--location path:line`, `--severity`, `--data-safe`, `--evidence`, `--status`,
    `--verdict-by`, `--reason`, plus `--test` for a settled status — and `tsp plan check` then
-   `tsp plan gaps` until nothing is owed. Then report in the chat: each defect as `path:line` plus
+   `tsp plan gaps` until nothing is owed. A settled row (`confirmed`, `fixed`, `gap-closed`) is accepted
+   only over an evidence row that was run and recorded: `tsp plan admit --execute --record <id>` writes
+   the `Digest` and `Mode` that `plan check` reads back, and `open` is the honest status for a claim
+   whose command cannot run. Then report in the chat: each defect as `path:line` plus
    the test that pins it, the cells that stayed unprobed with their reason, and which witnesses
    stayed local instead of landing in the suite. A run that leaves no plan leaves nothing to audit.
    Every defect the chat report names is already a Findings row: a defect that lives only in the

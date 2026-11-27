@@ -15,8 +15,7 @@ import (
 // addPlan is the smallest plan carrying one evidence row: a finding has something real to cite, and the
 // checker has something to hold the candidate row to.
 func addPlan(rows ...string) string {
-	return header + strings.Join(rows, "") + ledger +
-		"| E1 | it drops the comma | `node --test` | `a,b` | 3 fields | reverted -> red | same input | observado |\n"
+	return header + strings.Join(rows, "") + admittedLedger + admittedRow
 }
 
 // openFinding is a row the checker accepts as it stands, so each test varies exactly one thing.

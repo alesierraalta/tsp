@@ -208,7 +208,7 @@ func CheckDocument(doc string) []string {
 	}
 	ledgerIDs, ledgerIssues := ledgerProblems(ledger)
 	problems = append(problems, ledgerIssues...)
-	problems = append(problems, findingProblems(findings, ledgerIDs)...)
+	problems = append(problems, findingProblems(findings, ledgerIDs, ledgerAdmissions(ledger))...)
 	problems = append(problems, securityCandidateProblems(lines, ledger)...)
 	// A candidate's Disposition is its author's claim; the review section is a second answer to it, so the two
 	// contracts are checked independently and neither makes the other optional.
@@ -290,7 +290,7 @@ func columnsOf(header []string) findingColumns {
 }
 
 // findingProblems reads every finding row, and reports a repeated id against the line that first carried it.
-func findingProblems(findings tableScan, ledgerIDs map[string]bool) []string {
+func findingProblems(findings tableScan, ledgerIDs map[string]bool, admissions map[string]ledgerAdmission) []string {
 	cols := columnsOf(findings.header)
 	idLine := map[string]int{}
 	var problems []string
@@ -301,15 +301,16 @@ func findingProblems(findings tableScan, ledgerIDs map[string]bool) []string {
 		} else {
 			idLine[cell(r.cells, 0)] = r.line
 		}
-		problems = append(problems, findingRowProblems(r, id, cols, ledgerIDs)...)
+		problems = append(problems, findingRowProblems(r, id, cols, ledgerIDs, admissions)...)
 	}
 	return problems
 }
 
-// findingRowProblems reads one finding row against the five rules a row owes: the path:line that makes it
+// findingRowProblems reads one finding row against the rules a row owes: the path:line that makes it
 // locatable, the evidence that has to be a ledger row, the closed status vocabulary, the pinning test a
-// settled verdict names, and the fingerprint cell that names what the verdict can be re-checked against.
-func findingRowProblems(r row, id string, cols findingColumns, ledgerIDs map[string]bool) []string {
+// settled verdict names, the admission its evidence has to carry, and the fingerprint cell that names what
+// the verdict can be re-checked against.
+func findingRowProblems(r row, id string, cols findingColumns, ledgerIDs map[string]bool, admissions map[string]ledgerAdmission) []string {
 	var problems []string
 	if cols.find >= 0 && !pathCiteRe.MatchString(cell(r.cells, cols.find)) {
 		problems = append(problems, fmt.Sprintf("line %d: finding %s cites no path:line, so nothing can be located", r.line, id))
@@ -319,8 +320,11 @@ func findingRowProblems(r row, id string, cols findingColumns, ledgerIDs map[str
 	if breach != "" {
 		problems = append(problems, fmt.Sprintf("line %d: finding %s %s", r.line, id, breach))
 	}
-	if settledStatus.MatchString(status) && (cols.pin < 0 || placeholder.MatchString(cell(r.cells, cols.pin))) {
-		problems = append(problems, fmt.Sprintf("line %d: finding %s is settled but names no pinning test", r.line, id))
+	if settledStatus.MatchString(status) {
+		if cols.pin < 0 || placeholder.MatchString(cell(r.cells, cols.pin)) {
+			problems = append(problems, fmt.Sprintf("line %d: finding %s is settled but names no pinning test", r.line, id))
+		}
+		problems = append(problems, settledEvidenceProblems(r, id, cols.evidence, admissions)...)
 	}
 	if cols.causality >= 0 {
 		// A defect the change introduced is what blocks a merge; one that was already there does not. The cell is
@@ -359,10 +363,96 @@ func evidenceProblems(r row, id string, col int, ledgerIDs map[string]bool) []st
 		return []string{fmt.Sprintf("line %d: finding %s cites no evidence row", r.line, id)}
 	}
 	var problems []string
-	for _, part := range strings.FieldsFunc(ev, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
-		if part = strings.Trim(part, "`"); part != "" && !ledgerIDs[part] {
+	for _, part := range evidenceIDs(ev) {
+		if !ledgerIDs[part] {
 			problems = append(problems, fmt.Sprintf("line %d: finding %s cites evidence %s, which is not a row in the Evidence ledger", r.line, id, quote(part)))
 		}
+	}
+	return problems
+}
+
+// evidenceIDs returns the ledger ids one Evidence id cell names. The cell holds a list (`E1, E2`, `E1/E3`),
+// so a rule about what a citation resolves to is applied to each part rather than to the cell.
+func evidenceIDs(ev string) []string {
+	var ids []string
+	for _, part := range strings.FieldsFunc(ev, func(r rune) bool { return r == ',' || r == ';' || r == '/' || r == ' ' }) {
+		if part = strings.Trim(part, "`"); part != "" {
+			ids = append(ids, part)
+		}
+	}
+	return ids
+}
+
+// ledgerAdmission is what one Evidence ledger row recorded about running the claim it holds: the command the
+// row admits, the digest that command was observed to produce, and the mode it was observed in. The three
+// cells are read by column name, so a row written before those columns existed carries three empty cells and
+// is refused as unadmitted rather than read as admitted.
+type ledgerAdmission struct {
+	admit, digest, mode string
+}
+
+// ledgerAdmissions reads the three admission cells of every ledger row, keyed by the id a finding cites.
+func ledgerAdmissions(ledger tableScan) map[string]ledgerAdmission {
+	iAdmit := columnIndex(ledger.header, "admit")
+	iDigest := columnIndex(ledger.header, "digest")
+	iMode := columnIndex(ledger.header, "mode")
+	admissions := make(map[string]ledgerAdmission, len(ledger.rows))
+	for _, r := range ledger.rows {
+		admissions[cell(r.cells, 0)] = ledgerAdmission{
+			admit:  cell(r.cells, iAdmit),
+			digest: cell(r.cells, iDigest),
+			mode:   cell(r.cells, iMode),
+		}
+	}
+	return admissions
+}
+
+// settledEvidenceProblems reads the evidence a settled finding cites against what its ledger rows recorded:
+// the template already says one row per conclusion executed and observed, so a verdict claimed in Findings is
+// only worth the admission the row it cites carries. An `open` finding claims nothing and never reaches here,
+// and an id the ledger does not carry is already refused by evidenceProblems, so only a cited row that exists
+// is asked to be admitted.
+func settledEvidenceProblems(r row, id string, col int, admissions map[string]ledgerAdmission) []string {
+	ev := cell(r.cells, col)
+	if col < 0 || placeholder.MatchString(ev) {
+		return nil
+	}
+	var problems []string
+	for _, part := range evidenceIDs(ev) {
+		admission, cited := admissions[part]
+		if !cited {
+			continue
+		}
+		problems = append(problems, admissionProblems(admission, r.line, id, part)...)
+	}
+	return problems
+}
+
+// admissionProblems names every cell a cited evidence row has not filled. A verdict is a claim about a command
+// that ran, so the row behind it has to admit that command, carry the digest of what it produced, and say where
+// it was observed. Each breach names the finding, the evidence row, the cell and the one command that fills it,
+// because `plan check` is a reader that never rewrites the plan: the fix is the operator's to run.
+func admissionProblems(a ledgerAdmission, line int, finding, evidence string) []string {
+	var problems []string
+	for _, c := range []struct {
+		name  string
+		value string
+		valid bool
+		why   string
+	}{
+		{"Admit", a.admit, !placeholder.MatchString(a.admit), "nothing says what command was run"},
+		{"Digest", a.digest, digestRe.MatchString(a.digest), "nothing records what that command produced"},
+		{"Mode", a.mode, modeRe.MatchString(a.mode), "nothing says where the observation was taken"},
+	} {
+		if c.valid {
+			continue
+		}
+		state := "is empty"
+		if value := strings.TrimSpace(c.value); value != "" {
+			state = fmt.Sprintf("holds %q", quote(value))
+		}
+		problems = append(problems, fmt.Sprintf("line %d: finding %s is settled but evidence %s was never admitted: its %s cell %s, so %s; run `tsp plan admit --execute --record %s` to admit the row",
+			line, finding, quote(evidence), c.name, state, c.why, evidence))
 	}
 	return problems
 }

@@ -159,7 +159,7 @@ func TestSettleRefusesAnAmbiguousID(t *testing.T) {
 	doc := header +
 		"| F1 | src/a.js:5 | M | yes | E1 | a.js :: a | confirmed | me | - | - |\n" +
 		"| F1 | src/b.js:5 | M | yes | E1 | b.js :: b | confirmed | me | - | - |\n" +
-		ledger + "| E1 | it drops the comma | `node --test` | `a,b` | 3 fields | reverted -> red | same input | observado |\n"
+		admittedLedger + admittedRow
 	p := write(t, t.TempDir(), "plan.md", doc)
 	_, err := Settle(p, SettleEdit{ID: "F1", Status: "fixed"})
 	if err == nil || !strings.Contains(err.Error(), "F1") {
@@ -179,7 +179,7 @@ const legacyFindings = "## Findings\n\n| Id | Finding | Severity | Evidence id |
 func legacyPlan() string {
 	return legacyFindings +
 		"| F1 | src/a.js:5 | data loss | E1 | src/a.test.js :: a | confirmed | me / 2026-09-10 | not pinned | - |\n" +
-		ledger + "| E1 | it drops the comma | `node --test` | `a,b` | 3 fields | reverted -> red | same input | observado |\n"
+		admittedLedger + admittedRow
 }
 
 func TestSettleRewritesAPlanThatPredatesAColumn(t *testing.T) {
@@ -217,7 +217,7 @@ func TestAddFindingStillRefusesAPlanWithoutTheDataSafeColumn(t *testing.T) {
 func TestSettleRefusesAValueTheHeaderCannotCarry(t *testing.T) {
 	const noReason = "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Fingerprint |\n|---|---|---|---|---|---|---|---|---|\n" +
 		"| F1 | src/a.js:5 | data loss | yes | E1 | src/a.test.js :: a | confirmed | me / 2026-09-10 | - |\n" +
-		ledger + "| E1 | it drops the comma | `node --test` | `a,b` | 3 fields | reverted -> red | same input | observado |\n"
+		admittedLedger + admittedRow
 	if problems := CheckDocument(noReason); len(problems) != 0 {
 		t.Fatalf("the fixture must be a plan the checker accepts: %v", problems)
 	}

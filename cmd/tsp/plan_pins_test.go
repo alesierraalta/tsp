@@ -60,8 +60,13 @@ func TestAddPassesForZero(t *testing.T) {
 func addRow(t *testing.T, bin, dir, test string) {
 	t.Helper()
 	plan := filepath.Join(dir, "plan.md")
-	if out, code := runCLI(t, bin, "plan", "add-evidence", "--path", plan, "--claim", "c", "--executed", "e", "--admit", "go test ./calc", "--inputs", "i", "--observed", "o", "--label", "observado"); code != 0 {
+	if out, code := runCLI(t, bin, "plan", "add-evidence", "--path", plan, "--claim", "c", "--executed", "e", "--admit", "printf 'observed'", "--inputs", "i", "--observed", "o", "--label", "observado"); code != 0 {
 		t.Fatalf("add-evidence = %d %s", code, out)
+	}
+	// A settled finding owes the admission its evidence row carries, so the row is run and recorded before the
+	// finding that cites it is written: a confirmed verdict over unadmitted evidence is what plan check refuses.
+	if out, code := runCLI(t, bin, "plan", "admit", "--path", plan, "--execute", "--record", "E1"); code != 0 {
+		t.Fatalf("admit = %d %s", code, out)
 	}
 	if out, code := runCLI(t, bin, "plan", "add-finding", "--path", plan, "--location", "calc/calc.go:3", "--severity", "silently wrong answer",
 		"--data-safe", "yes", "--evidence", "E1", "--status", "confirmed", "--test", test, "--verdict-by", "t / 2026-11-08", "--reason", "r"); code != 0 {

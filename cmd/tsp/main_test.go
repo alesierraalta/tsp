@@ -460,8 +460,8 @@ func TestTUIRefusesNullDeviceStdinWithoutDrawing(t *testing.T) {
 
 // ledgerHeader is the shipped Evidence ledger header. The `Admit` and `Digest` columns are the two a
 // recording run reads and writes, so a fixture drifting from this header would test another contract.
-const ledgerHeader = "| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
-	"|---|---|---|---|---|---|---|---|---|---|\n"
+const ledgerHeader = "| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n" +
+	"|---|---|---|---|---|---|---|---|---|---|---|---|\n"
 
 // writeLedger writes a minimal plan whose one Evidence ledger row carries the given Admit cell, so a
 // test drives the real binary over a real file rather than a string it never parsed.
@@ -475,10 +475,11 @@ func writeLedger(t *testing.T, dir, admit string) string {
 	return path
 }
 
-// ledgerRow is one ledger row with the given id and Admit cell and an empty Digest cell for a
-// recording run to fill.
+// ledgerRow is one ledger row with the given id and Admit cell and empty Digest, Normalize and Mode cells
+// for a recording run to fill. A Mode column is present because a recording writes the place it observed in,
+// and a plan check reads a settled claim back against it.
 func ledgerRow(id, admit string) string {
-	return "| " + id + " | the claim | prose a human reads | " + admit + " | none | the observation | | reverted → red | rerun it | observado |\n"
+	return "| " + id + " | the claim | prose a human reads | " + admit + " | none | the observation | | | | reverted → red | rerun it | observado |\n"
 }
 
 // compliantPlan is the smallest plan `plan check` accepts, so a recording run can be followed by a
@@ -564,7 +565,7 @@ func TestPlanAdmitRecordPinsTheObservedDigests(t *testing.T) {
 	}
 	want := before
 	for _, d := range digests {
-		want = strings.Replace(want, "| | reverted → red |", "| "+d+" | reverted → red |", 1)
+		want = strings.Replace(want, "| | | | reverted → red |", "| "+d+" | | host | reverted → red |", 1)
 	}
 	if string(after) != want {
 		t.Fatalf("the recording run rewrote bytes outside the digest cells:\ngot  %q\nwant %q", after, want)
@@ -2084,7 +2085,7 @@ func TestBenchScoreReportsTheScoreItCouldNotWrite(t *testing.T) {
 	plan := "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n" +
 		"| F1 | `src/a.js:5` alpha | M | yes | E1 | t.js :: x | fixed | me | - | - |\n\n" +
 		"## Evidence ledger\n\n| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Mutation or negative control → result | Reproduction | Label |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n" +
-		"| E1 | the claim | go test ./... | go test ./... | none | the observation | sha256:aaaa | none | host | none | reverted → red | rerun it | observado |\n"
+		"| E1 | the claim | go test ./... | go test ./... | none | the observation | sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | none | host | none | reverted → red | rerun it | observado |\n"
 	// The fixture is a plan this repository's own checker accepts: a row that declares thirteen columns and writes
 	// eight is the cell-count breach the checker refuses, and a fixture is where that mistake would be copied from.
 	if problems := plancheck.CheckDocument(plan); len(problems) != 0 {

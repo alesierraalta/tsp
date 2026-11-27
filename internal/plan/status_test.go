@@ -10,7 +10,7 @@ import (
 func TestGapClosedIsASettledStatusThatOwesAPinningTest(t *testing.T) {
 	row := func(test string) string {
 		return header + "| F1 | `src/a.js:5` empty input was untested | M | yes | E1 | " + test + " | gap-closed | me | - | - |\n" +
-			ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+			admittedLedger + admittedRow
 	}
 	if problems := CheckDocument(row("t.js :: empty input")); len(problems) != 0 {
 		t.Fatalf("gap-closed with a pinning test refused: %v", problems)

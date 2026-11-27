@@ -121,7 +121,7 @@ func TestCheckAcceptsACompliantPlan(t *testing.T) {
 		"| F1 | `src/a.js:5` drops a quoted comma | data loss | yes | E1 | tests/a.test.js :: keeps a quoted comma | fixed | me / 2026-09-10 | - | abc1234 | introduced | false |\n")
 	plan = replaceFixture(t, plan, "the Evidence ledger header",
 		"| Id | Claim | Executed | Admit | Inputs and parameters | Observed | Digest | Normalize | Mode | Mutate | Expect | Mutation or negative control → result | Reproduction | Label (`observado` / `razonado`, literal) |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
-		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | | | | | reverted → red | same input | observado |\n")
+		"| E1 | it drops the comma | `node --test` | node --test | `a,\"b,c\"` | 3 fields | sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed | | host | | | reverted → red | same input | observado |\n")
 	if plan == string(body) {
 		t.Fatal("the fixture replaced nothing, so this test would read the untouched template as a compliant plan")
 	}
@@ -151,25 +151,25 @@ func TestCheckNamesEveryContractBreach(t *testing.T) {
 		{
 			name: "a finding that cites no path",
 			plan: header + "| F1 | `formatCents` rounds a tie down | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
-				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n",
+				admittedLedger + admittedRow,
 			wantSub: "cites no path:line",
 		},
 		{
 			name: "a finding citing an evidence id that does not exist",
 			plan: header + "| F1 | `src/a.js:5` x | M | yes | E9 | t.js :: x | fixed | me | - | - |\n" +
-				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n",
+				admittedLedger + admittedRow,
 			wantSub: "cites evidence E9",
 		},
 		{
 			name: "a confirmed finding with no pinning test",
 			plan: header + "| F1 | `src/a.js:5` x | M | yes | E1 |  | fixed | me | - | - |\n" +
-				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n",
+				admittedLedger + admittedRow,
 			wantSub: "names no pinning test",
 		},
 		{
 			name: "a razonado row inside the evidence ledger",
 			plan: header + "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
-				ledger + "| E1 | c | cmd | i | o | m | r | razonado |\n",
+				ledger + "| E1 | c | cmd | go test ./... | i | o | " + fixtureDigest + " | | host | m | r | razonado |\n",
 			wantSub: "labelled razonado",
 		},
 	}
@@ -215,7 +215,7 @@ func TestCheckReadsTheFindingsFingerprintCell(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.cell, func(t *testing.T) {
 			plan := header + "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | " + tc.cell + " |\n" +
-				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+				admittedLedger + admittedRow
 			problems := strings.Join(CheckDocument(plan), "\n")
 			if tc.accept {
 				if problems != "" {
@@ -235,7 +235,7 @@ func TestCheckReadsTheFindingsFingerprintCell(t *testing.T) {
 // directions earn a breach; the separator and placeholder rows table already skips earn none.
 func TestCheckReportsRowsWhoseCellsDoNotMatchTheirHeader(t *testing.T) {
 	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
-	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
+	const ledgerRow = "| E1 | c | cmd | go test ./... | i | o | " + fixtureDigest + " | | host | m | r | observado |\n"
 	cases := []struct {
 		name     string
 		plan     string
@@ -243,25 +243,25 @@ func TestCheckReportsRowsWhoseCellsDoNotMatchTheirHeader(t *testing.T) {
 	}{
 		{
 			name: "a compliant plan owes no breach",
-			plan: header + finding + ledger + ledgerRow,
+			plan: header + finding + admittedLedger + ledgerRow,
 		},
 		{
 			name:     "a row with more cells than its header",
-			plan:     header + "| F1 | `src/a.js:5` gate|sync | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" + ledger + ledgerRow,
+			plan:     header + "| F1 | `src/a.js:5` gate|sync | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" + admittedLedger + ledgerRow,
 			wantSubs: []string{"Findings", "F1", "11 cells", "header's 10", "unescaped"},
 		},
 		{
 			name:     "a row with fewer cells than its header",
-			plan:     header + "| F1 | `src/a.js:5` x | M | yes |\n" + ledger + ledgerRow,
+			plan:     header + "| F1 | `src/a.js:5` x | M | yes |\n" + admittedLedger + ledgerRow,
 			wantSubs: []string{"Findings", "F1", "4 cells", "header's 10"},
 		},
 		{
 			name: "a separator row is not a data row",
-			plan: header + finding + "|---|---|---|---|\n" + ledger + ledgerRow,
+			plan: header + finding + "|---|---|---|---|\n" + admittedLedger + ledgerRow,
 		},
 		{
 			name: "a placeholder row is not a data row",
-			plan: header + finding + "| - | | |\n" + ledger + ledgerRow,
+			plan: header + finding + "| - | | |\n" + admittedLedger + ledgerRow,
 		},
 	}
 	for _, tc := range cases {
@@ -291,8 +291,8 @@ func TestCheckReportsRowsWhoseCellsDoNotMatchTheirHeader(t *testing.T) {
 // it. A second reader with rules of its own invented a breach about a table nobody reads.
 func TestCheckDoesNotBlameRowsInsideAFencedExample(t *testing.T) {
 	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
-	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
-	plan := header + finding + ledger + ledgerRow +
+	const ledgerRow = "| E1 | c | cmd | go test ./... | i | o | " + fixtureDigest + " | | host | m | r | observado |\n"
+	plan := header + finding + admittedLedger + ledgerRow +
 		"\n## How a row looks\n\n```markdown\n| a | b | c |\n|---|---|---|\n| only one |\n```\n"
 	p := write(t, t.TempDir(), "plan.md", plan)
 	problems, err := Check(p)
@@ -308,8 +308,8 @@ func TestCheckDoesNotBlameRowsInsideAFencedExample(t *testing.T) {
 // document with a private loop made this row the next table's header, so the count mismatch that moves every
 // column to its right was never reported and only its symptoms were.
 func TestCheckBlamesTheCellCountWhenABlankLineSplitsTheTable(t *testing.T) {
-	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
-	plan := header + "\n| F1 | `src/a.js:5` x | M | yes |\n" + ledger + ledgerRow
+	const ledgerRow = "| E1 | c | cmd | go test ./... | i | o | " + fixtureDigest + " | | host | m | r | observado |\n"
+	plan := header + "\n| F1 | `src/a.js:5` x | M | yes |\n" + admittedLedger + ledgerRow
 	p := write(t, t.TempDir(), "plan.md", plan)
 	problems, err := Check(p)
 	if err != nil {
@@ -326,8 +326,8 @@ func TestCheckBlamesTheCellCountWhenABlankLineSplitsTheTable(t *testing.T) {
 // read the second table and report nothing, which is the drift this test is here to catch.
 func TestCheckContinuesTheRegionWalkAfterABlockCloses(t *testing.T) {
 	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
-	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
-	plan := header + finding + ledger + ledgerRow +
+	const ledgerRow = "| E1 | c | cmd | go test ./... | i | o | " + fixtureDigest + " | | host | m | r | observado |\n"
+	plan := header + finding + admittedLedger + ledgerRow +
 		"\n## How a row looks\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nprose closes the block\n\n| c | d |\n|---|---|\n| only one |\n"
 	p := write(t, t.TempDir(), "plan.md", plan)
 	problems, err := Check(p)
@@ -345,8 +345,8 @@ func TestCheckContinuesTheRegionWalkAfterABlockCloses(t *testing.T) {
 // top of the document would refuse a plan whose tables are all well formed.
 func TestCheckIgnoresTablesBeforeTheFirstHeading(t *testing.T) {
 	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
-	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
-	plan := "| x | y |\n|---|---|\n| only one |\n\n" + header + finding + ledger + ledgerRow
+	const ledgerRow = "| E1 | c | cmd | go test ./... | i | o | " + fixtureDigest + " | | host | m | r | observado |\n"
+	plan := "| x | y |\n|---|---|\n| only one |\n\n" + header + finding + admittedLedger + ledgerRow
 	p := write(t, t.TempDir(), "plan.md", plan)
 	problems, err := Check(p)
 	if err != nil {
@@ -363,8 +363,8 @@ func TestCheckIgnoresTablesBeforeTheFirstHeading(t *testing.T) {
 // deliberate change and never a silent one.
 func TestCheckTreatsAHeadingInsideAFenceAsARegionBoundary(t *testing.T) {
 	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
-	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
-	plan := header + finding + ledger + ledgerRow +
+	const ledgerRow = "| E1 | c | cmd | go test ./... | i | o | " + fixtureDigest + " | | host | m | r | observado |\n"
+	plan := header + finding + admittedLedger + ledgerRow +
 		"\n## How a row looks\n\n```markdown\n## Example\n| a | b |\n|---|---|\n| only one |\n```\n"
 	p := write(t, t.TempDir(), "plan.md", plan)
 	problems, err := Check(p)
@@ -384,8 +384,8 @@ func TestCheckTreatsAHeadingInsideAFenceAsARegionBoundary(t *testing.T) {
 // the separator rule and leave the placeholder exemption unproven.
 func TestCheckExemptsPlaceholderRowsFromTheCellCount(t *testing.T) {
 	const finding = "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n"
-	const ledgerRow = "| E1 | c | cmd | i | o | m | r | observado |\n"
-	plan := header + finding + ledger + ledgerRow +
+	const ledgerRow = "| E1 | c | cmd | go test ./... | i | o | " + fixtureDigest + " | | host | m | r | observado |\n"
+	plan := header + finding + admittedLedger + ledgerRow +
 		"\n## How a row looks\n\n| a | b | c |\n|---|---|---|\n| n/a |  |\n| x | y |\n"
 	p := write(t, t.TempDir(), "plan.md", plan)
 	problems, err := Check(p)
@@ -709,6 +709,16 @@ func TestRepositoryPlanIsWellFormed(t *testing.T) {
 const header = "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n|---|---|---|---|---|---|---|---|---|---|\n"
 const ledger = "\n## Evidence ledger\n\n| Id | Claim | Executed | Inputs | Observed | Mutation | Reproduction | Label |\n|---|---|---|---|---|---|---|---|\n"
 
+// A settled finding owes the admission its evidence row carries, so a fixture that expects plan check to
+// accept the plan writes one. `ledger` above stays the historical header a plan written before those columns
+// existed still reads; admittedLedger is the ledger that records one.
+const admittedLedger = "\n## Evidence ledger\n\n| Id | Claim | Executed | Admit | Inputs | Observed | Digest | Normalize | Mode | Mutation | Reproduction | Label |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+
+// fixtureDigest is one shape a Digest cell may take: no test depends on the bytes, only on the form.
+const fixtureDigest = "sha256:7eada7a897497315d39d2541f5058a9631e80828245781b3c9c96205d9d759ed"
+
+const admittedRow = "| E1 | c | cmd | go test ./... | i | o | " + fixtureDigest + " | | host | m | r | observado |\n"
+
 // A breach that names a row has to say where the row is. `path: finding F1 cites no path:line` left the
 // reader grepping the file for the row the check was talking about, which is the cost the checker
 // exists to remove.
@@ -716,7 +726,7 @@ func TestCheckNamesTheLineOfTheRowItBlames(t *testing.T) {
 	// `header` puts the column header on line 3 and the separator on line 4, so the first data row is
 	// line 5: the number the breach has to carry.
 	plan := header + "| F1 | `src/a.js:5` x | M | yes | E9 | t.js :: x | fixed | me | - | - |\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		admittedLedger + admittedRow
 	p := write(t, t.TempDir(), "plan.md", plan)
 	problems, err := Check(p)
 	if err != nil {
@@ -732,7 +742,7 @@ func TestCheckNamesTheLineOfTheRowItBlames(t *testing.T) {
 func TestCheckReadsARowSeparatedFromTheTableByABlankLine(t *testing.T) {
 	// The blank sits on line 5; the row it used to hide is line 6.
 	plan := header + "\n| F1 | `src/a.js:5` x | M | yes | E9 | t.js :: x | fixed | me | - | - |\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		admittedLedger + admittedRow
 	p := write(t, t.TempDir(), "plan.md", plan)
 	problems, err := Check(p)
 	if err != nil {
@@ -748,7 +758,7 @@ func TestCheckReadsARowSeparatedFromTheTableByABlankLine(t *testing.T) {
 func TestCheckNamesTheLineOfTheLedgerRowItBlames(t *testing.T) {
 	// The Findings row is line 5; the razonado ledger row is line 11.
 	plan := header + "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | razonado |\n"
+		ledger + "| E1 | c | cmd | go test ./... | i | o | " + fixtureDigest + " | | host | m | r | razonado |\n"
 	p := write(t, t.TempDir(), "plan.md", plan)
 	problems, err := Check(p)
 	if err != nil {
@@ -1106,7 +1116,7 @@ func TestCheckNamesAStatusOutsideTheFindingsVocabulary(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			plan := header + "| F1 | `src/a.js:5` x | M | yes | E1 | " + tc.pin + " | " + tc.status + " | me | - | - |\n" +
-				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+				admittedLedger + admittedRow
 			p := write(t, t.TempDir(), "plan.md", plan)
 			problems, err := Check(p)
 			if err != nil {
@@ -1146,7 +1156,7 @@ func TestCheckRefusesTwoRowsCarryingTheSameId(t *testing.T) {
 			plan: header +
 				"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
 				"\n| F1 | `src/b.js:9` y | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
-				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n",
+				admittedLedger + admittedRow,
 			want: "finding F1 repeats the id of the row on line",
 		},
 	}
@@ -1163,7 +1173,7 @@ func TestCheckRefusesTwoRowsCarryingTheSameId(t *testing.T) {
 func TestCheckReportsACutWithNoRowReadBeforeIt(t *testing.T) {
 	plan := header + "### Notes\n" +
 		"| F1 | `src/a.js:5` x | M | yes | E9 | t.js :: x | fixed | me | - | - |\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		admittedLedger + admittedRow
 	joined := strings.Join(CheckDocument(plan), "\n")
 	if !strings.Contains(joined, "interrupted at line 5") || !strings.Contains(joined, "### Notes") {
 		t.Fatalf("a cut before the first row must still be reported:\n%s", joined)
@@ -1177,7 +1187,7 @@ func TestCheckReportsAMalformedRowUnderASubheading(t *testing.T) {
 	plan := header +
 		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
 		"\n### Hypotheses (razonado)\n\n| Hypothesis | Probe |\n|---|---|\n| H1 | a | b | c |\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		admittedLedger + admittedRow
 	joined := strings.Join(CheckDocument(plan), "\n")
 	if !strings.Contains(joined, "Hypotheses (razonado) table row \"H1\" has 4 cells against the header's 2") {
 		t.Fatalf("a malformed row under a subheading must be reported:\n%s", joined)
@@ -1435,7 +1445,7 @@ func TestCheckAcceptsEveryDocumentedFindingsStatus(t *testing.T) {
 	for _, status := range []string{"open", "confirmed", "fixed", "rejected", "wontfix"} {
 		t.Run(status, func(t *testing.T) {
 			plan := header + "| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | " + status + " | me | - | - |\n" +
-				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+				admittedLedger + admittedRow
 			p := write(t, t.TempDir(), "plan.md", plan)
 			problems, err := Check(p)
 			if err != nil {
@@ -1454,7 +1464,7 @@ func TestCheckReportsATableInterruptedByProse(t *testing.T) {
 		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
 		"a sentence that closes the table\n" +
 		"| F2 | `src/b.js:9` y | M | yes | E9 | t.js :: y | fixed | me | - | - |\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		admittedLedger + admittedRow
 	joined := strings.Join(CheckDocument(plan), "\n")
 	if !strings.Contains(joined, "line 6: the Findings table is interrupted at line 6") ||
 		!strings.Contains(joined, "a sentence that closes the table") || !strings.Contains(joined, "line 7") {
@@ -1471,7 +1481,7 @@ func TestCheckReportsATableInterruptedByASubheading(t *testing.T) {
 		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
 		"### Notes\n" +
 		"| F2 | `src/b.js:9` y | M | yes | E9 | t.js :: y | fixed | me | - | - |\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		admittedLedger + admittedRow
 	joined := strings.Join(CheckDocument(plan), "\n")
 	if !strings.Contains(joined, "line 6: the Findings table is interrupted at line 6") ||
 		!strings.Contains(joined, "### Notes") || !strings.Contains(joined, "line 7") {
@@ -1490,7 +1500,7 @@ func TestCheckIgnoresAFencedExampleTable(t *testing.T) {
 				"| F9 | `src/fenced.ts:1` | visible error |\n" + marker + "\n\n" +
 				strings.TrimPrefix(header, "## Findings\n\n") +
 				"| F1 | `src/real.ts:1` | visible error | yes | E1 |  | resolved | me | - | - |\n" +
-				ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+				admittedLedger + admittedRow
 			joined := strings.Join(CheckDocument(doc), "\n")
 			if !strings.Contains(joined, `finding F1 status "resolved"`) {
 				t.Fatalf("the real row's breach is what the checker owes:\n%s", joined)
@@ -1516,7 +1526,7 @@ func TestCheckAcceptsASubheadingThatOpensItsOwnTable(t *testing.T) {
 	nested := header +
 		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
 		"### Notes\n\nNotes prose.\n\n| Note | Why |\n|---|---|\n| a note | a reason |\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		admittedLedger + admittedRow
 	if problems := CheckDocument(nested); len(problems) != 0 {
 		t.Fatalf("a subheading with its own header and delimiter opens a table: %v", problems)
 	}
@@ -1593,7 +1603,7 @@ func TestCheckAcceptsTheShippedTemplateWithItsHypothesesTable(t *testing.T) {
 // A fenced block inside another table's region is inert too: an example under Ranked targets must not
 // read as the resumed half of a cut table.
 func TestCheckIgnoresAFencedBlockInRankedTargets(t *testing.T) {
-	doc := header + ledger + "| E1 | c | cmd | i | o | m | r | observado |\n" +
+	doc := header + admittedLedger + admittedRow +
 		"## Ranked targets\n\n| Target | Blast radius | Status | Run |\n|---|---|---|---|\n" +
 		"| 1. token refresh | every session | done |  |\n" +
 		"\nA target row looks like this:\n\n" +
@@ -1624,7 +1634,7 @@ func TestCheckReportsASubheadingCutFollowedByABlankLine(t *testing.T) {
 		"| F1 | `src/a.go:1` x | M | yes | E99 | t :: x | open | me | r | - |\n" +
 		"\n" +
 		"|---|---|---|---|---|---|---|---|---|---|\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		admittedLedger + admittedRow
 	problems := CheckDocument(plan)
 	joined := strings.Join(problems, "\n")
 	if !strings.Contains(joined, "line 5: the Findings table is interrupted at line 5") {
@@ -1647,7 +1657,7 @@ func TestCheckReportsASubheadingCutFollowedByABlankLine(t *testing.T) {
 		"| F1 | `src/a.go:1` x | M | yes | E99 | t :: x | open | me | r | - |\n" +
 		"| F2 | `src/b.go:2` y | M | yes | E99 | t :: y | open | me | r | - |\n" +
 		"|---|---|---|---|---|---|---|---|---|---|\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		admittedLedger + admittedRow
 	problems = CheckDocument(twoRows)
 	joined = strings.Join(problems, "\n")
 	if !strings.Contains(joined, "line 5: the Findings table is interrupted at line 5") || !strings.Contains(joined, "(the next table row is at line 6)") {
@@ -1671,7 +1681,7 @@ func TestCheckReportsASubheadingCutWithInterveningProse(t *testing.T) {
 		"| F2 | `src/b.js:9` y | M | yes | E9 | t.js :: y | fixed | me | - | - |\n" +
 		"a sentence between the row and its delimiter\n" +
 		"|---|---|---|---|---|---|---|---|---|---|\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		admittedLedger + admittedRow
 	problems := CheckDocument(plan)
 	joined := strings.Join(problems, "\n")
 	if !strings.Contains(joined, "line 6: the Findings table is interrupted at line 6") {
@@ -1692,7 +1702,7 @@ func TestCheckReportsASubheadingCutWithInterveningProse(t *testing.T) {
 	nested := header +
 		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
 		"### Notes\n\nNotes prose.\n\n| Note | Why |\n|---|---|\n| a note | a reason |\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		admittedLedger + admittedRow
 	if problems := CheckDocument(nested); len(problems) != 0 {
 		t.Fatalf("a subheading with its own header and separator opens a table: %v", problems)
 	}
@@ -1701,7 +1711,7 @@ func TestCheckReportsASubheadingCutWithInterveningProse(t *testing.T) {
 	underHeading := "## Findings\n\n### Recorded defects\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint |\n" +
 		"|---|---|---|---|---|---|---|---|---|---|\n" +
 		"| F1 | `src/a.js:5` x | M | yes | E1 | t.js :: x | fixed | me | - | - |\n" +
-		ledger + "| E1 | c | cmd | i | o | m | r | observado |\n"
+		admittedLedger + admittedRow
 	if problems := CheckDocument(underHeading); len(problems) != 0 {
 		t.Fatalf("a table header under a subheading is a table, not a cut: %v", problems)
 	}

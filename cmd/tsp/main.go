@@ -211,6 +211,10 @@ pin [--path <path>]
 plan count [--path <path>] [--json]
            (prints {"findings":N,"evidence":M} for the plan: how much of it a run recorded)
 plan check [--path <path>] [--report <file|->] [--pins] [--base <ref>] [--replay] [--replay-timeout <duration>]
+           (a settled finding -- confirmed, fixed, gap-closed -- must cite an admitted Evidence row: a
+            non-empty Admit, a sha256: Digest and a Mode. That rule is the check's own, so it holds with
+            every flag below; admit a cited row with tsp plan admit --execute --record <id>, and demote a
+            claim whose command cannot run to a Hypothesis or to Status open)
            (--replay: run finding reproductions in the plan directory; a passing command is refused)
            (--base: a row that says introduced must cite a file the change against <ref> touches)
            (--pins: run the test each settled Findings row names as its witness; a witness that
