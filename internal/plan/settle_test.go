@@ -252,3 +252,31 @@ func TestSettleFindsARowWhoseIdIsBackticked(t *testing.T) {
 		t.Fatalf("the settled row lost its id or its status: %s", row)
 	}
 }
+
+// A Findings table can carry a column this writer never learned — an owner, a ticket, whatever the team added.
+// Settling a row rewrites the columns it owns and must leave every other cell of that row where it was: the row is
+// rewritten in place, not rebuilt from the twelve names this package knows.
+func TestSettleKeepsACellOfAColumnItDoesNotKnow(t *testing.T) {
+	const withOwner = "## Findings\n\n| Id | Finding | Severity | Data safe? | Evidence id | Pinning test | Status | Verdict by / date | Reason | Fingerprint | Owner |\n|---|---|---|---|---|---|---|---|---|---|---|\n" +
+		"| F1 | src/a.js:5 | data loss | yes | E1 | src/a.test.js :: a | confirmed | me / 2026-09-10 | not pinned | - | security team |\n" +
+		"| F2 | src/b.js:5 | crash | yes | E1 | src/b.test.js :: b | confirmed | me / 2026-09-10 | not pinned | - | platform |\n" +
+		ledger + "| E1 | it drops the comma | `node --test` | `a,b` | 3 fields | reverted -> red | same input | observado |\n"
+	if problems := CheckDocument(withOwner); len(problems) != 0 {
+		t.Fatalf("the fixture must be a plan the checker accepts: %v", problems)
+	}
+	p := write(t, t.TempDir(), "plan.md", withOwner)
+	line, err := Settle(p, SettleEdit{ID: "F1", Status: "fixed"})
+	if err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	after := strings.Split(readPlan(t, p), "\n")
+	if !strings.Contains(after[line-1], "| security team |") {
+		t.Fatalf("the settled row lost the column the writer does not name: %s", after[line-1])
+	}
+	if !strings.Contains(after[line], "| platform |") {
+		t.Fatalf("settle changed another row: %s", after[line])
+	}
+	if problems := CheckDocument(readPlan(t, p)); len(problems) != 0 {
+		t.Fatalf("the settled plan is rejected by its own checker: %v", problems)
+	}
+}

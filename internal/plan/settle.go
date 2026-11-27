@@ -55,7 +55,7 @@ func settle(path string, edit SettleEdit) (int, error) {
 	if err := finding.checkValues(false); err != nil {
 		return 0, err
 	}
-	row, err := finding.renderRow(table.header, finding.Status, false)
+	row, err := finding.renderOver(cellsOfRow(lines[line-1], table.header), table.header, finding.Status, false)
 	if err != nil {
 		return 0, err
 	}
@@ -190,4 +190,15 @@ func replaceLine(lines []string, at int, row string) []string {
 		out[at-1] = row
 	}
 	return out
+}
+
+// cellsOfRow reads the row about to be rewritten into the cells the renderer overwrites: a column this writer does
+// not name keeps the cell the row already carries. A row that does not line up with its header is rebuilt empty,
+// and the checker refuses the candidate rather than a half-read row landing.
+func cellsOfRow(line string, header []string) []string {
+	cells := split(line)
+	if len(cells) != len(header) {
+		return make([]string, len(header))
+	}
+	return cells
 }

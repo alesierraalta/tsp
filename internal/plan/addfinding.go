@@ -288,7 +288,13 @@ func (f Finding) row(header []string, status string) (string, error) {
 // renderRow is row with the writer's policy: a row being created (strict) owes every column a value, while a row
 // being rewritten keeps the shape of the table it already lives in and skips a column the table does not have.
 func (f Finding) renderRow(header []string, status string, strict bool) (string, error) {
-	cells := make([]string, len(header))
+	return f.renderOver(make([]string, len(header)), header, status, strict)
+}
+
+// renderOver writes the columns this writer owns into cells and reads the row back through the checker's own split.
+// It starts from the cells it is given, so a column the writer does not name — an owner, a ticket — keeps the cell
+// the row already carried instead of coming back empty.
+func (f Finding) renderOver(cells []string, header []string, status string, strict bool) (string, error) {
 
 	id := idColumn(header)
 	if id < 0 {
