@@ -99,7 +99,7 @@ func TestAddEvidenceRefusesWithoutMovingTheFile(t *testing.T) {
 		{"a newline in a value", "", func(e *Evidence) { e.ID, e.Observed = "E9", "one\ntwo" }, true, "newline"},
 		{"an empty required value", "", func(e *Evidence) { e.ID, e.Claim = "E9", " " }, true, "--claim"},
 		{"a placeholder id", "", func(e *Evidence) { e.ID = "-" }, true, "--id"},
-		{"a value for a column the ledger lacks", addPlan(), func(e *Evidence) { e.ID = "E9" }, false, "Admit column"},
+		{"a value for a column the ledger lacks", header + ledger, func(e *Evidence) { e.ID = "E9" }, false, "Admit column"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

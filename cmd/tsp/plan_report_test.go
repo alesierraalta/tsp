@@ -46,9 +46,13 @@ func TestPlanCheckReportRefusesADefectOnlyTheReportNames(t *testing.T) {
 	}
 
 	if out, code := runCLI(t, bin, "plan", "add-evidence", "--path", plan, "--claim", "encoding compared case-sensitively",
-		"--executed", "ran the decompress test", "--admit", "go test ./middleware", "--inputs", "gzip header GZIP",
+		"--executed", "ran the decompress test", "--admit", "printf 'the body was not decompressed'", "--inputs", "gzip header GZIP",
 		"--observed", "the body was not decompressed", "--label", "observado"); code != 0 {
 		t.Fatalf("add-evidence = %d\n%s", code, out)
+	}
+	// A confirmed finding is accepted only over evidence that was admitted, so the row is run and recorded first.
+	if out, code := runCLI(t, bin, "plan", "admit", "--path", plan, "--execute", "--record", "E1"); code != 0 {
+		t.Fatalf("admit = %d\n%s", code, out)
 	}
 	if out, code := runCLI(t, bin, "plan", "add-finding", "--path", plan, "--location", "middleware/decompress.go:85",
 		"--severity", "silently wrong answer", "--data-safe", "yes", "--evidence", "E1", "--status", "confirmed",

@@ -156,9 +156,16 @@ pinned. A zero exit whose output shows a skipped Go test or a filter that matche
 `tests-not-run`, so a Go test row runs `go test -v`, where a skip is visible. `Normalize` is the escape hatch for the part of an output that legitimately moves, such as an
 elapsed time: it holds a Go regular expression whose every match becomes `X` before hashing. Leave it empty
 the first time and fill it only when the probe names what moves, keeping it as narrow as that part — a
-pattern broad enough to swallow the output turns the pin into decoration. `plan check` requires none of
-these columns; `plan admit` refuses a row whose `Admit` is absent, whose `Digest` is unpinned, or whose
-output does not hold still.
+pattern broad enough to swallow the output turns the pin into decoration. `plan admit` refuses a row whose
+`Admit` is absent, whose `Digest` is unpinned, or whose output does not hold still.
+
+`plan check` reads the row a settled finding cites: a `confirmed`, `fixed` or `gap-closed` row must name an
+Evidence id whose row carries a non-empty `Admit`, a `sha256:` `Digest` and a readable `Mode` (an empty cell is
+`host`, as the ledger defines it), because a verdict is worth no more than the observation behind it, while an
+`open` finding — an unverified claim — owes none of them. It reads their shape, not their origin: a digest typed
+by hand has the shape of one that ran, so only re-running the command proves it did. A plan written before this rule is migrated one cited row at a time with
+`tsp plan admit --execute --record <id>`, which writes `Digest` and `Mode` together; a claim whose command
+cannot run is demoted to a Hypothesis (or to Status `open`) rather than left claiming verification.
 
 `Mode` says where the observation was taken, and a pin is only comparable inside the mode it was taken in,
 because the same command digests differently in a container than on this machine. An empty cell means `host`,
