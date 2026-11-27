@@ -682,6 +682,31 @@ tsp mutate                                # the working tree
 | 1 | at least one mutant survived: a test does not pin what the change does |
 | 2 | nothing was measured — no engine for this stack, or a change above `--max-mutants` |
 
+### Calibration: does the testing still find what is there?
+
+`tsp calibrate` answers the one question a testing report cannot: whether the testing finds defects
+that are known to be there. It seeds K deterministic mutations into a throwaway worktree (`calib-*`),
+writes the answer key outside the tree with its sha256, and replays an existing key so two skill
+versions face identical mutants. The agent that runs the testing never reads the key.
+
+```
+tsp calibrate --root ../rdd-plus-worktrees/calib-2026-11-27 --files internal/plan/settle.go,cmd/tsp/main.go --list
+tsp calibrate --root ../rdd-plus-worktrees/calib-2026-11-27 --files internal/plan/settle.go,cmd/tsp/main.go \
+              --count 5 --seed 1 --key-out /tmp/calib-key.json
+tsp calibrate --root ../rdd-plus-worktrees/calib-2026-11-27 --replay /tmp/calib-key.json
+```
+
+The operators are the script's, in Go: a comparison flips, `&&`/`||` swap, a single-line `if`
+negates, `return true|false` flips, and `if err != nil` becomes `if false`. A candidate that does not
+parse is reverted; a run that cannot reach `--count` valid seeds reverts every seed and refuses, so
+the worktree is never left half-seeded.
+
+| Exit | Meaning |
+|---|---|
+| 0 | seeded, listed, or replayed |
+| 1 | the seeder refused: not a `calib-*`/`skilltest-*` worktree, a key inside it, too few sites, or a line that moved |
+| 2 | the invocation is incomplete (missing `--root`, `--files` or `--key-out`) |
+
 Exit 2 is the point. A mutation run that measured nothing and a mutation run that found nothing look
 identical from the outside, and only one of them says the tests are worth something; the tool never
 reports the second when it means the first. `--fail-on-survivors -1` publishes the survivors and gates
