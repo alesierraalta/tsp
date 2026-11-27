@@ -137,6 +137,12 @@ commands:
            1 survivors, 2 nothing was measured
            (--cwd, --base, --max-mutants, --workers, --timeout, --fail-on-survivors, --json).
 
+  calibrate seed sealed defects into a throwaway worktree so a testing run can be measured against ground
+           truth it never sees: applies K deterministic mutations, writes the answer key outside the tree
+           with its sha256, and replays an existing key so two skill versions face identical mutants.
+           Exit 0 measured or listed, 1 the seeder refused, 2 the invocation is incomplete
+           (--root, --files, --count, --key-out, --seed, --list, --replay).
+
   scan     bring a scanner's real findings into the change: runs gitleaks when it is installed, or
            reads a SARIF report another tool wrote, and keeps only the files the change touched.
            Exit 0 nothing at the gated level, 1 findings, 2 nothing was scanned
@@ -334,6 +340,7 @@ var dispatchedCommands = []dispatchedCommand{
 	{"redcheck", runRedcheck},
 	{"verify", runVerify},
 	{"mutate", runMutate},
+	{"calibrate", runCalibrate},
 	{"scan", runScan},
 	{"findings", runFindings},
 	{"status", runStatus},
